@@ -1,0 +1,31 @@
+[project]
+name = "elusion"
+version = "0.0.1"
+description = "A miniature document-review pipeline over SEC 10-K risk factors, built to learn the MLOps toolchain."
+requires-python = ">=3.12"
+dependencies = [
+  "anthropic",
+  "datasets",
+  "pyarrow",
+  "pandas",
+  "psycopg[binary]",
+  "sqlalchemy",
+  "confluent-kafka",
+  "prefect>=3",
+  "mlflow",
+  "scipy",
+  "pydantic",
+  "typer",
+  "python-dotenv",
+]
+
+[project.optional-dependencies]
+spark = ["pyspark", "delta-spark"]
+openai = ["openai"]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+elusion = "elusion.cli:app"
+
+[tool.ruff]
+line-length = 100

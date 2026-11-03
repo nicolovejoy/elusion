@@ -1,0 +1,42 @@
+# Starting point for phase 0. Verify each service's UI comes up, then adjust.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: elusion
+      POSTGRES_PASSWORD: elusion
+      POSTGRES_DB: elusion
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+
+  redpanda:
+    # Kafka-compatible broker, single binary, no ZooKeeper
+    image: redpandadata/redpanda:latest
+    command:
+      - redpanda start
+      - --overprovisioned
+      - --smp 1
+      - --memory 1G
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports: ["9092:9092"]
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////mlflow/mlflow.db --artifacts-destination /mlflow/artifacts
+    ports: ["5000:5000"]
+    volumes: [mlflow:/mlflow]
+
+  prefect:
+    image: prefecthq/prefect:3-latest
+    command: prefect server start --host 0.0.0.0
+    environment:
+      PREFECT_API_URL: http://localhost:4200/api
+    ports: ["4200:4200"]
+    volumes: [prefect:/root/.prefect]
+
+volumes:
+  pgdata:
+  mlflow:
+  prefect:
