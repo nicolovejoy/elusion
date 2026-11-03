@@ -6,7 +6,8 @@ using each for the job it is actually for. The owner is preparing for Staff AI E
 conversations at an e-discovery company; the point is understanding, not features.
 
 Read `docs/PROJECT.md` (goals, the matter, done criteria) and `docs/PHASES.md` (the
-checklist) before starting any work. Work one phase at a time, in order.
+checklist) before starting any work. `docs/ARCHITECTURE.md` shows how data flows between
+the stores and why each store exists. Work one phase at a time, in order.
 
 ## How to work in this repo
 
