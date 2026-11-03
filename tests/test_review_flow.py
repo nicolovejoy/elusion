@@ -123,10 +123,19 @@ def test_review_error_counts_failed_and_its_cost(env) -> None:
     assert job["status"] == "finished" and float(job["cost_usd"]) == pytest.approx(0.10)
     with engine.connect() as conn:
         n = conn.execute(sa.select(sa.func.count()).where(scores.c.doc_id == IDS[2])).scalar()
-    assert n == 0  # left unscored, retried on the next run
+    assert n == 0  # left unscored; retried only when its id is read again (new group)
 
 
-class EchoMismatch(FakeProvider):
+class CostlyProvider(FakeProvider):
+    """Each review costs $0.01, so the job's cost shows which reviews were accounted."""
+
+    def review(self, system: str, paragraph: str) -> Review:
+        r = super().review(system, paragraph)
+        r.cost_usd = 0.01
+        return r
+
+
+class EchoMismatch(CostlyProvider):
     def review(self, system: str, paragraph: str) -> Review:
         r = super().review(system, paragraph)
         r.model = "fake-model-20990101"
@@ -149,3 +158,75 @@ def test_model_echo_mismatch_fails_job(env) -> None:
             sa.select(sa.func.count()).where(scores.c.prompt_version == version)
         ).scalar()
     assert job.status == "failed" and n == 0
+    assert float(job.cost_usd) == pytest.approx(0.01)  # the probe was billed, so recorded
+
+
+class RefuseFirstThenMismatch(EchoMismatch):
+    """First document: ReviewError on the pinned (priced) model; then mismatched echoes."""
+
+    def __init__(self) -> None:
+        super().__init__(model="claude-haiku-5-5")
+
+    def review(self, system: str, paragraph: str) -> Review:
+        if paragraph == TEXTS[IDS[0]]:
+            raise ReviewError("refusal", self.model, 1_000_000, 0)
+        return super().review(system, paragraph)
+
+
+def test_model_echo_checked_even_when_first_document_fails(env) -> None:
+    from elusion.flows.review import review
+
+    engine, version = env
+    ids = ListIdSource(IDS)
+    with pytest.raises(RuntimeError, match="fake-model-20990101"):
+        review(
+            "cloud-concentration",
+            sample=5,
+            batch_size=5,
+            provider=RefuseFirstThenMismatch(),
+            ids=ids,
+        )
+    assert ids.committed == 0 and ids.closed
+    with engine.connect() as conn:
+        job = conn.execute(
+            sa.select(review_jobs).where(review_jobs.c.prompt_version == version)
+        ).one()
+        n = conn.execute(
+            sa.select(sa.func.count()).where(scores.c.prompt_version == version)
+        ).scalar()
+    assert job.status == "failed" and n == 0
+    assert float(job.cost_usd) == pytest.approx(0.10 + 0.01)  # refusal + the next probe
+
+
+class BrokenOnOne(CostlyProvider):
+    """Raises a non-ReviewError (like a 400 for one bad paragraph) for IDS[2]."""
+
+    def review(self, system: str, paragraph: str) -> Review:
+        if paragraph == TEXTS[IDS[2]]:
+            raise ValueError("bad request for this paragraph")
+        return super().review(system, paragraph)
+
+
+def test_unexpected_error_keeps_paid_work_and_fails(env) -> None:
+    from elusion.flows.review import review
+
+    engine, version = env
+    ids = ListIdSource(IDS)
+    provider = BrokenOnOne()
+    with pytest.raises(ValueError, match="bad request"):
+        review("cloud-concentration", sample=5, batch_size=5, provider=provider, ids=ids)
+    assert len(provider.calls) == 4  # every other document was sent (and billed)
+    assert ids.committed == 0 and ids.closed
+    with engine.connect() as conn:
+        job = conn.execute(
+            sa.select(review_jobs).where(review_jobs.c.prompt_version == version)
+        ).one()
+        stored = {
+            r[0]
+            for r in conn.execute(
+                sa.select(scores.c.doc_id).where(scores.c.prompt_version == version)
+            )
+        }
+    assert stored == set(IDS) - {IDS[2]}
+    assert job.status == "failed" and job.docs_scored == 4
+    assert float(job.cost_usd) == pytest.approx(0.04)

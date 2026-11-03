@@ -56,8 +56,9 @@ class ReviewSummary:
 @dataclass
 class BatchResult:
     reviews: list[tuple[str, Review]] = field(default_factory=list)
-    failed: int = 0
-    failed_cost_usd: float = 0.0  # billed tokens of ReviewErrors
+    failed: int = 0  # ReviewErrors: billed, no verdict
+    cost_usd: float = 0.0  # everything billed: reviews and ReviewErrors
+    errors: list[tuple[str, Exception]] = field(default_factory=list)  # anything else
 
 
 # NO_CACHE: Prefect 3 would otherwise hash the task inputs (provider, texts) for caching.
@@ -65,35 +66,49 @@ class BatchResult:
 def score_batch(
     system: str, texts: dict[str, str], provider: Provider, concurrency: int
 ) -> BatchResult:
-    """Review each (doc_id, text) concurrently. ReviewErrors are counted, not raised."""
+    """Review each (doc_id, text) concurrently; never raises for a single document.
+
+    Every document is submitted up front, so one failure cannot stop the others from
+    being sent and billed. Each outcome is therefore returned, not raised: the flow
+    stores what was paid for and only then re-raises the first unexpected error.
+    Passing a live provider object into a task works because Prefect 3 runs tasks
+    in-process (threads), so nothing is pickled or sent to the server.
+    """
     log = get_run_logger()
     result = BatchResult()
 
-    def one(doc_id: str) -> tuple[str, Review | ReviewError]:
+    def one(doc_id: str) -> tuple[str, Review | Exception]:
         try:
             return doc_id, provider.review(system, texts[doc_id])
-        except ReviewError as e:
+        except Exception as e:  # ReviewError included; sorted out below
             return doc_id, e
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         for doc_id, out in pool.map(one, texts):
-            if isinstance(out, ReviewError):
+            if isinstance(out, Review):
+                result.reviews.append((doc_id, out))
+                result.cost_usd += out.cost_usd
+            elif isinstance(out, ReviewError):
                 log.warning("no verdict for %s (stop_reason=%s)", doc_id, out.stop_reason)
                 result.failed += 1
-                result.failed_cost_usd += cost_usd(
-                    out.model,
-                    out.input_tokens,
-                    out.output_tokens,
-                    out.cache_creation_input_tokens,
-                    out.cache_read_input_tokens,
-                )
+                try:
+                    result.cost_usd += cost_usd(
+                        out.model,
+                        out.input_tokens,
+                        out.output_tokens,
+                        out.cache_creation_input_tokens,
+                        out.cache_read_input_tokens,
+                    )
+                except KeyError as e:  # unpriced (e.g. unexpected echoed) model
+                    result.errors.append((doc_id, e))
             else:
-                result.reviews.append((doc_id, out))
+                log.error("review of %s raised %r", doc_id, out)
+                result.errors.append((doc_id, out))
     return result
 
 
 def check_model_echo(provider: Provider, review: Review) -> None:
-    """Run once, on the first scored document of a run.
+    """Checked on every review before it is inserted (a string compare).
 
     Scores are stored under the model string the API echoes, but `unscored_ids` filters
     on the pinned id we requested. If they differ, every re-run would re-pay for every
@@ -131,6 +146,28 @@ def review(
     )
     summary = ReviewSummary(job_id=job_id)
     log.info("job %s: model=%s prompt=%s sample=%s", job_id, provider.model, prompt.version, sample)
+
+    def settle(res: BatchResult) -> None:
+        """Record what `res` cost and stored; raise if anything in it went wrong.
+
+        Order matters: the spend reaches the job row before any raise, mismatched rows
+        are never inserted, and good rows are inserted even if a sibling failed.
+        """
+        summary.cost_usd += res.cost_usd
+        summary.docs_failed += res.failed
+        try:
+            for _, r in res.reviews:
+                check_model_echo(provider, r)
+        except RuntimeError:
+            db.update_job(engine, job_id, docs_scored=0, cost_usd=res.cost_usd)
+            raise
+        rows = [db.score_row(doc_id, prompt.version, provider.name, r) for doc_id, r in res.reviews]
+        inserted = db.insert_scores(engine, rows)
+        db.update_job(engine, job_id, docs_scored=inserted, cost_usd=res.cost_usd)
+        summary.docs_scored += inserted
+        if res.errors:
+            raise res.errors[0][1]
+
     try:
         if ids is None:
             group = group_id(criterion, provider.model, prompt.version)
@@ -140,7 +177,7 @@ def review(
         texts = load_texts(settings.corpus_dir)
         log.info("loaded %s paragraph texts in %.1fs", len(texts), time.monotonic() - t0)
 
-        echo_checked = False
+        probed = False
         k = 0
         while summary.docs_pulled < sample:
             pulled = ids.take(min(batch_size, sample - summary.docs_pulled))
@@ -158,41 +195,30 @@ def review(
             if missing:
                 raise KeyError(f"{len(missing)} ids not in the Parquet corpus, e.g. {missing[0]}")
 
-            results: list[BatchResult] = []
-            if not echo_checked and todo:
-                # Score the run's first document alone so the model check (and, later,
-                # the cost guard) happens before any concurrent spend.
+            while not probed and todo:
+                # Probe: score documents one at a time until one returns a verdict, so a
+                # model mismatch (and, later, the cost guard) is caught before any
+                # concurrent spend.
                 first = score_batch(prompt.text, {todo[0]: texts[todo[0]]}, provider, 1)
-                if first.reviews:
-                    check_model_echo(provider, first.reviews[0][1])
-                    echo_checked = True
-                results.append(first)
+                settle(first)
+                probed = bool(first.reviews)
                 todo = todo[1:]
             if todo:
-                results.append(
-                    score_batch(prompt.text, {i: texts[i] for i in todo}, provider, concurrency)
-                )
-
-            rows = [
-                db.score_row(doc_id, prompt.version, provider.name, r)
-                for res in results
-                for doc_id, r in res.reviews
-            ]
-            inserted = db.insert_scores(engine, rows)
-            cost = sum(r.cost_usd for res in results for _, r in res.reviews) + sum(
-                res.failed_cost_usd for res in results
-            )
-            db.update_job(engine, job_id, docs_scored=inserted, cost_usd=cost)
-            ids.commit()  # only now: the batch's scores are durable in Postgres
-            summary.docs_scored += inserted
-            summary.docs_failed += sum(res.failed for res in results)
-            summary.cost_usd += cost
+                batch = {i: texts[i] for i in todo}
+                settle(score_batch(prompt.text, batch, provider, concurrency))
+            ids.commit()  # only now: the whole batch's scores are durable in Postgres
     except BaseException:
-        db.finish_job(engine, job_id, "failed")
+        try:
+            db.finish_job(engine, job_id, "failed")
+        except Exception:
+            log.exception("could not mark job %s failed", job_id)
         raise
     finally:
         if ids is not None:
-            ids.close()
+            try:
+                ids.close()
+            except Exception:
+                log.exception("could not close the id source")
     db.finish_job(engine, job_id, "finished")
     log.info("job %s finished: %s", job_id, summary)
     return summary
