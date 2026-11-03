@@ -5,9 +5,17 @@ structured Verdict plus the token usage that call consumed. Keeping this behind 
 Protocol (a structural interface, like a Go interface) lets tests use a fake and lets
 other vendors be added later without touching the scorer.
 
-Structured output: instead of parsing free text, we hand the API a pydantic model
-(`Verdict`) and it constrains the reply to that JSON schema; the SDK's `messages.parse`
-returns it already validated.
+Structured output: instead of parsing free text, we hand the API a JSON schema
+(`output_config.format`, built from the pydantic model `Verdict`) and it constrains the
+reply to that schema. `messages.create()` with `output_config.format` is the same API
+feature `messages.parse()` wraps. We call `create()` directly because `parse()` raises a
+pydantic ValidationError from inside the SDK when a reply is cut off mid-JSON (max_tokens)
+and hides the stop_reason; here we check `stop_reason` ourselves and turn every unusable
+answer (refusal, truncation, invalid JSON) into a `ReviewError` that carries the usage,
+so one bad answer is a counted, billed failure rather than an unexpected crash.
+The schema goes through the SDK's `transform_schema`, the same step `parse()` applies: it
+adds `additionalProperties: false` and moves unsupported keywords (minimum/maximum) into
+the field description; the 0-4 range is still enforced Python-side by `Verdict`.
 
 Prompt caching: the system prompt is identical for every paragraph, so it is marked
 `cache_control: ephemeral`. The first call stores that prefix; later calls read it at a
@@ -19,29 +27,40 @@ Haiku 5.5 decides for itself how much to think (adaptive thinking), so we pass n
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 import anthropic
-from pydantic import BaseModel, Field
+from anthropic import transform_schema
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from elusion.review.pricing import cost_usd
 
-MAX_TOKENS = 512
+# 1024, not 512: the reply carries a verbatim quote of the paragraph plus a rationale, and a
+# long paragraph overflowed 512 mid-JSON in the live run.
+MAX_TOKENS = 1024
 REQUEST_TIMEOUT_S = 60.0
 MAX_RETRIES = 5  # the SDK retries 429/5xx with exponential backoff
 
 
 class Verdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     score: int = Field(ge=0, le=4, description="Relevance score on the 0-4 scale in the prompt")
     rationale: str = Field(description="One or two sentences explaining the score")
     quote: str = Field(description="Verbatim excerpt supporting the score, or empty string")
 
 
-class ReviewError(Exception):
-    """The API answered but gave no usable Verdict (refusal or truncated at max_tokens).
+VERDICT_SCHEMA = transform_schema(Verdict.model_json_schema())
 
-    Tokens were still billed, so the usage is carried for cost accounting.
+
+class ReviewError(Exception):
+    """The API answered but gave no usable Verdict.
+
+    stop_reason is the API's (refusal, max_tokens, ...) when it did not end its turn, or
+    "invalid_json" when it did but the text was not valid JSON for `Verdict`. Tokens were
+    still billed, so the usage is carried for cost accounting.
     """
 
     def __init__(
@@ -93,28 +112,34 @@ class AnthropicProvider:
         )
 
     def review(self, system: str, paragraph: str) -> Review:
-        resp = self.client.messages.parse(
+        resp = self.client.messages.create(
             model=self.model,
             max_tokens=MAX_TOKENS,
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": paragraph}],
-            output_format=Verdict,
-            output_config={"effort": "low"},
+            output_config={
+                "effort": "low",
+                "format": {"type": "json_schema", "schema": VERDICT_SCHEMA},
+            },
         )
         u = resp.usage
         cache_write = u.cache_creation_input_tokens or 0
         cache_read = u.cache_read_input_tokens or 0
-        if resp.parsed_output is None:
-            raise ReviewError(
-                str(resp.stop_reason),
-                resp.model,
-                u.input_tokens,
-                u.output_tokens,
-                cache_write,
-                cache_read,
+
+        def fail(stop_reason: str) -> ReviewError:
+            return ReviewError(
+                stop_reason, resp.model, u.input_tokens, u.output_tokens, cache_write, cache_read
             )
+
+        if resp.stop_reason != "end_turn":
+            raise fail(str(resp.stop_reason))
+        try:
+            text = next(b.text for b in resp.content if b.type == "text")
+            verdict = Verdict.model_validate(json.loads(text))
+        except (StopIteration, json.JSONDecodeError, ValidationError) as exc:
+            raise fail("invalid_json") from exc
         return Review(
-            verdict=resp.parsed_output,
+            verdict=verdict,
             model=resp.model,
             input_tokens=u.input_tokens,
             output_tokens=u.output_tokens,
