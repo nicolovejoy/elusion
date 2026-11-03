@@ -37,6 +37,10 @@ class Settings:
     sec_user_agent: str | None = field(
         default_factory=lambda: os.environ.get("ELUSION_SEC_USER_AGENT") or None
     )
+    # Pinned model snapshot id used for the bulk review pass (hard rule: always pinned).
+    review_model: str = field(
+        default_factory=lambda: _env("ELUSION_REVIEW_MODEL", "claude-haiku-5-5")
+    )
 
     @property
     def corpus_dir(self) -> Path:
