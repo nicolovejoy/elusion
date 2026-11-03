@@ -51,6 +51,25 @@ class ReviewSummary:
     docs_skipped: int = 0
     docs_failed: int = 0
     cost_usd: float = 0.0
+    cost_projected_usd: float | None = None  # None if the run ended before PROBE_DOCS probes
+
+
+class BudgetExceeded(RuntimeError):
+    """The projected cost of the run is above the limit (ELUSION_MAX_RUN_USD)."""
+
+
+# How many single-document reviews are scored (and kept) before the cost is projected.
+PROBE_DOCS = 20
+
+
+def project_cost(probe_costs: list[float], remaining: int) -> tuple[float, float]:
+    """Return (mean cost per document, projected cost of `remaining` more documents).
+
+    An upper bound: some of the `remaining` ids (sample minus documents scored so far)
+    will turn out to be already scored for this (model, prompt version) and cost nothing.
+    """
+    mean = sum(probe_costs) / len(probe_costs)
+    return mean, mean * remaining
 
 
 @dataclass
@@ -130,9 +149,19 @@ def review(
     prompt_version: str = "v1",
     provider: Provider | None = None,
     ids: IdSource | None = None,
+    max_run_usd: float | None = None,
 ) -> ReviewSummary:
-    """Score up to `sample` ids from the topic against `criterion` (a criterion name)."""
+    """Score up to `sample` ids from the topic against `criterion` (a criterion name).
+
+    Spend guard: the first PROBE_DOCS documents are reviewed one at a time and kept.
+    Their mean cost times the documents still to score is the projected cost of the
+    run; above `max_run_usd` (default ELUSION_MAX_RUN_USD) the flow raises
+    BudgetExceeded before any concurrent spend. The probe batch's offsets stay
+    uncommitted, and its scores are already in Postgres, so a re-run skips them.
+    """
     log = get_run_logger()
+    if max_run_usd is None:
+        max_run_usd = settings.max_run_usd
     prompt = load_prompt(criterion, prompt_version)
     provider = provider or AnthropicProvider(settings.review_model)
     engine = db.make_engine(settings.database_url)
@@ -177,7 +206,10 @@ def review(
         texts = load_texts(settings.corpus_dir)
         log.info("loaded %s paragraph texts in %.1fs", len(texts), time.monotonic() - t0)
 
-        probed = False
+        probe_costs: list[float] = []  # cost of each successful probe review
+        # A run smaller than PROBE_DOCS has nothing worth projecting: one probe (the echo
+        # check) and the rest concurrently.
+        probe_target = PROBE_DOCS if sample >= PROBE_DOCS else 1
         k = 0
         while summary.docs_pulled < sample:
             pulled = ids.take(min(batch_size, sample - summary.docs_pulled))
@@ -195,14 +227,25 @@ def review(
             if missing:
                 raise KeyError(f"{len(missing)} ids not in the Parquet corpus, e.g. {missing[0]}")
 
-            while not probed and todo:
-                # Probe: score documents one at a time until one returns a verdict, so a
-                # model mismatch (and, later, the cost guard) is caught before any
+            while len(probe_costs) < probe_target and todo:
+                # Probe: score documents one at a time until PROBE_DOCS have a verdict,
+                # so a model mismatch and a runaway cost are caught before any
                 # concurrent spend.
                 first = score_batch(prompt.text, {todo[0]: texts[todo[0]]}, provider, 1)
                 settle(first)
-                probed = bool(first.reviews)
+                probe_costs.extend(r.cost_usd for _, r in first.reviews)
                 todo = todo[1:]
+                if len(probe_costs) == PROBE_DOCS and summary.cost_projected_usd is None:
+                    mean, projected = project_cost(probe_costs, sample - summary.docs_scored)
+                    summary.cost_projected_usd = projected
+                    msg = (
+                        f"projected cost ${projected:.2f} for {sample} docs "
+                        f"(mean ${mean:.5f}/doc over {len(probe_costs)} probed); "
+                        f"limit ${max_run_usd:.2f}"
+                    )
+                    log.info(msg)
+                    if projected > max_run_usd:
+                        raise BudgetExceeded(f"{msg}; refusing to continue")
             if todo:
                 batch = {i: texts[i] for i in todo}
                 settle(score_batch(prompt.text, batch, provider, concurrency))

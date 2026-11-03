@@ -59,6 +59,10 @@ def review(
     batch_size: Annotated[int, typer.Option(help="Ids per batch (and per offset commit).")] = 50,
     concurrency: Annotated[int, typer.Option(help="Parallel LLM calls per batch.")] = 8,
     prompt_version: Annotated[str, typer.Option(help="Prompt file version.")] = "v1",
+    max_run_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
 ) -> None:
     """Score up to SAMPLE paragraphs from the topic against a CRITERION."""
     from elusion.flows.review import review as review_flow
@@ -69,5 +73,6 @@ def review(
         batch_size=batch_size,
         concurrency=concurrency,
         prompt_version=prompt_version,
+        max_run_usd=max_run_usd,
     )
     typer.echo(summary)

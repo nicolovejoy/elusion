@@ -48,5 +48,6 @@ def test_review_command_passes_criterion_name(monkeypatch) -> None:
         "batch_size": 10,
         "concurrency": 8,
         "prompt_version": "v1",
+        "max_run_usd": None,
     }
     assert "summary" in result.output

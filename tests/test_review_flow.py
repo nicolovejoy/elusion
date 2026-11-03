@@ -230,3 +230,72 @@ def test_unexpected_error_keeps_paid_work_and_fails(env) -> None:
     assert stored == set(IDS) - {IDS[2]}
     assert job.status == "failed" and job.docs_scored == 4
     assert float(job.cost_usd) == pytest.approx(0.04)
+
+
+BIG = {f"b{uuid.uuid4().hex[:15]}": f"big paragraph {i}" for i in range(30)}
+BIG_IDS = list(BIG)
+
+
+def test_budget_exceeded_stops_after_probe(env, monkeypatch) -> None:
+    import elusion.flows.review as mod
+    from elusion.flows.review import BudgetExceeded, review
+
+    engine, version = env
+    monkeypatch.setattr(mod, "load_texts", lambda corpus_dir: dict(BIG))
+    ids = ListIdSource(BIG_IDS)
+    provider = CostlyProvider()
+    # mean $0.01 x 10 remaining = $0.10 projected > $0.05
+    with pytest.raises(BudgetExceeded, match="refusing to continue"):
+        review(
+            "cloud-concentration",
+            sample=30,
+            batch_size=30,
+            provider=provider,
+            ids=ids,
+            max_run_usd=0.05,
+        )
+    assert len(provider.calls) == 20
+    assert ids.committed == 0 and ids.closed
+    with engine.connect() as conn:
+        job = conn.execute(
+            sa.select(review_jobs).where(review_jobs.c.prompt_version == version)
+        ).one()
+        n = conn.execute(
+            sa.select(sa.func.count()).where(scores.c.prompt_version == version)
+        ).scalar()
+    assert n == 20
+    assert job.status == "failed" and job.docs_scored == 20
+    assert float(job.cost_usd) == pytest.approx(0.20)
+
+
+def test_budget_ok_reports_projection(env, monkeypatch) -> None:
+    import elusion.flows.review as mod
+    from elusion.flows.review import review
+
+    engine, _ = env
+    monkeypatch.setattr(mod, "load_texts", lambda corpus_dir: dict(BIG))
+    s = review(
+        "cloud-concentration",
+        sample=30,
+        batch_size=7,
+        provider=CostlyProvider(),
+        ids=ListIdSource(BIG_IDS),
+        max_run_usd=100.0,
+    )
+    assert s.docs_scored == 30
+    assert s.cost_projected_usd == pytest.approx(0.01 * (30 - 20), abs=1e-9)
+    assert get_job(engine, s.job_id)["status"] == "finished"
+
+
+def test_small_sample_has_no_projection(env) -> None:
+    from elusion.flows.review import review
+
+    s = review(
+        "cloud-concentration",
+        sample=5,
+        batch_size=5,
+        provider=FakeProvider(),
+        ids=ListIdSource(IDS),
+        max_run_usd=0.0,
+    )
+    assert s.docs_scored == 5 and s.cost_projected_usd is None
