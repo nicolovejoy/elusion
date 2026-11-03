@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from elusion.config import Settings
-from elusion.review.providers import AnthropicProvider, Provider, Verdict
+from elusion.review.providers import AnthropicProvider, Provider, ReviewError, Verdict
 from tests.fakes import FakeProvider
 
 
@@ -66,3 +66,29 @@ def test_anthropic_provider_request_shape_and_cost(monkeypatch):
     assert (r.input_tokens, r.output_tokens) == (1_000_000, 1_000_000)
     assert (r.cache_creation_input_tokens, r.cache_read_input_tokens) == (1_000_000, 1_000_000)
     assert r.cost_usd == pytest.approx(0.735)
+
+
+def test_missing_parsed_output_raises_review_error_with_usage(monkeypatch):
+    client = anthropic.Anthropic(api_key="test")
+
+    def fake_parse(**kwargs):
+        return SimpleNamespace(
+            parsed_output=None,
+            stop_reason="refusal",
+            model="claude-haiku-5-5",
+            usage=SimpleNamespace(
+                input_tokens=10,
+                output_tokens=20,
+                cache_creation_input_tokens=None,
+                cache_read_input_tokens=30,
+            ),
+        )
+
+    monkeypatch.setattr(client.messages, "parse", fake_parse)
+    with pytest.raises(ReviewError) as exc:
+        AnthropicProvider("claude-haiku-5-5", client=client).review("s", "p")
+    e = exc.value
+    assert e.stop_reason == "refusal"
+    assert e.model == "claude-haiku-5-5"
+    assert (e.input_tokens, e.output_tokens) == (10, 20)
+    assert (e.cache_creation_input_tokens, e.cache_read_input_tokens) == (0, 30)

@@ -17,7 +17,7 @@ class FakeProvider:
         self.calls.append((system, paragraph))
         return Review(
             verdict=self.verdict,
-            model="fake-model",
+            model=self.model,
             input_tokens=100,
             output_tokens=20,
             cost_usd=0.0,

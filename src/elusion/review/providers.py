@@ -33,9 +33,33 @@ MAX_RETRIES = 5  # the SDK retries 429/5xx with exponential backoff
 
 
 class Verdict(BaseModel):
-    score: int = Field(ge=0, le=4)
-    rationale: str
-    quote: str
+    score: int = Field(ge=0, le=4, description="Relevance score on the 0-4 scale in the prompt")
+    rationale: str = Field(description="One or two sentences explaining the score")
+    quote: str = Field(description="Verbatim excerpt supporting the score, or empty string")
+
+
+class ReviewError(Exception):
+    """The API answered but gave no usable Verdict (refusal or truncated at max_tokens).
+
+    Tokens were still billed, so the usage is carried for cost accounting.
+    """
+
+    def __init__(
+        self,
+        stop_reason: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
+    ) -> None:
+        super().__init__(f"no parsed verdict (stop_reason={stop_reason!r}, model={model!r})")
+        self.stop_reason = stop_reason
+        self.model = model
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
 
 
 @dataclass
@@ -77,6 +101,15 @@ class AnthropicProvider:
         u = resp.usage
         cache_write = u.cache_creation_input_tokens or 0
         cache_read = u.cache_read_input_tokens or 0
+        if resp.parsed_output is None:
+            raise ReviewError(
+                str(resp.stop_reason),
+                resp.model,
+                u.input_tokens,
+                u.output_tokens,
+                cache_write,
+                cache_read,
+            )
         return Review(
             verdict=resp.parsed_output,
             model=resp.model,
