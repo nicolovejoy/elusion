@@ -1,0 +1,46 @@
+"""Runtime settings, read from the environment after loading `.env` if present.
+
+Only non-secret defaults live here. Secrets (API keys) have no default and are
+required only by the code paths that use them.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()  # no-op when .env is absent; never overrides variables already set
+
+# Prefect reads this itself at import time; set it before any `import prefect` so local
+# flow runs report to the compose server instead of spinning up an ephemeral one.
+os.environ.setdefault("PREFECT_API_URL", "http://localhost:4200/api")
+
+
+def _env(name: str, default: str) -> str:
+    return os.environ.get(name) or default
+
+
+@dataclass(frozen=True)
+class Settings:
+    database_url: str = field(
+        default_factory=lambda: _env(
+            "DATABASE_URL", "postgresql://elusion:elusion@localhost:5433/elusion"
+        )
+    )
+    kafka_bootstrap: str = field(default_factory=lambda: _env("KAFKA_BOOTSTRAP", "localhost:9092"))
+    data_dir: Path = field(default_factory=lambda: Path(_env("ELUSION_DATA_DIR", "data")))
+    # SEC EDGAR refuses requests whose User-Agent lacks a contact, e.g. "Name email@example.com".
+    # Unset means company names are left null. Never a secret, but personal, so not defaulted.
+    sec_user_agent: str | None = field(
+        default_factory=lambda: os.environ.get("ELUSION_SEC_USER_AGENT") or None
+    )
+
+    @property
+    def corpus_dir(self) -> Path:
+        return self.data_dir / "corpus"
+
+
+settings = Settings()

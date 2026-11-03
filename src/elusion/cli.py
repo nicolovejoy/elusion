@@ -4,9 +4,14 @@ Typer builds the CLI from type-annotated functions: each decorated function is a
 subcommand, its parameters become options/arguments, and the docstring is the help text.
 """
 
+from typing import Annotated
+
 import typer
 
-from elusion import __version__
+from elusion import (
+    __version__,
+    config,  # noqa: F401  (loads .env and sets PREFECT_API_URL before prefect imports)
+)
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -27,3 +32,18 @@ def version() -> None:
 
 if __name__ == "__main__":
     app()
+
+
+@app.command()
+def collect(
+    year: Annotated[list[int], typer.Option(help="Filing year; repeat for several.")],
+    limit: Annotated[
+        int | None, typer.Option(help="Stop after this many filings per year.")
+    ] = None,
+) -> None:
+    """Download Item 1A for each YEAR, split into paragraphs, store and publish."""
+    from elusion.flows.collect import collect as collect_flow
+
+    for y in year:
+        summary = collect_flow(y, limit)
+        typer.echo(f"{y}: {summary}")
