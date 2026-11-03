@@ -31,10 +31,6 @@ def version() -> None:
     typer.echo(__version__)
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command()
 def collect(
     year: Annotated[list[int], typer.Option(help="Filing year; repeat for several.")],
@@ -55,7 +51,13 @@ def review(
     criterion: Annotated[
         Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
     ],
-    sample: Annotated[int, typer.Option(help="Maximum number of ids to pull from Kafka.")],
+    sample: Annotated[
+        int,
+        typer.Option(
+            help="Pull the next SAMPLE ids for this criterion/model/prompt-version consumer "
+            "group; a re-run continues from the committed offset, it does not re-score."
+        ),
+    ],
     batch_size: Annotated[int, typer.Option(help="Ids per batch (and per offset commit).")] = 50,
     concurrency: Annotated[int, typer.Option(help="Parallel LLM calls per batch.")] = 8,
     prompt_version: Annotated[str, typer.Option(help="Prompt file version.")] = "v1",
@@ -67,6 +69,9 @@ def review(
     """Score up to SAMPLE paragraphs from the topic against a CRITERION."""
     from elusion.flows.review import review as review_flow
 
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+
     summary = review_flow(
         criterion.stem,
         sample,
@@ -76,3 +81,7 @@ def review(
         max_run_usd=max_run_usd,
     )
     typer.echo(summary)
+
+
+if __name__ == "__main__":
+    app()

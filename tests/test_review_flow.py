@@ -299,3 +299,108 @@ def test_small_sample_has_no_projection(env) -> None:
         max_run_usd=0.0,
     )
     assert s.docs_scored == 5 and s.cost_projected_usd is None
+
+
+BIG40 = {f"c{uuid.uuid4().hex[:15]}": f"large paragraph {i}" for i in range(40)}
+BIG40_IDS = list(BIG40)
+
+
+class AlwaysRefuses(FakeProvider):
+    """Every call raises ReviewError (billed $0.10, no verdict)."""
+
+    def __init__(self) -> None:
+        super().__init__(model="claude-haiku-5-5")
+
+    def review(self, system: str, paragraph: str) -> Review:
+        self.calls.append((system, paragraph))
+        raise ReviewError("max_tokens", self.model, 1_000_000, 0)
+
+
+def test_all_review_errors_still_trip_the_spend_guard(env, monkeypatch) -> None:
+    import elusion.flows.review as mod
+    from elusion.flows.review import BudgetExceeded, review
+
+    engine, version = env
+    monkeypatch.setattr(mod, "load_texts", lambda corpus_dir: dict(BIG40))
+    ids = ListIdSource(BIG40_IDS)
+    provider = AlwaysRefuses()
+    with pytest.raises(BudgetExceeded, match="refusing to continue"):
+        review(
+            "cloud-concentration",
+            sample=40,
+            batch_size=40,
+            provider=provider,
+            ids=ids,
+            max_run_usd=0.05,
+        )
+    assert len(provider.calls) == 20
+    assert ids.committed == 0 and ids.closed
+    with engine.connect() as conn:
+        job = conn.execute(
+            sa.select(review_jobs).where(review_jobs.c.prompt_version == version)
+        ).one()
+        n = conn.execute(
+            sa.select(sa.func.count()).where(scores.c.prompt_version == version)
+        ).scalar()
+    assert n == 0 and job.status == "failed"
+    assert float(job.cost_usd) == pytest.approx(20 * 0.10)
+
+
+class Alternating(FakeProvider):
+    """Odd calls raise ReviewError ($0.10); even calls succeed at $0.01."""
+
+    def __init__(self) -> None:
+        super().__init__(model="claude-haiku-5-5")
+
+    def review(self, system: str, paragraph: str) -> Review:
+        n = len(self.calls)
+        if n % 2 == 0:
+            self.calls.append((system, paragraph))
+            raise ReviewError("max_tokens", self.model, 1_000_000, 0)
+        r = super().review(system, paragraph)
+        r.cost_usd = 0.01
+        return r
+
+
+def test_projection_averages_all_probe_attempts(env, monkeypatch) -> None:
+    import elusion.flows.review as mod
+    from elusion.flows.review import review
+
+    monkeypatch.setattr(mod, "load_texts", lambda corpus_dir: dict(BIG40))
+    s = review(
+        "cloud-concentration",
+        sample=40,
+        batch_size=40,
+        provider=Alternating(),
+        ids=ListIdSource(BIG40_IDS),
+        max_run_usd=100.0,
+    )
+    # 20 attempts: 10 errors at $0.10 and 10 reviews at $0.01; 10 documents scored then.
+    mean = (10 * 0.10 + 10 * 0.01) / 20
+    assert s.cost_projected_usd == pytest.approx(mean * (40 - 10), abs=1e-9)
+    assert s.docs_scored == 10 + 10 and s.docs_failed == 10 + 10
+
+
+def test_no_usable_verdict_in_probe_fails_job(env, monkeypatch) -> None:
+    import elusion.flows.review as mod
+    from elusion.flows.review import review
+
+    engine, version = env
+    monkeypatch.setattr(mod, "load_texts", lambda corpus_dir: dict(BIG40))
+    provider = AlwaysRefuses()
+    ids = ListIdSource(BIG40_IDS)
+    with pytest.raises(RuntimeError, match="no usable verdict in 20 attempts"):
+        review(
+            "cloud-concentration",
+            sample=40,
+            batch_size=40,
+            provider=provider,
+            ids=ids,
+            max_run_usd=100.0,
+        )
+    assert len(provider.calls) == 20 and ids.committed == 0 and ids.closed
+    with engine.connect() as conn:
+        job = conn.execute(
+            sa.select(review_jobs).where(review_jobs.c.prompt_version == version)
+        ).one()
+    assert job.status == "failed"
