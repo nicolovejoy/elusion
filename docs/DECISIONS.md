@@ -2,6 +2,7 @@
 
 One line each, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-03 — Review model is claude-haiku-5-5; judge is claude-opus-5-5 — Haiku 5.5 is $0.10/$0.50 per MTok, so 20k paragraphs cost well under $1; the API no longer publishes dated snapshot aliases, so the pinned id is the bare string and the `model` field the API returns is stored with every score as the actual snapshot.
 - 2026-11-03 — doc_id = sha256(cik, year, text)[:16], not a paragraph index — re-splitting never renumbers existing documents, so idempotency survives splitter changes; identical paragraphs repeated in one filing collapse to one document.
 - 2026-11-03 — Raw EDGAR-CORPUS is streamed, never stored; only Item 1A paragraphs are kept in Parquet — 1.8 GB/year raw vs a few hundred MB of paragraphs; re-download is the price of a re-collect.
 - 2026-11-03 — Filing years 2018, 2019, 2020 — recent, Item 1A mandatory throughout, matches the CLAUDE.md example.

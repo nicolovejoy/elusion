@@ -7,7 +7,7 @@ conversations at an e-discovery company; the point is understanding, not feature
 
 Read `docs/PROJECT.md` (goals, the matter, done criteria) and `docs/PHASES.md` (the
 checklist) before starting any work. `docs/ARCHITECTURE.md` shows how data flows between
-the stores and why each store exists. Work one phase at a time, in order.
+the stores and why each store exists. `docs/plans/phase-N-*.md` is the spec for the next phase. Work one phase at a time, in order.
 
 ## How to work in this repo
 
