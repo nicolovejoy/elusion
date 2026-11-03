@@ -1,6 +1,6 @@
 # 1Password template. Materialize with:  op inject -i .env.tpl -o .env
 # or run without a file:                  op run --env-file=.env.tpl -- uv run elusion ...
-# Edit the op:// references to match your vault and item names. Safe to commit.
+# Edit the secret references (vault/item/field) to match your 1Password names. Safe to commit.
 
 # LLM providers
 ANTHROPIC_API_KEY=op://Private/Anthropic elusion/credential
