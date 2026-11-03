@@ -4,11 +4,11 @@ Work in order. A phase is done when every box is ticked and `docs/notes/phase-N.
 
 ## Phase 0: Scaffolding
 
-- [ ] `uv init`, `pyproject.toml` with `elusion` CLI entry point, `ruff`, `pytest`
-- [ ] `compose.yaml` brings up Postgres, Redpanda, MLflow, Prefect server; all four UIs reachable
-- [ ] `.env.example`, `.gitignore`, `data/` ignored
-- [ ] `src/elusion/` package skeleton with empty modules per `CLAUDE.md` layout
-- [ ] One passing test
+- [x] `uv init`, `pyproject.toml` with `elusion` CLI entry point, `ruff`, `pytest`
+- [x] `compose.yaml` brings up Postgres, Redpanda, MLflow, Prefect server; all four UIs reachable
+- [x] `.env.example`, `.gitignore`, `data/` ignored
+- [x] `src/elusion/` package skeleton with empty modules per `CLAUDE.md` layout
+- [x] One passing test
 
 ## Phase 1: Collection (days 1–2)
 

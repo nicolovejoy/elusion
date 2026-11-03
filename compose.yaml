@@ -1,19 +1,22 @@
-# Starting point for phase 0. Verify each service's UI comes up, then adjust.
+# Local stack for phases 0-5. Host ports avoid two things already listening on this Mac:
+# 5432 (Homebrew postgresql@17) and 5000 (macOS AirPlay Receiver). Container-side ports
+# are unchanged, so other containers still reach postgres:5432 and mlflow:5000.
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16.15
     environment:
       POSTGRES_USER: elusion
       POSTGRES_PASSWORD: elusion
       POSTGRES_DB: elusion
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
 
   redpanda:
     # Kafka-compatible broker, single binary, no ZooKeeper
-    image: redpandadata/redpanda:latest
+    image: redpandadata/redpanda:v26.2.6
     command:
-      - redpanda start
+      - redpanda
+      - start
       - --overprovisioned
       - --smp 1
       - --memory 1G
@@ -23,13 +26,13 @@ services:
     ports: ["9092:9092"]
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:latest
+    image: ghcr.io/mlflow/mlflow:v3.17.2 # matches the mlflow client in uv.lock
     command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////mlflow/mlflow.db --artifacts-destination /mlflow/artifacts
-    ports: ["5000:5000"]
+    ports: ["5001:5000"]
     volumes: [mlflow:/mlflow]
 
   prefect:
-    image: prefecthq/prefect:3-latest
+    image: prefecthq/prefect:3.9.1-python3.12 # matches the prefect client in uv.lock
     command: prefect server start --host 0.0.0.0
     environment:
       PREFECT_API_URL: http://localhost:4200/api

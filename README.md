@@ -17,7 +17,7 @@ Phase 0: scaffolding. See `docs/PHASES.md`.
 
 ```
 cp .env.example .env     # add your Anthropic key
-docker compose up -d     # postgres, redpanda, mlflow (:5000), prefect (:4200)
+docker compose up -d     # postgres (:5433), redpanda, mlflow (:5001), prefect (:4200)
 uv sync
 uv run elusion --help
 ```
