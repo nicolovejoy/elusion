@@ -22,3 +22,27 @@ class FakeProvider:
             output_tokens=20,
             cost_usd=0.0,
         )
+
+
+class ListIdSource:
+    """In-memory stand-in for KafkaIdSource: hands out ids in order, records commits.
+
+    `committed` is how many ids have been committed, like a consumer group's offset.
+    """
+
+    def __init__(self, ids: list[str]) -> None:
+        self.ids = list(ids)
+        self.position = 0
+        self.committed = 0
+        self.closed = False
+
+    def take(self, n: int, idle_timeout_s: float = 5.0) -> list[str]:
+        got = self.ids[self.position : self.position + n]
+        self.position += len(got)
+        return got
+
+    def commit(self) -> None:
+        self.committed = self.position
+
+    def close(self) -> None:
+        self.closed = True

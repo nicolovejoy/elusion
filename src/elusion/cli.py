@@ -4,6 +4,7 @@ Typer builds the CLI from type-annotated functions: each decorated function is a
 subcommand, its parameters become options/arguments, and the docstring is the help text.
 """
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -47,3 +48,26 @@ def collect(
     for y in year:
         summary = collect_flow(y, limit)
         typer.echo(f"{y}: {summary}")
+
+
+@app.command()
+def review(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
+    ],
+    sample: Annotated[int, typer.Option(help="Maximum number of ids to pull from Kafka.")],
+    batch_size: Annotated[int, typer.Option(help="Ids per batch (and per offset commit).")] = 50,
+    concurrency: Annotated[int, typer.Option(help="Parallel LLM calls per batch.")] = 8,
+    prompt_version: Annotated[str, typer.Option(help="Prompt file version.")] = "v1",
+) -> None:
+    """Score up to SAMPLE paragraphs from the topic against a CRITERION."""
+    from elusion.flows.review import review as review_flow
+
+    summary = review_flow(
+        criterion.stem,
+        sample,
+        batch_size=batch_size,
+        concurrency=concurrency,
+        prompt_version=prompt_version,
+    )
+    typer.echo(summary)

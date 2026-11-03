@@ -20,7 +20,7 @@ Haiku 5.5 decides for itself how much to think (adaptive thinking), so we pass n
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import anthropic
 from pydantic import BaseModel, Field
@@ -73,6 +73,9 @@ class Review:
     cache_read_input_tokens: int = 0
 
 
+# runtime_checkable: Prefect builds a pydantic schema from the flow signature, which
+# isinstance-checks parameters; a plain Protocol cannot be used with isinstance.
+@runtime_checkable
 class Provider(Protocol):
     name: str
     model: str
