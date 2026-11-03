@@ -20,6 +20,7 @@ cp .env.example .env     # add your Anthropic key
 docker compose up -d     # postgres (:5433), redpanda, mlflow (:5001), prefect (:4200)
 uv sync
 uv run elusion --help
+uv run elusion collect --year 2019 --limit 50   # drop --limit for the whole year
 ```
 
 ## Layout

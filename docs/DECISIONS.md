@@ -2,6 +2,9 @@
 
 One line each, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-03 — doc_id = sha256(cik, year, text)[:16], not a paragraph index — re-splitting never renumbers existing documents, so idempotency survives splitter changes; identical paragraphs repeated in one filing collapse to one document.
+- 2026-11-03 — Raw EDGAR-CORPUS is streamed, never stored; only Item 1A paragraphs are kept in Parquet — 1.8 GB/year raw vs a few hundred MB of paragraphs; re-download is the price of a re-collect.
+- 2026-11-03 — Filing years 2018, 2019, 2020 — recent, Item 1A mandatory throughout, matches the CLAUDE.md example.
 - 2026-11-03 — Compose image tags pinned (postgres 16.15, redpanda v26.2.6, mlflow v3.17.2, prefect 3.9.1) — reproducible stack; MLflow and Prefect server versions must track the client versions in uv.lock.
 - 2026-11-03 — Host ports 5433 (Postgres) and 5001 (MLflow) in compose — 5432 and 5000 are taken on the dev Mac by Homebrew postgresql@17 and AirPlay Receiver; container ports unchanged.
 - 2026-11-03 — Corpus is SEC 10-K Item 1A paragraphs (EDGAR-CORPUS), not Enron email — cleaner data, bigger, framed as a regulatory sweep; paragraphs keep the review shape and low richness.

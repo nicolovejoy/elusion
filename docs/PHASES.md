@@ -12,13 +12,13 @@ Work in order. A phase is done when every box is ticked and `docs/notes/phase-N.
 
 ## Phase 1: Collection (days 1–2)
 
-- [ ] Download EDGAR-CORPUS for three filing years via HuggingFace `datasets`
-- [ ] Split each Item 1A into paragraphs; drop fragments under ~30 words
-- [ ] Write Parquet: `doc_id, cik, company, year, paragraph_index, text`
-- [ ] Load metadata into Postgres `documents` table
-- [ ] Publish `doc_id`s to Kafka topic `documents.ingested`
-- [ ] Prefect flow `collect` with retries; visible in the Prefect UI
-- [ ] Note: paragraph counts per year, time to ingest, what Parquet bought us
+- [x] Download EDGAR-CORPUS for three filing years via HuggingFace `datasets`
+- [x] Split each Item 1A into paragraphs; drop fragments under ~30 words
+- [x] Write Parquet: `doc_id, cik, company, year, paragraph_index, text`
+- [x] Load metadata into Postgres `documents` table
+- [x] Publish `doc_id`s to Kafka topic `documents.ingested`
+- [x] Prefect flow `collect` with retries; visible in the Prefect UI
+- [x] Note: paragraph counts per year, time to ingest, what Parquet bought us
 
 ## Phase 2: First-pass review (days 3–5)
 
