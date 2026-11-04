@@ -16,13 +16,13 @@ generator writes one page with the four metrics. Demo:
 
 ## What the tool is actually for
 
-<!-- draft: owner to rewrite in own words -->
-- Recall: of all the paragraphs that really are about leaning on someone else's cloud, how many
-  did the review catch?
-- Precision: of the paragraphs the review flagged, how many really were about that, and not just
-  "banks have computers"?
+- Recall: of all the paragraphs that are about depending on one or a few cloud providers, how
+  many did the review catch?
+- Precision: of the paragraphs the review flagged, how many really were about depending on one
+  or a few cloud providers?
 - Elusion: what share of the discard pile should have been kept?
-- Richness: how rare the thing is. Here about one paragraph in a thousand.
+- Richness: what share of all the reviewed paragraphs are about cloud concentration? At least 1
+  in 1,000 here, possibly up to 1 in 50; the discard sample was too small to pin down the top end.
 
 A Clopper-Pearson 95% interval is the range of true rates that could plausibly give k hits in n
 draws. Elusion is sampled from the discard pile; recall cannot be sampled (nobody knows in advance
@@ -61,7 +61,7 @@ Scale: the validation sample is typically sized to the richness and the recall c
 at 200. Isolation: keeping each matter's protocol and gold set separate is a common practice.
 Defensibility: one written protocol, given verbatim to every reviewer, human or model, and a
 validation method agreed in advance; court orders such as the TAR validation protocol in
-*In re Broiler Chicken Antitrust Litigation* (N.D. Ill. 2018) specify an elusion sample and how
+_In re Broiler Chicken Antitrust Litigation_ (N.D. Ill. 2018) specify an elusion sample and how
 recall is estimated from it.
 
 What a skeptical reader would ask:
