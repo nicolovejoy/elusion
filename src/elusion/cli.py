@@ -146,5 +146,29 @@ def label(
     typer.echo(label_session(criterion.stem, n, seed))
 
 
+@app.command()
+def evaluate(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
+    ],
+    prompt_version: Annotated[
+        str, typer.Option(help="Review prompt version whose scores define the two piles.")
+    ],
+    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 2,
+    seed: Annotated[
+        int, typer.Option(help="Seed the gold set was drawn with; only echoed into the report.")
+    ] = DEFAULT_SEED,
+) -> None:
+    """Compute recall, precision, elusion and richness from the judge labels; write the report."""
+    from elusion.flows.evaluate import evaluate as evaluate_flow
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    path = evaluate_flow(
+        criterion.stem, prompt_version=prompt_version, threshold=threshold, seed=seed
+    )
+    typer.echo(path)
+
+
 if __name__ == "__main__":
     app()

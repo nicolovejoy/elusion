@@ -85,3 +85,30 @@ def test_cli_seed_default_matches_gold_module() -> None:
     from elusion.evaluate.gold import DEFAULT_SEED
 
     assert cli.DEFAULT_SEED == DEFAULT_SEED
+
+
+def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> None:
+    from pathlib import Path
+
+    import elusion.flows.evaluate as mod
+    from elusion.evaluate.gold import DEFAULT_SEED
+
+    seen = {}
+
+    def fake_flow(criterion, **kw):
+        seen.update(criterion=criterion, **kw)
+        return Path("docs/reports/cloud-concentration-m-v2.md")
+
+    monkeypatch.setattr(mod, "evaluate", fake_flow)
+    result = CliRunner().invoke(
+        app,
+        ["evaluate", "--criterion", "criteria/cloud-concentration.md", "--prompt-version", "v2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "criterion": "cloud-concentration",
+        "prompt_version": "v2",
+        "threshold": 2,
+        "seed": DEFAULT_SEED,
+    }
+    assert "docs/reports/cloud-concentration-m-v2.md" in result.output

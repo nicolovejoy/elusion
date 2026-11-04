@@ -1,4 +1,6 @@
-"""Prefect flow `judge`: gold ids -> skip already labeled -> judge model -> gold CSV.
+"""Prefect flows `judge` (label the gold set) and `evaluate` (turn the labels into a report).
+
+`judge`: gold ids -> skip already labeled -> judge model -> gold CSV.
 
 A *judge* is a second, stronger model (Opus 5.5, pinned in ELUSION_JUDGE_MODEL) asked the
 same question as the review in yes/no form, under its own versioned prompt. Its labels
@@ -17,6 +19,10 @@ pool, one batch at a time, and each batch's rows are appended to the CSV before 
 starts. Idempotency is by (doc_id, labeler): ids the judge model already labeled are
 skipped, and a failed call (refusal, truncation, invalid JSON) writes no row, so a plain
 re-run retries exactly those ids. There is no Kafka here: the gold ids are a fixed list.
+
+`evaluate`: scores + judge labels -> metrics -> docs/reports/<criterion>-<model>-<v>.md.
+It makes no LLM call. The two piles are recomputed from the current scores, not taken
+from the CSV `pile` column, so the report always describes the scores as they stand.
 """
 
 from __future__ import annotations
@@ -27,8 +33,11 @@ from pathlib import Path
 
 from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
+from sqlalchemy.engine import Engine
 
+from elusion.collect.db import company_counts
 from elusion.config import settings
+from elusion.evaluate import metrics
 from elusion.evaluate.gold import (
     DEFAULT_SEED,
     GoldRow,
@@ -36,10 +45,14 @@ from elusion.evaluate.gold import (
     append_judge_run,
     append_rows,
     gold_path,
+    human_rows,
+    judge_cost_usd,
+    judge_rows,
     judge_runs_path,
     labeled_ids,
     select_gold,
 )
+from elusion.evaluate.report import RunReport, render
 from elusion.flows.review import (
     PROBE_DOCS,
     BatchResult,
@@ -50,6 +63,7 @@ from elusion.flows.review import (
 )
 from elusion.review import db
 from elusion.review.corpus import load_texts
+from elusion.review.db import jobs_summary, scores_for
 from elusion.review.prompt import load_prompt
 from elusion.review.providers import AnthropicProvider, Judge
 
@@ -208,3 +222,99 @@ def judge(
             log.exception("could not record the judge run %s", record)
     log.info("judge finished: %s", summary)
     return summary
+
+
+class MissingLabels(RuntimeError):
+    """Some flagged paragraph has no judge label, so precision cannot be computed."""
+
+
+def report_path(reports_dir: Path, criterion: str, model: str, prompt_version: str) -> Path:
+    return reports_dir / f"{criterion}-{model}-{prompt_version.replace('/', '-')}.md"
+
+
+@flow(name="evaluate")
+def evaluate(
+    criterion: str,
+    prompt_version: str = "v2",
+    threshold: int = 2,
+    seed: int = DEFAULT_SEED,
+    engine: Engine | None = None,
+    data_dir: Path | None = None,
+    reports_dir: Path = Path("docs/reports"),
+    review_model: str | None = None,
+    judge_model: str | None = None,
+    today: str | None = None,
+) -> Path:
+    """Compute the metrics of the review run (review_model, `prompt_version`) from the
+    judge's labels, write the Markdown report and return its path.
+
+    Flagged = every doc scoring >= `threshold` under the pair; each must carry a label by
+    `judge_model`, otherwise MissingLabels (re-running `elusion judge` fills them). The
+    discard sample = this judge's labeled docs that currently score below the threshold.
+    `seed` is not used to sample anything here; it is written into the report as the
+    seed the gold set was drawn with. Tests pass a fake `engine` and their own paths.
+    """
+    log = get_run_logger()
+    review_model = review_model or settings.review_model
+    judge_model = judge_model or settings.judge_model
+    engine = engine or db.make_engine(settings.database_url)
+    csv = gold_path(criterion, data_dir or settings.data_dir)
+    version = f"{criterion}/{prompt_version}"
+
+    scores = scores_for(engine, review_model, version)
+    if not scores:
+        raise RuntimeError(f"no scores for ({review_model}, {version})")
+    flagged = {d for d, s in scores.items() if s >= threshold}
+    judged = {r.doc_id: r for r in judge_rows(csv) if r.labeler == judge_model}
+    missing = flagged - judged.keys()
+    if missing:
+        raise MissingLabels(
+            f"{len(missing)} flagged paragraphs have no {judge_model} label in {csv}, "
+            f"e.g. {min(missing)}; re-run `elusion judge` to fill them"
+        )
+    flagged_rows = [judged[d] for d in sorted(flagged)]
+    discard_rows = [r for d, r in sorted(judged.items()) if d in scores and d not in flagged]
+    n_flagged, n_discard = len(flagged), len(scores) - len(flagged)
+
+    precision = metrics.precision(flagged_rows)
+    elusion = metrics.elusion(discard_rows)
+    humans = human_rows(csv)
+    shared = [h for h in humans if h.doc_id in judged]
+    agreement = metrics.agreement(shared, list(judged.values())) if shared else None
+
+    jobs = jobs_summary(engine, review_model, version)
+    wall_clock = None
+    if jobs["jobs"]:
+        end = datetime.now(UTC) if jobs["unfinished"] else jobs["finished_at"]
+        wall_clock = end - jobs["started_at"]
+    relevant = [r.doc_id for r in flagged_rows if r.label == 1]
+
+    report = RunReport(
+        criterion=criterion,
+        review_model=review_model,
+        prompt_version=version,
+        judge_model=judge_model,
+        judge_prompt_version=", ".join(sorted({r.prompt_version for r in judged.values()})),
+        date=today or datetime.now(UTC).date().isoformat(),
+        seed=seed,
+        threshold=threshold,
+        population=len(scores),
+        n_flagged=n_flagged,
+        n_discard=n_discard,
+        precision=precision,
+        elusion=elusion,
+        richness=metrics.richness(precision, elusion, n_flagged, n_discard),
+        recall=metrics.recall(precision, elusion, n_flagged, n_discard),
+        agreement=agreement,
+        review_cost_usd=jobs["cost_usd"],
+        judge_cost_usd=judge_cost_usd(judge_runs_path(csv)),
+        review_jobs=jobs["jobs"],
+        review_wall_clock=wall_clock,
+        review_unfinished=jobs["unfinished"],
+        companies=company_counts(engine, relevant),
+    )
+    path = report_path(reports_dir, criterion, review_model, prompt_version)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render(report), encoding="utf-8")
+    log.info("report written to %s", path)
+    return path

@@ -67,7 +67,7 @@ uv sync                       # install
 uv run pytest                 # tests
 uv run elusion collect --year 2019
 uv run elusion review --criterion criteria/cloud-concentration.md --sample 20000
-uv run elusion evaluate --run <mlflow run id>
+uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2   # the --run <mlflow run id> form is phase 4
 ```
 
 ## Metrics vocabulary (use these words exactly)

@@ -85,3 +85,22 @@ def count_documents(engine: Engine, year: int | None = None) -> int:
         stmt = stmt.where(documents.c.year == year)
     with engine.connect() as conn:
         return conn.execute(stmt).scalar_one()
+
+
+NO_COMPANY = "(no company name)"  # documents.company is null when EDGAR had no name
+
+
+def company_counts(engine: Engine, doc_ids: Iterable[str]) -> list[tuple[str, int]]:
+    """Distinct companies among `doc_ids` with paragraph counts, most paragraphs first,
+    ties by name. A null company is reported as NO_COMPANY."""
+    ids = list(doc_ids)
+    if not ids:
+        return []
+    stmt = (
+        sa.select(documents.c.company, sa.func.count())
+        .where(documents.c.doc_id.in_(ids))
+        .group_by(documents.c.company)
+    )
+    with engine.connect() as conn:
+        counts = [(name or NO_COMPANY, n) for name, n in conn.execute(stmt)]
+    return sorted(counts, key=lambda c: (-c[1], c[0]))
