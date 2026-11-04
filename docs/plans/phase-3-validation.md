@@ -116,7 +116,7 @@ the job row's `docs_scored`, `cost_usd` and the score distribution in the phase 
     the literal `human` for owner rows. `prompt_version` is the judge prompt version for
     judge rows and empty for human rows. Rows are appended; a (doc_id, labeler) pair
     appears at most once.
-  - `select_gold(engine, model, prompt_version, threshold=2, discard_n=200, seed=...)
+  - `select_gold(engine, model, prompt_version, threshold=3, discard_n=200, seed=...)
     -> list[(doc_id, pile)]`: every doc with score >= threshold, plus `discard_n` drawn
     uniformly without replacement from docs with score < threshold, using a seeded RNG.
     The seed is a CLI option with a fixed default and is written into the report.
