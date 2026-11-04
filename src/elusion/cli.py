@@ -4,6 +4,7 @@ Typer builds the CLI from type-annotated functions: each decorated function is a
 subcommand, its parameters become options/arguments, and the docstring is the help text.
 """
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -30,10 +31,6 @@ def version() -> None:
     typer.echo(__version__)
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command()
 def collect(
     year: Annotated[list[int], typer.Option(help="Filing year; repeat for several.")],
@@ -47,3 +44,44 @@ def collect(
     for y in year:
         summary = collect_flow(y, limit)
         typer.echo(f"{y}: {summary}")
+
+
+@app.command()
+def review(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
+    ],
+    sample: Annotated[
+        int,
+        typer.Option(
+            help="Pull the next SAMPLE ids for this criterion/model/prompt-version consumer "
+            "group; a re-run continues from the committed offset, it does not re-score."
+        ),
+    ],
+    batch_size: Annotated[int, typer.Option(help="Ids per batch (and per offset commit).")] = 50,
+    concurrency: Annotated[int, typer.Option(help="Parallel LLM calls per batch.")] = 8,
+    prompt_version: Annotated[str, typer.Option(help="Prompt file version.")] = "v1",
+    max_run_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+) -> None:
+    """Score up to SAMPLE paragraphs from the topic against a CRITERION."""
+    from elusion.flows.review import review as review_flow
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+
+    summary = review_flow(
+        criterion.stem,
+        sample,
+        batch_size=batch_size,
+        concurrency=concurrency,
+        prompt_version=prompt_version,
+        max_run_usd=max_run_usd,
+    )
+    typer.echo(summary)
+
+
+if __name__ == "__main__":
+    app()

@@ -22,14 +22,14 @@ Work in order. A phase is done when every box is ticked and `docs/notes/phase-N.
 
 ## Phase 2: First-pass review (days 3–5)
 
-- [ ] Provider interface with Anthropic implementation; model snapshot ID pinned in config
-- [ ] Versioned prompts under `src/elusion/review/prompts/<criterion>/v1.md`
-- [ ] Structured output: `score` 0–4, `rationale`, `quote`
-- [ ] Postgres `scores` table keyed by `(doc_id, model, prompt_version)`; job table for resumability
-- [ ] Batching, concurrency limit, 429 backoff, token and cost counters
-- [ ] Cost guard: refuse runs projected over `ELUSION_MAX_RUN_USD`
-- [ ] Prefect flow `review --sample 20000`; kill it mid-run and prove it resumes without re-spending
-- [ ] Note: what partial failure looked like; what Prefect gave us vs a plain loop
+- [x] Provider interface with Anthropic implementation; model snapshot ID pinned in config
+- [x] Versioned prompts under `src/elusion/review/prompts/<criterion>/v1.md`
+- [x] Structured output: `score` 0–4, `rationale`, `quote`
+- [x] Postgres `scores` table keyed by `(doc_id, model, prompt_version)`; job table for resumability
+- [x] Batching, concurrency limit, 429 backoff, token and cost counters
+- [x] Cost guard: refuse runs projected over `ELUSION_MAX_RUN_USD`
+- [x] Prefect flow `review --sample 20000`; kill it mid-run and prove it resumes without re-spending
+- [x] Note: what partial failure looked like; what Prefect gave us vs a plain loop
 
 ## Phase 3: Validation (days 6–7)
 
