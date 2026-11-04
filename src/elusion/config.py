@@ -42,6 +42,9 @@ class Settings:
         default_factory=lambda: _env("ELUSION_REVIEW_MODEL", "claude-haiku-5-5")
     )
 
+    # Pinned model snapshot id used for the judge pass that labels the gold set.
+    judge_model: str = field(default_factory=lambda: _env("ELUSION_JUDGE_MODEL", "claude-opus-5-5"))
+
     # Spend guard: the review flow refuses to continue a run projected to cost more.
     max_run_usd: float = field(default_factory=lambda: float(_env("ELUSION_MAX_RUN_USD", "10")))
 

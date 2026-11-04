@@ -1,6 +1,6 @@
 # Data architecture
 
-How data moves through elusion, what each store is for, and why. Phases 0 and 1 are
+How data moves through elusion, what each store is for, and why. Phases 0 to 3 are
 built; later phases are described as planned and marked so.
 
 ## One line
@@ -17,6 +17,7 @@ an LLM; evaluate measures how well that went and says so with confidence interva
 | Postgres, `documents` table | one row of metadata per document, no text | row store, indexed by doc_id, cik, year | small, hot, joined against scores and job state |
 | Postgres, `scores` and job tables (phase 2) | the LLM's verdict per (document, model, prompt version); which batches have run | row store, keyed by (doc_id, model, prompt_version) | the idempotency ledger: "has this been paid for already?" |
 | Kafka topic `documents.ingested` (Redpanda) | one message per document id | append-only log, keyed by doc_id, 1 partition | a durable to-do list that decouples collect from review |
+| `data/gold/<criterion>.csv` and `.judge-runs.jsonl` (phase 3) | one yes/no label per (document, labeler): the judge model's or the owner's; one line per judge run with counts and cost | CSV and JSON lines, appended, gitignored | the answer key for evaluation; nothing that builds a prompt ever reads it |
 | MLflow (phase 4) | one run per review+evaluate: params, metrics, cost, report | experiment tracking | compare runs across models and prompts; promote a winner |
 | Prefect server | state of every flow and task run, retries, logs | bookkeeping | see what ran, what failed, what retried |
 
@@ -93,7 +94,7 @@ from the risk-factor requirement.
   does not dedupe on its own. Consumers must be idempotent (they check the scores table)
   or the topic must be compacted. Review (phase 2) does the former.
 
-## Phase 2: review (planned)
+## Phase 2: review
 
 ```
 Kafka documents.ingested ──▶ consumer, batches of N ids
@@ -135,18 +136,33 @@ In a 20,000-document toy you could skip it. In a production platform where colle
 reviewers and analytics are separate services owned by separate teams, the log is the
 contract between them. That is what the exercise is practising.
 
-## Phase 3: evaluate (planned)
+## Phase 3: judge, label, evaluate (built)
 
 ```
-data/gold/<criterion>.csv  ◀── labeling CLI (human y/n per sampled paragraph)
-        │   never enters any prompt; evaluation only
+Postgres `scores` for one (review model, prompt version) pair
+        │  select_gold: every score >= 3 (flagged), plus 200 drawn
+        │  with a seeded RNG from score < 3 (discard)
         ▼
-scores (Postgres) ⋈ gold (CSV) ──▶ recall, precision
-discard pile sample ⋈ gold     ──▶ elusion   (measured, not derived)
-corpus sample ⋈ gold           ──▶ richness
-        all with Clopper-Pearson 95% intervals and the n behind them
+Prefect flow `judge` ──▶ LLM call (pinned judge model + judge prompt version,
+        │                effort low; paragraph text only: no score, rationale,
+        │                quote, company or existing label); spend guard as in review
+        ├──▶ data/gold/<criterion>.csv               one row per (doc_id, labeler),
+        │                                            labeler = judge model id
+        └──▶ data/gold/<criterion>.judge-runs.jsonl  one line per judge run: counts, cost
+
+elusion label (owner, blind, 10 flagged + 10 discard) ──▶ same CSV, labeler = human
+        the gold set never enters any prompt; evaluation only
         ▼
-one-page report per run  ──▶  MLflow artifact (phase 4)
+Prefect flow `evaluate`: piles recomputed from `scores`, joined to the judge rows
+  flagged pile, every member judged     ──▶ precision          (census)
+  discard pile, seeded sample judged    ──▶ elusion            (measured, not derived)
+  both piles weighted by pile size      ──▶ richness, recall   (derived, >= ~90% coverage)
+  human rows ⋈ judge rows               ──▶ judge agreement with the owner
+  review_jobs, judge-runs ledger        ──▶ cost, wall-clock
+  `documents`, flagged judged relevant  ──▶ companies found
+        Clopper-Pearson 95% intervals and the k/n behind them
+        ▼
+docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow artifact (phase 4)
 ```
 
 ## Where each phase reads and writes
@@ -155,7 +171,7 @@ one-page report per run  ──▶  MLflow artifact (phase 4)
 |---|---|---|
 | 1 collect | HuggingFace JSONL | Parquet, `documents`, Kafka |
 | 2 review | Kafka, `documents`, `scores`, Parquet text | `scores`, job table |
-| 3 evaluate | `scores`, Parquet, `data/gold/` | report file |
+| 3 judge, label, evaluate | `scores`, `review_jobs`, `documents`, Parquet text, `data/gold/` | `data/gold/<criterion>.csv`, `.judge-runs.jsonl`, `docs/reports/` |
 | 4 leaderboard | report, `scores` | MLflow runs and registry |
 | 5 dedupe | Parquet | Delta table of clusters; `scores` for members |
 | 6 production | same as 2, on AKS | same as 2 |

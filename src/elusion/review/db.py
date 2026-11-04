@@ -133,6 +133,15 @@ def unscored_ids(engine: Engine, ids: Sequence[str], model: str, prompt_version:
         return [r[0] for r in conn.execute(stmt)]
 
 
+def scores_for(engine: Engine, model: str, prompt_version: str) -> dict[str, int]:
+    """Every doc_id scored under (model, prompt_version), mapped to its 0-4 score."""
+    stmt = sa.select(scores.c.doc_id, scores.c.score).where(
+        scores.c.model == model, scores.c.prompt_version == prompt_version
+    )
+    with engine.connect() as conn:
+        return {doc_id: score for doc_id, score in conn.execute(stmt)}
+
+
 def insert_scores(engine: Engine, rows: Iterable[ScoreRow]) -> int:
     """Insert score rows, skipping existing keys. Returns rows actually inserted."""
     batch = list(rows)
@@ -188,6 +197,40 @@ def finish_job(engine: Engine, job_id: str, status: str = "finished") -> None:
     )
     with engine.begin() as conn:
         conn.execute(stmt)
+
+
+def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
+    """What every review_jobs row for (model, prompt_version) adds up to.
+
+    Returns jobs (row count), cost_usd (sum), started_at (earliest start), finished_at
+    (latest finish, None if none finished), unfinished (some row has no finished_at)
+    and unfinished_ids (those rows' job ids, sorted: a running job, or a killed one).
+    A crashed and resumed review is several rows, so cost and wall-clock span them all.
+    """
+    j = review_jobs.c
+    stmt = sa.select(
+        sa.func.count(),
+        sa.func.coalesce(sa.func.sum(j.cost_usd), 0),
+        sa.func.min(j.started_at),
+        sa.func.max(j.finished_at),
+        sa.func.count() - sa.func.count(j.finished_at),
+    ).where(j.model == model, j.prompt_version == prompt_version)
+    with engine.connect() as conn:
+        jobs, cost, started, finished, unfinished = conn.execute(stmt).one()
+        open_ids = conn.execute(
+            sa.select(j.job_id)
+            .where(j.model == model, j.prompt_version == prompt_version, j.finished_at.is_(None))
+            .order_by(j.job_id)
+        ).scalars()
+        open_ids = [str(i) for i in open_ids]
+    return {
+        "jobs": jobs,
+        "cost_usd": float(cost),
+        "started_at": started,
+        "finished_at": finished,
+        "unfinished": unfinished > 0,
+        "unfinished_ids": open_ids,
+    }
 
 
 def get_job(engine: Engine, job_id: str) -> dict:

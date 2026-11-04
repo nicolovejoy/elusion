@@ -84,3 +84,39 @@ def test_job_lifecycle() -> None:
     finally:
         with engine.begin() as conn:
             conn.execute(sa.delete(review_jobs).where(review_jobs.c.job_id == job_id))
+
+
+def test_jobs_summary_sums_cost_and_spans_all_jobs() -> None:
+    from elusion.review.db import jobs_summary
+
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    try:
+        assert jobs_summary(engine, model, "c/v2") == {
+            "jobs": 0,
+            "cost_usd": 0.0,
+            "started_at": None,
+            "finished_at": None,
+            "unfinished": False,
+            "unfinished_ids": [],
+        }
+        a = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
+        b = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
+        other = start_job(engine, criterion="c", model=model, prompt_version="c/v1", sample_size=5)
+        update_job(engine, a, docs_scored=5, cost_usd=0.25)
+        update_job(engine, b, docs_scored=5, cost_usd=0.5)
+        update_job(engine, other, docs_scored=5, cost_usd=9.0)
+        finish_job(engine, a)
+        s = jobs_summary(engine, model, "c/v2")
+        assert (s["jobs"], s["cost_usd"], s["unfinished"]) == (2, 0.75, True)
+        assert s["unfinished_ids"] == [b]
+        assert s["started_at"] is not None and s["finished_at"] is not None
+        finish_job(engine, b, "failed")
+        s = jobs_summary(engine, model, "c/v2")
+        assert s["unfinished"] is False and s["unfinished_ids"] == []
+        assert s["finished_at"] == get_job(engine, b)["finished_at"]
+        assert s["started_at"] == get_job(engine, a)["started_at"]
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))

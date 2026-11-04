@@ -51,3 +51,138 @@ def test_review_command_passes_criterion_name(monkeypatch) -> None:
         "max_run_usd": None,
     }
     assert "summary" in result.output
+
+
+def test_judge_command_passes_criterion_name_and_defaults(monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+    from elusion.evaluate.gold import DEFAULT_SEED
+
+    seen = {}
+
+    def fake_flow(criterion, **kw):
+        seen.update(criterion=criterion, **kw)
+        return "judge summary"
+
+    monkeypatch.setattr(mod, "judge", fake_flow)
+    result = CliRunner().invoke(
+        app,
+        ["judge", "--criterion", "criteria/cloud-concentration.md", "--prompt-version", "v2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "criterion": "cloud-concentration",
+        "prompt_version": "v2",
+        "threshold": 3,
+        "discard_n": 200,
+        "seed": DEFAULT_SEED,
+        "max_run_usd": None,
+        "force": False,
+    }
+    assert "judge summary" in result.output
+
+
+def test_cli_seed_default_matches_gold_module() -> None:
+    from elusion import cli
+    from elusion.evaluate.gold import DEFAULT_SEED
+
+    assert cli.DEFAULT_SEED == DEFAULT_SEED
+
+
+def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> None:
+    from pathlib import Path
+
+    import elusion.flows.evaluate as mod
+    from elusion.evaluate.gold import DEFAULT_SEED
+
+    seen = {}
+
+    def fake_flow(criterion, **kw):
+        seen.update(criterion=criterion, **kw)
+        return Path("docs/reports/cloud-concentration-m-v2.md")
+
+    monkeypatch.setattr(mod, "evaluate", fake_flow)
+    result = CliRunner().invoke(
+        app,
+        ["evaluate", "--criterion", "criteria/cloud-concentration.md", "--prompt-version", "v2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "criterion": "cloud-concentration",
+        "prompt_version": "v2",
+        "threshold": 3,
+        "seed": DEFAULT_SEED,
+    }
+    assert "docs/reports/cloud-concentration-m-v2.md" in result.output
+
+
+def _crit(tmp_path):
+    crit = tmp_path / "c.md"
+    crit.write_text("x")
+    return str(crit)
+
+
+def test_judge_force_flag_is_passed(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "judge", lambda criterion, **kw: seen.update(kw) or "ok")
+    r = CliRunner().invoke(
+        app, ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v2", "--force"]
+    )
+    assert r.exit_code == 0, r.output
+    assert seen["force"] is True
+
+
+def test_judge_refusal_exits_1_without_traceback(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    def refuse(criterion, **kw):
+        raise mod.ReviewStillRunning("review job job-abc is still running")
+
+    monkeypatch.setattr(mod, "judge", refuse)
+    r = CliRunner().invoke(app, ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v2"])
+    assert r.exit_code == 1
+    assert "job-abc is still running" in r.output
+    assert not isinstance(r.exception, mod.ReviewStillRunning)
+
+
+def test_evaluate_missing_labels_exits_1_without_traceback(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    def missing(criterion, **kw):
+        raise mod.MissingLabels("2 flagged paragraphs have no label")
+
+    monkeypatch.setattr(mod, "evaluate", missing)
+    r = CliRunner().invoke(
+        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+    )
+    assert r.exit_code == 1
+    assert "2 flagged paragraphs have no label" in r.output
+    assert not isinstance(r.exception, mod.MissingLabels)
+
+
+def test_evaluate_no_labeled_rows_exits_1(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    def empty(criterion, **kw):
+        raise ValueError("no labeled rows in the discard pile")
+
+    monkeypatch.setattr(mod, "evaluate", empty)
+    r = CliRunner().invoke(
+        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+    )
+    assert r.exit_code == 1
+    assert "no labeled rows in the discard pile" in r.output
+
+
+def test_evaluate_other_value_errors_still_raise(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    def bug(criterion, **kw):
+        raise ValueError("something else")
+
+    monkeypatch.setattr(mod, "evaluate", bug)
+    r = CliRunner().invoke(
+        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+    )
+    assert isinstance(r.exception, ValueError)

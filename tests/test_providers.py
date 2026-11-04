@@ -7,13 +7,16 @@ from pydantic import ValidationError
 
 from elusion.config import Settings
 from elusion.review.providers import (
+    LABEL_SCHEMA,
     VERDICT_SCHEMA,
     AnthropicProvider,
+    Judge,
+    Label,
     Provider,
     ReviewError,
     Verdict,
 )
-from tests.fakes import FakeProvider
+from tests.fakes import FakeJudge, FakeProvider
 
 
 def test_verdict_rejects_out_of_range_score():
@@ -33,6 +36,13 @@ def test_review_model_setting_default(monkeypatch):
     assert Settings().review_model == "claude-haiku-5-5"
     monkeypatch.setenv("ELUSION_REVIEW_MODEL", "other")
     assert Settings().review_model == "other"
+
+
+def test_judge_model_setting_default(monkeypatch):
+    monkeypatch.delenv("ELUSION_JUDGE_MODEL", raising=False)
+    assert Settings().judge_model == "claude-opus-5-5"
+    monkeypatch.setenv("ELUSION_JUDGE_MODEL", "other")
+    assert Settings().judge_model == "other"
 
 
 USAGE = dict(
@@ -134,3 +144,65 @@ def test_out_of_range_score_is_invalid_json(monkeypatch):
         monkeypatch, '{"score": 5, "rationale": "r", "quote": "q"}', "end_turn", "invalid_json"
     )
     assert isinstance(e.__cause__, ValidationError)
+
+
+def test_fake_judge_satisfies_protocol():
+    j: Judge = FakeJudge()
+    assert j.label("sys", "para").label.relevant is True
+
+
+def test_label_rejects_extra_fields():
+    with pytest.raises(ValidationError):
+        Label.model_validate({"relevant": True, "rationale": "r", "score": 3})
+
+
+def test_label_request_shape_and_cost(monkeypatch):
+    seen = {}
+    label = Label(relevant=True, rationale="names AWS as a dependency")
+    big = 1_000_000
+    usage = dict(
+        input_tokens=big,
+        output_tokens=big,
+        cache_creation_input_tokens=big,
+        cache_read_input_tokens=big,
+    )
+    provider = stub_create(monkeypatch, label.model_dump_json(), usage=usage, seen=seen)
+    j = provider.label("JUDGE SYSTEM", "the paragraph")
+
+    assert seen["model"] == "claude-haiku-5-5"
+    fmt = seen["output_config"]["format"]
+    assert seen["output_config"]["effort"] == "low"
+    assert fmt == {"type": "json_schema", "schema": LABEL_SCHEMA}
+    assert fmt["schema"]["additionalProperties"] is False
+    assert fmt["schema"]["required"] == ["relevant", "rationale"]
+    assert "thinking" not in seen and "temperature" not in seen
+    assert seen["system"] == [
+        {"type": "text", "text": "JUDGE SYSTEM", "cache_control": {"type": "ephemeral"}}
+    ]
+    # Paragraph text only: nothing else reaches the judge.
+    assert seen["messages"] == [{"role": "user", "content": "the paragraph"}]
+
+    assert j.label == label
+    assert j.model == "claude-haiku-5-5"
+    assert (j.input_tokens, j.output_tokens) == (big, big)
+    assert (j.cache_creation_input_tokens, j.cache_read_input_tokens) == (big, big)
+    assert j.cost_usd == pytest.approx(0.735)
+
+
+@pytest.mark.parametrize(
+    ("text", "stop_reason", "expected"),
+    [
+        ("", "refusal", "refusal"),
+        ('{"relevant": true, "ratio', "max_tokens", "max_tokens"),
+        ('{"relevant": true, "ratio', "end_turn", "invalid_json"),
+        ('{"relevant": "maybe", "rationale": "r"}', "end_turn", "invalid_json"),
+    ],
+)
+def test_label_unusable_answers_raise_review_error(monkeypatch, text, stop_reason, expected):
+    provider = stub_create(monkeypatch, text, stop_reason=stop_reason)
+    with pytest.raises(ReviewError) as exc:
+        provider.label("s", "p")
+    e = exc.value
+    assert e.stop_reason == expected and e.model == "claude-haiku-5-5"
+    assert (e.input_tokens, e.output_tokens) == (10, 20)
+    assert (e.cache_creation_input_tokens, e.cache_read_input_tokens) == (0, 30)
