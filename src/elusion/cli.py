@@ -123,5 +123,28 @@ def judge(
     typer.echo(summary)
 
 
+@app.command()
+def label(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
+    ],
+    prompt_version: Annotated[
+        str,
+        typer.Option(
+            help="Accepted for symmetry with judge/evaluate; unused here, since the judge "
+            "rows already carry the judge prompt version."
+        ),
+    ],
+    n: Annotated[int, typer.Option(help="Paragraphs to label: n/2 flagged, n/2 discard.")] = 20,
+    seed: Annotated[int, typer.Option(help="Seed for the random pick.")] = DEFAULT_SEED,
+) -> None:
+    """Label judge-labeled paragraphs yourself, blind, for the human audit."""
+    from elusion.evaluate.label import label as label_session
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    typer.echo(label_session(criterion.stem, n, seed))
+
+
 if __name__ == "__main__":
     app()
