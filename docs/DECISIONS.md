@@ -20,3 +20,5 @@ One line each, newest first. Format: `YYYY-MM-DD — decision — why`.
 - 2026-11-03 — Spark (phase 5) and Pulumi (phase 6) are optional — cut first if time runs short.
 - 2026-11-03 — Azure only in phase 6, torn down same day — cost ceiling ~$10 for cloud, ~$40 total.
 - 2026-11-03 — Repo is public; secrets only in `.env` — learning artifact meant to be shown.
+- 2026-11-04 — Criterion cloud-concentration tightened to cloud/hosting/data-center providers; suppliers, component vendors, payment processors excluded — v1 top hits were supplier risk; v1 scores kept for phase 4 comparison.
+- 2026-11-04 — Price row for claude-opus-5-5 (judge model): $4 input, $20 output, $5 cache write (5m), $0.20 cache read per MTok — source: https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-11-04; claude-api skill agrees on input/output/cache read).

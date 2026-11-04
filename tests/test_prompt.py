@@ -12,6 +12,23 @@ def test_loads_v1_with_exact_version_string() -> None:
         assert field in prompt.text
 
 
+def test_loads_v2_with_exact_version_string() -> None:
+    prompt = load_prompt("cloud-concentration", "v2")
+    assert prompt.version == "cloud-concentration/v2"
+    assert "verbatim" in prompt.text
+    for field in ("score", "rationale", "quote"):
+        assert field in prompt.text
+    assert load_prompt("cloud-concentration", "v1").text != prompt.text
+
+
+def test_loads_judge_v1_with_exact_version_string() -> None:
+    prompt = load_prompt("cloud-concentration", "judge-v1")
+    assert prompt.version == "cloud-concentration/judge-v1"
+    for field in ("relevant", "rationale"):
+        assert field in prompt.text
+    assert "0-4" not in prompt.text  # yes/no judge, no scale
+
+
 def test_default_version_is_v1() -> None:
     assert load_prompt("cloud-concentration") == load_prompt("cloud-concentration", "v1")
 

@@ -35,6 +35,13 @@ def test_review_model_setting_default(monkeypatch):
     assert Settings().review_model == "other"
 
 
+def test_judge_model_setting_default(monkeypatch):
+    monkeypatch.delenv("ELUSION_JUDGE_MODEL", raising=False)
+    assert Settings().judge_model == "claude-opus-5-5"
+    monkeypatch.setenv("ELUSION_JUDGE_MODEL", "other")
+    assert Settings().judge_model == "other"
+
+
 USAGE = dict(
     input_tokens=10,
     output_tokens=20,
