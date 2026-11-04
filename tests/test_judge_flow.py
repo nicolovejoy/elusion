@@ -4,10 +4,12 @@ Prefect needs an API to record flow runs; `prefect_test_harness` starts a throwa
 one (SQLite-backed) for this module, so these tests run without the compose stack.
 """
 
+import json
+
 import pytest
 from prefect.testing.utilities import prefect_test_harness
 
-from elusion.evaluate.gold import human_rows, judge_rows
+from elusion.evaluate.gold import human_rows, judge_cost_usd, judge_rows, judge_runs_path
 from elusion.review.prompt import Prompt
 from elusion.review.providers import Judgement, ReviewError
 from tests.fakes import FakeJudge
@@ -195,3 +197,36 @@ def test_unknown_id_fails_before_any_call(env) -> None:
     with pytest.raises(KeyError, match="not in the Parquet corpus"):
         judge("c", gold=[("nope", "flagged")], provider=j, gold_csv=path)
     assert j.calls == []
+
+
+def runs(path) -> list[dict]:
+    p = judge_runs_path(path)
+    return [json.loads(line) for line in p.read_text().splitlines()] if p.is_file() else []
+
+
+def test_each_run_that_calls_the_judge_is_recorded(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, texts = env
+    judge("c", gold=gold_of(5), provider=Flaky({texts["d002"]}), gold_csv=path)
+    judge("c", gold=gold_of(5), provider=Flaky(set()), gold_csv=path)
+    judge("c", gold=gold_of(5), provider=Flaky(set()), gold_csv=path)  # nothing to do
+    recs = runs(path)
+    assert len(recs) == 2  # the third run made no call and spent nothing
+    assert [(r["labeled"], r["failed"]) for r in recs] == [(4, 1), (1, 0)]
+    assert recs[0]["cost_usd"] == pytest.approx(0.40)
+    assert {r["model"] for r in recs} == {"claude-opus-5-5"}
+    assert {r["prompt_version"] for r in recs} == {"c/judge-v1"}
+    assert all(r["finished_at"] for r in recs)
+    assert judge_cost_usd(judge_runs_path(path)) == pytest.approx(0.40)
+
+
+def test_run_stopped_by_the_budget_is_still_recorded(env) -> None:
+    from elusion.flows.evaluate import judge
+    from elusion.flows.review import BudgetExceeded
+
+    path, _ = env
+    with pytest.raises(BudgetExceeded):
+        judge("c", gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=0.05)
+    (rec,) = runs(path)
+    assert rec["labeled"] == 20 and rec["cost_usd"] == pytest.approx(0.20)

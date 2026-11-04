@@ -9,11 +9,15 @@ from elusion.evaluate.gold import (
     COLUMNS,
     DEFAULT_SEED,
     GoldRow,
+    append_judge_run,
     append_rows,
     gold_path,
     human_rows,
+    judge_cost_usd,
     judge_rows,
+    judge_runs_path,
     labeled_ids,
+    read_rows,
     select_gold,
     split_piles,
 )
@@ -151,3 +155,41 @@ def test_select_gold_reads_scores_for_the_pair():
 def test_label_is_zero_or_one(tmp_path):
     with pytest.raises(ValueError):
         append_rows(tmp_path / "c.csv", [row("a", label=2)])
+
+
+def test_judge_runs_ledger_appends_and_sums(tmp_path):
+    path = judge_runs_path(tmp_path / "gold" / "c.csv")
+    assert path == tmp_path / "gold" / "c.judge-runs.jsonl"
+    assert judge_cost_usd(path) == 0.0  # no file yet
+    rec = {"labeled": 5, "failed": 1, "model": "m", "prompt_version": "c/judge-v1",
+           "finished_at": "2026-11-04T12:00:00+00:00"}  # fmt: skip
+    append_judge_run(path, {**rec, "cost_usd": 1.25})
+    append_judge_run(path, {**rec, "cost_usd": 0.5})
+    assert len(path.read_text().splitlines()) == 2
+    assert judge_cost_usd(path) == pytest.approx(1.75)
+
+
+def test_append_after_partial_last_line_starts_a_new_line(tmp_path):
+    path = tmp_path / "c.csv"
+    append_rows(path, [row("a")])
+    # A writer killed mid-way through the last field: the row parses but has no newline.
+    path.write_bytes(path.read_bytes().rstrip(b"\r\n")[:-3])
+    append_rows(path, [row("b")])
+    assert [r.doc_id for r in read_rows(path)] == ["a", "b"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "a,1,flagged\r\n",  # short row
+        "a,1,flagged,m,v,r,t,extra\r\n",  # too many fields
+        "a,yes,flagged,m,v,r,t\r\n",  # label not 0/1
+    ],
+)
+def test_malformed_row_raises_naming_the_line(tmp_path, line):
+    path = tmp_path / "c.csv"
+    append_rows(path, [row("a")])
+    with path.open("a", newline="") as f:
+        f.write(line)
+    with pytest.raises(ValueError, match=r"c\.csv:3: malformed gold row"):
+        read_rows(path)

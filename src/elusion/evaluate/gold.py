@@ -10,11 +10,16 @@ pair appears at most once, which is what makes re-running the judge free.
 Which paragraphs get labeled is decided by `select_gold`: every paragraph the review
 flagged (score >= threshold), plus a uniform random sample of the discard pile drawn
 with a seeded random number generator, so the same seed always picks the same sample.
+
+Next to the CSV, data/gold/<criterion>.judge-runs.jsonl keeps one JSON line per judge
+run (labels written, failures, dollars spent), because the evaluate step runs later in
+another process and reports what labeling the gold set cost.
 """
 
 from __future__ import annotations
 
 import csv
+import json
 import random
 from collections.abc import Iterable, Mapping
 from dataclasses import astuple, dataclass, fields
@@ -49,12 +54,29 @@ def gold_path(criterion: str, data_dir: Path) -> Path:
     return data_dir / "gold" / f"{criterion}.csv"
 
 
+def judge_runs_path(gold_csv: Path) -> Path:
+    """data/gold/<criterion>.csv -> data/gold/<criterion>.judge-runs.jsonl"""
+    return gold_csv.with_name(f"{gold_csv.stem}.judge-runs.jsonl")
+
+
 def read_rows(path: Path) -> list[GoldRow]:
-    """Every row in the CSV, in file order; [] if the file does not exist yet."""
+    """Every row in the CSV, in file order; [] if the file does not exist yet.
+
+    Raises ValueError naming the line for a row with missing or extra fields, a bad
+    header, or a label that is not 0/1 (e.g. a hand edit gone wrong).
+    """
     if not path.is_file():
         return []
     with path.open(newline="", encoding="utf-8") as f:
-        return [GoldRow(**{**r, "label": int(r["label"])}) for r in csv.DictReader(f)]
+        reader = csv.DictReader(f)
+        if reader.fieldnames is not None and reader.fieldnames != COLUMNS:
+            raise ValueError(f"{path}: header {reader.fieldnames} is not {COLUMNS}")
+        rows = []
+        for r in reader:
+            if None in r or None in r.values() or r["label"] not in ("0", "1"):
+                raise ValueError(f"{path}:{reader.line_num}: malformed gold row {r!r}")
+            rows.append(GoldRow(**{**r, "label": int(r["label"])}))
+        return rows
 
 
 def judge_rows(path: Path) -> list[GoldRow]:
@@ -87,12 +109,30 @@ def append_rows(path: Path, rows: Iterable[GoldRow]) -> int:
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
     fresh = not path.is_file() or path.stat().st_size == 0
+    torn = not fresh and not path.read_bytes().endswith(b"\n")  # e.g. a killed writer
     with path.open("a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if fresh:
             w.writerow(COLUMNS)
+        elif torn:
+            f.write("\r\n")  # never glue a new row onto a partial last line
         w.writerows(astuple(r) for r in new)
     return len(new)
+
+
+def append_judge_run(path: Path, record: dict) -> None:
+    """Append one judge run's record as a JSON line (creating the directory if needed)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def judge_cost_usd(path: Path) -> float:
+    """Total `cost_usd` over every judge run recorded in `path`; 0.0 if there is none."""
+    if not path.is_file():
+        return 0.0
+    with path.open(encoding="utf-8") as f:
+        return sum(json.loads(line)["cost_usd"] for line in f if line.strip())
 
 
 def split_piles(

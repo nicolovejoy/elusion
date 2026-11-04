@@ -25,8 +25,10 @@ topic), not on a plain re-run. Any other provider exception fails the run.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import Any
 
 from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
@@ -36,7 +38,14 @@ from elusion.review import db
 from elusion.review.corpus import load_texts
 from elusion.review.pricing import cost_usd
 from elusion.review.prompt import load_prompt
-from elusion.review.providers import AnthropicProvider, Provider, Review, ReviewError
+from elusion.review.providers import (
+    AnthropicProvider,
+    Judge,
+    Judgement,
+    Provider,
+    Review,
+    ReviewError,
+)
 from elusion.review.sampler import IdSource, KafkaIdSource, group_id
 
 
@@ -75,41 +84,34 @@ def project_cost(probe_costs: list[float], remaining: int) -> tuple[float, float
 
 @dataclass
 class BatchResult:
-    reviews: list[tuple[str, Review]] = field(default_factory=list)
-    failed: int = 0  # ReviewErrors: billed, no verdict
-    cost_usd: float = 0.0  # everything billed: reviews and ReviewErrors
+    answers: list[tuple[str, Any]] = field(default_factory=list)  # Review or Judgement
+    failed: int = 0  # ReviewErrors: billed, no answer
+    cost_usd: float = 0.0  # everything billed: answers and ReviewErrors
     errors: list[tuple[str, Exception]] = field(default_factory=list)  # anything else
 
 
-# NO_CACHE: Prefect 3 would otherwise hash the task inputs (provider, texts) for caching.
-@task(cache_policy=NO_CACHE)
-def score_batch(
-    system: str, texts: dict[str, str], provider: Provider, concurrency: int
-) -> BatchResult:
-    """Review each (doc_id, text) concurrently; never raises for a single document.
+def run_batch(call: Callable[[str], Any], texts: dict[str, str], concurrency: int) -> BatchResult:
+    """Apply `call` to each text concurrently; never raises for a single document.
 
-    Every document is submitted up front, so one failure cannot stop the others from
-    being sent and billed. Each outcome is therefore returned, not raised: the flow
-    stores what was paid for and only then re-raises the first unexpected error.
-    Passing a live provider object into a task works because Prefect 3 runs tasks
-    in-process (threads), so nothing is pickled or sent to the server.
+    `call` sends one paragraph to the model and returns an answer with a `cost_usd`
+    (a Review, or the judge's Judgement). Every document is submitted up front, so one
+    failure cannot stop the others from being sent and billed. Each outcome is therefore
+    returned, not raised: the flow stores what was paid for and only then re-raises the
+    first unexpected error. Shared by the review and judge flows.
     """
     log = get_run_logger()
     result = BatchResult()
 
-    def one(doc_id: str) -> tuple[str, Review | Exception]:
+    def one(doc_id: str) -> tuple[str, Any]:
         try:
-            return doc_id, provider.review(system, texts[doc_id])
+            return doc_id, call(texts[doc_id])
         except Exception as e:  # ReviewError included; sorted out below
             return doc_id, e
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         for doc_id, out in pool.map(one, texts):
-            if isinstance(out, Review):
-                result.reviews.append((doc_id, out))
-                result.cost_usd += out.cost_usd
-            elif isinstance(out, ReviewError):
-                log.warning("no verdict for %s (stop_reason=%s)", doc_id, out.stop_reason)
+            if isinstance(out, ReviewError):
+                log.warning("no answer for %s (stop_reason=%s)", doc_id, out.stop_reason)
                 result.failed += 1
                 try:
                     result.cost_usd += cost_usd(
@@ -121,23 +123,44 @@ def score_batch(
                     )
                 except KeyError as e:  # unpriced (e.g. unexpected echoed) model
                     result.errors.append((doc_id, e))
-            else:
-                log.error("review of %s raised %r", doc_id, out)
+            elif isinstance(out, Exception):
+                log.error("call for %s raised %r", doc_id, out)
                 result.errors.append((doc_id, out))
+            else:
+                result.answers.append((doc_id, out))
+                result.cost_usd += out.cost_usd
     return result
 
 
-def check_model_echo(provider: Provider, review: Review) -> None:
-    """Checked on every review before it is inserted (a string compare).
+# NO_CACHE: Prefect 3 would otherwise hash the task inputs (provider, texts) for caching.
+@task(cache_policy=NO_CACHE)
+def score_batch(
+    system: str, texts: dict[str, str], provider: Provider, concurrency: int
+) -> BatchResult:
+    """Review each (doc_id, text) concurrently (see run_batch).
 
-    Scores are stored under the model string the API echoes, but `unscored_ids` filters
-    on the pinned id we requested. If they differ, every re-run would re-pay for every
-    document, so stop before inserting anything.
+    Passing a live provider object into a task works because Prefect 3 runs tasks
+    in-process (threads), so nothing is pickled or sent to the server.
     """
-    if review.model != provider.model:
+    return run_batch(lambda text: provider.review(system, text), texts, concurrency)
+
+
+def check_model_echo(
+    provider: Provider | Judge,
+    answer: Review | Judgement,
+    env_var: str = "ELUSION_REVIEW_MODEL",
+) -> None:
+    """Checked on every answer before it is stored (a string compare).
+
+    Results are keyed by the pinned id we requested (scores rows, gold CSV labeler), while
+    the API echoes the model it actually served. If they differ, every re-run would re-pay
+    for every document, so stop before storing anything. `env_var` names the setting that
+    pins this model, for the error message.
+    """
+    if answer.model != provider.model:
         raise RuntimeError(
-            f"API served model {review.model!r} but the pinned model is {provider.model!r}; "
-            "pin the served snapshot id (ELUSION_REVIEW_MODEL) so idempotency holds"
+            f"API served model {answer.model!r} but the pinned model is {provider.model!r}; "
+            f"pin the served snapshot id ({env_var}) so idempotency holds"
         )
 
 
@@ -188,12 +211,12 @@ def review(
         summary.cost_usd += res.cost_usd
         summary.docs_failed += res.failed
         try:
-            for _, r in res.reviews:
+            for _, r in res.answers:
                 check_model_echo(provider, r)
         except RuntimeError:
             db.update_job(engine, job_id, docs_scored=0, cost_usd=res.cost_usd)
             raise
-        rows = [db.score_row(doc_id, prompt.version, provider.name, r) for doc_id, r in res.reviews]
+        rows = [db.score_row(doc_id, prompt.version, provider.name, r) for doc_id, r in res.answers]
         inserted = db.insert_scores(engine, rows)
         db.update_job(engine, job_id, docs_scored=inserted, cost_usd=res.cost_usd)
         summary.docs_scored += inserted
@@ -242,7 +265,7 @@ def review(
                 first = score_batch(prompt.text, {todo[0]: texts[todo[0]]}, provider, 1)
                 settle(first)
                 probe_costs.append(first.cost_usd)
-                probe_ok += len(first.reviews)
+                probe_ok += len(first.answers)
                 todo = todo[1:]
                 if project and len(probe_costs) == PROBE_DOCS:
                     mean, projected = project_cost(probe_costs, sample - summary.docs_scored)

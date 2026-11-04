@@ -21,8 +21,7 @@ re-run retries exactly those ids. There is no Kafka here: the gold ids are a fix
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -34,17 +33,25 @@ from elusion.evaluate.gold import (
     DEFAULT_SEED,
     GoldRow,
     Pile,
+    append_judge_run,
     append_rows,
     gold_path,
+    judge_runs_path,
     labeled_ids,
     select_gold,
 )
-from elusion.flows.review import PROBE_DOCS, BudgetExceeded, project_cost
+from elusion.flows.review import (
+    PROBE_DOCS,
+    BatchResult,
+    BudgetExceeded,
+    check_model_echo,
+    project_cost,
+    run_batch,
+)
 from elusion.review import db
 from elusion.review.corpus import load_texts
-from elusion.review.pricing import cost_usd
 from elusion.review.prompt import load_prompt
-from elusion.review.providers import AnthropicProvider, Judge, Judgement, ReviewError
+from elusion.review.providers import AnthropicProvider, Judge
 
 JUDGE_PROMPT_VERSION = "judge-v1"  # prompts/<criterion>/judge-v1.md
 
@@ -60,55 +67,13 @@ class JudgeSummary:
     cost_projected_usd: float | None = None  # None if fewer than PROBE_DOCS to label
 
 
-@dataclass
-class LabelBatch:
-    judgements: list[tuple[str, Judgement]] = field(default_factory=list)
-    failed: int = 0  # ReviewErrors: billed, no label
-    cost_usd: float = 0.0  # everything billed: labels and ReviewErrors
-    errors: list[tuple[str, Exception]] = field(default_factory=list)  # anything else
-
-
 # NO_CACHE: Prefect 3 would otherwise hash the task inputs (provider, texts) for caching.
 @task(cache_policy=NO_CACHE)
 def label_batch(
     system: str, texts: dict[str, str], provider: Judge, concurrency: int
-) -> LabelBatch:
-    """Label each (doc_id, text) concurrently; never raises for a single document.
-
-    Same contract as flows.review.score_batch: every document is sent, every outcome is
-    returned, and the flow stores what was paid for before re-raising any error.
-    """
-    log = get_run_logger()
-    result = LabelBatch()
-
-    def one(doc_id: str) -> tuple[str, Judgement | Exception]:
-        try:
-            return doc_id, provider.label(system, texts[doc_id])
-        except Exception as e:  # ReviewError included; sorted out below
-            return doc_id, e
-
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        for doc_id, out in pool.map(one, texts):
-            if isinstance(out, Judgement):
-                result.judgements.append((doc_id, out))
-                result.cost_usd += out.cost_usd
-            elif isinstance(out, ReviewError):
-                log.warning("no label for %s (stop_reason=%s)", doc_id, out.stop_reason)
-                result.failed += 1
-                try:
-                    result.cost_usd += cost_usd(
-                        out.model,
-                        out.input_tokens,
-                        out.output_tokens,
-                        out.cache_creation_input_tokens,
-                        out.cache_read_input_tokens,
-                    )
-                except KeyError as e:  # unpriced (e.g. unexpected echoed) model
-                    result.errors.append((doc_id, e))
-            else:
-                log.error("judging %s raised %r", doc_id, out)
-                result.errors.append((doc_id, out))
-    return result
+) -> BatchResult:
+    """Label each (doc_id, text) concurrently; same contract as review.score_batch."""
+    return run_batch(lambda text: provider.label(system, text), texts, concurrency)
 
 
 @flow(name="judge")
@@ -166,7 +131,7 @@ def judge(
     if missing:
         raise KeyError(f"{len(missing)} ids not in the Parquet corpus, e.g. {missing[0]}")
 
-    def settle(res: LabelBatch) -> None:
+    def settle(res: BatchResult) -> None:
         """Record what `res` cost and append its rows; raise if anything went wrong.
 
         Every echoed model is checked before any row is written: rows are keyed by the
@@ -174,12 +139,8 @@ def judge(
         """
         summary.cost_usd += res.cost_usd
         summary.failed += res.failed
-        for _, j in res.judgements:
-            if j.model != provider.model:
-                raise RuntimeError(
-                    f"API served model {j.model!r} but the pinned judge model is "
-                    f"{provider.model!r}; pin the served snapshot id (ELUSION_JUDGE_MODEL)"
-                )
+        for _, j in res.answers:
+            check_model_echo(provider, j, "ELUSION_JUDGE_MODEL")
         now = datetime.now(UTC).isoformat(timespec="seconds")
         rows = [
             GoldRow(
@@ -191,40 +152,59 @@ def judge(
                 rationale=j.label.rationale,
                 labeled_at=now,
             )
-            for d, j in res.judgements
+            for d, j in res.answers
         ]
         summary.labeled += append_rows(path, rows)
         if res.errors:
             raise res.errors[0][1]
 
-    probe_costs: list[float] = []  # billed cost of every probe attempt, failures included
-    probe_ok = 0
-    project = len(todo) >= PROBE_DOCS  # a smaller run only needs one good probe (echo check)
-    while todo and (len(probe_costs) < PROBE_DOCS if project else probe_ok < 1):
-        first = label_batch(prompt.text, {todo[0]: texts[todo[0]]}, provider, 1)
-        settle(first)
-        probe_costs.append(first.cost_usd)
-        probe_ok += len(first.judgements)
-        todo = todo[1:]
-    if project:
-        mean, projected = project_cost(probe_costs, len(todo))
-        summary.cost_projected_usd = projected
-        msg = (
-            f"projected cost ${projected:.2f} for {len(todo)} more labels "
-            f"(mean ${mean:.5f}/doc over {len(probe_costs)} probe attempts, "
-            f"{probe_ok} with a label); limit ${max_run_usd:.2f}"
-        )
-        log.info(msg)
-        if projected > max_run_usd:
-            raise BudgetExceeded(f"{msg}; refusing to continue")
-        if probe_ok == 0:
-            raise RuntimeError(f"no usable label in {PROBE_DOCS} attempts; check the prompt")
+    # From here on every path has made at least one call, so the run's spend is recorded
+    # in the judge-runs ledger whether it finishes or raises (evaluate reads it later).
+    try:
+        probe_costs: list[float] = []  # billed cost of every probe attempt, failures included
+        probe_ok = 0
+        project = len(todo) >= PROBE_DOCS  # a smaller run only needs one good probe (echo check)
+        while todo and (len(probe_costs) < PROBE_DOCS if project else probe_ok < 1):
+            first = label_batch(prompt.text, {todo[0]: texts[todo[0]]}, provider, 1)
+            settle(first)
+            probe_costs.append(first.cost_usd)
+            probe_ok += len(first.answers)
+            todo = todo[1:]
+        if project:
+            mean, projected = project_cost(probe_costs, len(todo))
+            summary.cost_projected_usd = projected
+            msg = (
+                f"projected cost ${projected:.2f} for {len(todo)} more labels "
+                f"(mean ${mean:.5f}/doc over {len(probe_costs)} probe attempts, "
+                f"{probe_ok} with a label); limit ${max_run_usd:.2f}"
+            )
+            log.info(msg)
+            if projected > max_run_usd:
+                raise BudgetExceeded(f"{msg}; refusing to continue")
+            if probe_ok == 0:
+                raise RuntimeError(f"no usable label in {PROBE_DOCS} attempts; check the prompt")
 
-    for k in range(0, len(todo), batch_size):
-        batch = {d: texts[d] for d in todo[k : k + batch_size]}
-        settle(label_batch(prompt.text, batch, provider, concurrency))
-        log.info(
-            "labeled %s, failed %s, $%.4f so far", summary.labeled, summary.failed, summary.cost_usd
-        )
+        for k in range(0, len(todo), batch_size):
+            batch = {d: texts[d] for d in todo[k : k + batch_size]}
+            settle(label_batch(prompt.text, batch, provider, concurrency))
+            log.info(
+                "labeled %s, failed %s, $%.4f so far",
+                summary.labeled,
+                summary.failed,
+                summary.cost_usd,
+            )
+    finally:
+        record = {
+            "labeled": summary.labeled,
+            "failed": summary.failed,
+            "cost_usd": summary.cost_usd,
+            "model": provider.model,
+            "prompt_version": prompt.version,
+            "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        try:
+            append_judge_run(judge_runs_path(path), record)
+        except Exception:
+            log.exception("could not record the judge run %s", record)
     log.info("judge finished: %s", summary)
     return summary
