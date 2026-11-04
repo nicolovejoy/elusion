@@ -133,6 +133,15 @@ def unscored_ids(engine: Engine, ids: Sequence[str], model: str, prompt_version:
         return [r[0] for r in conn.execute(stmt)]
 
 
+def scores_for(engine: Engine, model: str, prompt_version: str) -> dict[str, int]:
+    """Every doc_id scored under (model, prompt_version), mapped to its 0-4 score."""
+    stmt = sa.select(scores.c.doc_id, scores.c.score).where(
+        scores.c.model == model, scores.c.prompt_version == prompt_version
+    )
+    with engine.connect() as conn:
+        return {doc_id: score for doc_id, score in conn.execute(stmt)}
+
+
 def insert_scores(engine: Engine, rows: Iterable[ScoreRow]) -> int:
     """Insert score rows, skipping existing keys. Returns rows actually inserted."""
     batch = list(rows)

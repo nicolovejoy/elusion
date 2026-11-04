@@ -51,3 +51,37 @@ def test_review_command_passes_criterion_name(monkeypatch) -> None:
         "max_run_usd": None,
     }
     assert "summary" in result.output
+
+
+def test_judge_command_passes_criterion_name_and_defaults(monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+    from elusion.evaluate.gold import DEFAULT_SEED
+
+    seen = {}
+
+    def fake_flow(criterion, **kw):
+        seen.update(criterion=criterion, **kw)
+        return "judge summary"
+
+    monkeypatch.setattr(mod, "judge", fake_flow)
+    result = CliRunner().invoke(
+        app,
+        ["judge", "--criterion", "criteria/cloud-concentration.md", "--prompt-version", "v2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "criterion": "cloud-concentration",
+        "prompt_version": "v2",
+        "threshold": 2,
+        "discard_n": 200,
+        "seed": DEFAULT_SEED,
+        "max_run_usd": None,
+    }
+    assert "judge summary" in result.output
+
+
+def test_cli_seed_default_matches_gold_module() -> None:
+    from elusion import cli
+    from elusion.evaluate.gold import DEFAULT_SEED
+
+    assert cli.DEFAULT_SEED == DEFAULT_SEED

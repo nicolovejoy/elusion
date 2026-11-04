@@ -83,5 +83,45 @@ def review(
     typer.echo(summary)
 
 
+# Mirrors evaluate.gold.DEFAULT_SEED; a literal so `elusion --help` does not import the
+# gold module (and through it SQLAlchemy and the Anthropic SDK). A test keeps them equal.
+DEFAULT_SEED = 20261104
+
+
+@app.command()
+def judge(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
+    ],
+    prompt_version: Annotated[
+        str, typer.Option(help="Review prompt version whose scores define the two piles.")
+    ],
+    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 2,
+    discard_n: Annotated[
+        int, typer.Option(help="Paragraphs sampled at random from the discard pile.")
+    ] = 200,
+    seed: Annotated[int, typer.Option(help="Seed for the discard sample.")] = DEFAULT_SEED,
+    max_run_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+) -> None:
+    """Have the judge model label the gold set (flagged pile + discard sample) to a CSV."""
+    from elusion.flows.evaluate import judge as judge_flow
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+
+    summary = judge_flow(
+        criterion.stem,
+        prompt_version=prompt_version,
+        threshold=threshold,
+        discard_n=discard_n,
+        seed=seed,
+        max_run_usd=max_run_usd,
+    )
+    typer.echo(summary)
+
+
 if __name__ == "__main__":
     app()
