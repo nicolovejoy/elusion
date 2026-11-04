@@ -34,7 +34,7 @@ Work in order. A phase is done when every box is ticked and `docs/notes/phase-N.
 ## Phase 3: Validation (days 6–7)
 
 - [x] Labeling CLI: shows a paragraph, takes y/n/skip, writes `data/gold/<criterion>.csv`
-- [x] Label ~300 paragraphs: stratified so the gold set has enough positives
+- [x] Label ~300 paragraphs: stratified so the gold set has enough positives (275 by the judge, 20 by the owner)
 - [x] Metrics: recall, precision, elusion, richness; Clopper-Pearson 95% intervals (scipy)
 - [x] Elusion measured by sampling the discard pile, not derived
 - [x] Report generator: one page per run (criterion, model, prompt version, n, metrics with intervals, cost, wall-clock, companies found)

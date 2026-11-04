@@ -134,7 +134,7 @@ the job row's `docs_scored`, `cost_usd` and the score distribution in the phase 
   `settings.max_run_usd` exactly as the review flow does, label with bounded
   concurrency, append rows to the CSV after each batch. Returns a summary (labeled,
   skipped, failed, cost).
-- CLI `elusion judge --criterion --prompt-version [--threshold 2] [--discard-n 200]
+- CLI `elusion judge --criterion --prompt-version [--threshold 3] [--discard-n 200]
   [--seed] [--max-run-usd]`.
 - Tests: `select_gold` on a seeded in-memory score set (counts, no overlap, determinism);
   CSV append and dedupe; the flow with a fake judge and a fake id set; no live calls.

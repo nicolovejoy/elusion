@@ -1,6 +1,6 @@
 # Data architecture
 
-How data moves through elusion, what each store is for, and why. Phases 0 and 1 are
+How data moves through elusion, what each store is for, and why. Phases 0 to 3 are
 built; later phases are described as planned and marked so.
 
 ## One line
@@ -94,7 +94,7 @@ from the risk-factor requirement.
   does not dedupe on its own. Consumers must be idempotent (they check the scores table)
   or the topic must be compacted. Review (phase 2) does the former.
 
-## Phase 2: review (planned)
+## Phase 2: review
 
 ```
 Kafka documents.ingested ──▶ consumer, batches of N ids
