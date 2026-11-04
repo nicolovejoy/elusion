@@ -46,6 +46,7 @@ from elusion.review.pricing import cost_usd
 # 1024, not 512: the reply carries a verbatim quote of the paragraph plus a rationale, and a
 # long paragraph overflowed 512 mid-JSON in the live run.
 MAX_TOKENS = 1024
+EFFORT = "low"  # output_config effort for both review and judge calls
 REQUEST_TIMEOUT_S = 60.0
 MAX_RETRIES = 5  # the SDK retries 429/5xx with exponential backoff
 
@@ -173,7 +174,7 @@ class AnthropicProvider:
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": paragraph}],
             output_config={
-                "effort": "low",
+                "effort": EFFORT,
                 "format": {"type": "json_schema", "schema": schema},
             },
         )

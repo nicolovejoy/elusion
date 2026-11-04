@@ -49,6 +49,7 @@ def env(monkeypatch, tmp_path):
             "started_at": T0,
             "finished_at": T0 + timedelta(hours=1, minutes=2, seconds=3),
             "unfinished": False,
+            "unfinished_ids": [],
         }
 
     def fake_company_counts(engine, doc_ids):
@@ -99,8 +100,8 @@ def test_writes_the_report_and_returns_its_path(env) -> None:
     assert seen["company_ids"] == ["f00", "f01", "f02"]  # flagged and judged relevant
 
     assert "- population N: 20" in md
-    assert "- flagged (score >= 2): 4" in md
-    assert "- discard (score < 2): 16" in md
+    assert "- flagged (score >= 3): 4" in md
+    assert "- discard (score < 3): 16" in md
     assert "- discard sample labeled by the judge: 10" in md
     assert "(k/n = 3/4)" in md  # precision
     assert "(k/n = 1/10)" in md  # elusion; the other judge's g11 row is not counted
@@ -119,12 +120,12 @@ def test_piles_come_from_scores_not_the_csv_pile_column(env, monkeypatch) -> Non
     import elusion.flows.evaluate as mod
 
     tmp_path, _ = env
-    # g00 now scores 2: it moves into the flagged pile (its judge label is 1) although
-    # the CSV still says "discard"; f03 drops to 1 and is now a discard-sample row.
-    rescored = {**SCORES, "g00": 2, "f03": 1}
+    # g00 now scores 3: it moves into the flagged pile (its judge label is 1) although
+    # the CSV still says "discard"; f03 drops to 2 and is now a discard-sample row.
+    rescored = {**SCORES, "g00": 3, "f03": 2}
     monkeypatch.setattr(mod, "scores_for", lambda e, m, p: dict(rescored))
     md = run(tmp_path).read_text()
-    assert "- flagged (score >= 2): 4" in md
+    assert "- flagged (score >= 3): 4" in md
     assert "(k/n = 4/4)" in md  # f00 f01 f02 g00
     assert "(k/n = 0/10)" in md  # f03 + g01..g09
 
@@ -133,7 +134,7 @@ def test_refuses_when_flagged_docs_lack_a_judge_label(env, monkeypatch) -> None:
     import elusion.flows.evaluate as mod
 
     tmp_path, _ = env
-    monkeypatch.setattr(mod, "scores_for", lambda e, m, p: {**SCORES, "x01": 4, "x02": 2, "x03": 1})
+    monkeypatch.setattr(mod, "scores_for", lambda e, m, p: {**SCORES, "x01": 4, "x02": 3, "x03": 2})
     with pytest.raises(mod.MissingLabels, match=r"2 flagged .*elusion judge"):
         run(tmp_path)
     assert not (tmp_path / "reports").exists()
@@ -155,3 +156,33 @@ def test_no_human_rows_means_no_agreement(env) -> None:
     csv.write_text("".join(lines))
     md = run(tmp_path).read_text()
     assert "No human audit labels" in md
+
+
+def test_warns_but_writes_the_report_while_a_review_job_is_unfinished(
+    env, monkeypatch, capsys
+) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+    monkeypatch.setattr(
+        mod,
+        "jobs_summary",
+        lambda e, m, p: {
+            "jobs": 1,
+            "cost_usd": 0.1,
+            "started_at": T0,
+            "finished_at": None,
+            "unfinished": True,
+            "unfinished_ids": ["job-abc"],
+        },
+    )
+    path = run(tmp_path)
+    assert path.is_file()
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "job-abc" in err and "still running" in err
+
+
+def test_no_warning_when_every_review_job_finished(env, capsys) -> None:
+    tmp_path, _ = env
+    run(tmp_path)
+    assert "still running" not in capsys.readouterr().err

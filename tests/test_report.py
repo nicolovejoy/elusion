@@ -92,3 +92,16 @@ def test_render_without_human_labels_jobs_or_companies() -> None:
 def test_render_marks_an_unfinished_review() -> None:
     md = render(make_report(review_unfinished=True))
     assert "to now" in md
+
+
+def test_render_states_judge_effort() -> None:
+    from elusion.review.providers import EFFORT
+
+    assert f"- judge effort: {EFFORT}" in render(make_report())
+    assert EFFORT == "low"
+
+
+def test_render_states_derived_interval_coverage() -> None:
+    md = " ".join(render(make_report()).split())
+    assert "at least about 90% (0.95 × 0.95), not 95%" in md
+    assert "monotone" in md and "independent" in md

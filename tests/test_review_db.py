@@ -99,6 +99,7 @@ def test_jobs_summary_sums_cost_and_spans_all_jobs() -> None:
             "started_at": None,
             "finished_at": None,
             "unfinished": False,
+            "unfinished_ids": [],
         }
         a = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
         b = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
@@ -109,10 +110,11 @@ def test_jobs_summary_sums_cost_and_spans_all_jobs() -> None:
         finish_job(engine, a)
         s = jobs_summary(engine, model, "c/v2")
         assert (s["jobs"], s["cost_usd"], s["unfinished"]) == (2, 0.75, True)
+        assert s["unfinished_ids"] == [b]
         assert s["started_at"] is not None and s["finished_at"] is not None
         finish_job(engine, b, "failed")
         s = jobs_summary(engine, model, "c/v2")
-        assert s["unfinished"] is False
+        assert s["unfinished"] is False and s["unfinished_ids"] == []
         assert s["finished_at"] == get_job(engine, b)["finished_at"]
         assert s["started_at"] == get_job(engine, a)["started_at"]
     finally:

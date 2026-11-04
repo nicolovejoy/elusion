@@ -203,7 +203,8 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
     """What every review_jobs row for (model, prompt_version) adds up to.
 
     Returns jobs (row count), cost_usd (sum), started_at (earliest start), finished_at
-    (latest finish, None if none finished) and unfinished (some row has no finished_at).
+    (latest finish, None if none finished), unfinished (some row has no finished_at)
+    and unfinished_ids (those rows' job ids, sorted: a running job, or a killed one).
     A crashed and resumed review is several rows, so cost and wall-clock span them all.
     """
     j = review_jobs.c
@@ -216,12 +217,19 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
     ).where(j.model == model, j.prompt_version == prompt_version)
     with engine.connect() as conn:
         jobs, cost, started, finished, unfinished = conn.execute(stmt).one()
+        open_ids = conn.execute(
+            sa.select(j.job_id)
+            .where(j.model == model, j.prompt_version == prompt_version, j.finished_at.is_(None))
+            .order_by(j.job_id)
+        ).scalars()
+        open_ids = [str(i) for i in open_ids]
     return {
         "jobs": jobs,
         "cost_usd": float(cost),
         "started_at": started,
         "finished_at": finished,
         "unfinished": unfinished > 0,
+        "unfinished_ids": open_ids,
     }
 
 

@@ -96,7 +96,7 @@ def judge(
     prompt_version: Annotated[
         str, typer.Option(help="Review prompt version whose scores define the two piles.")
     ],
-    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 2,
+    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
     discard_n: Annotated[
         int, typer.Option(help="Paragraphs sampled at random from the discard pile.")
     ] = 200,
@@ -105,21 +105,34 @@ def judge(
         float | None,
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
     ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            help="Label even though a review job for the pair has no finished_at "
+            "(only for a job whose process was killed)."
+        ),
+    ] = False,
 ) -> None:
     """Have the judge model label the gold set (flagged pile + discard sample) to a CSV."""
+    from elusion.flows.evaluate import ReviewStillRunning
     from elusion.flows.evaluate import judge as judge_flow
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
 
-    summary = judge_flow(
-        criterion.stem,
-        prompt_version=prompt_version,
-        threshold=threshold,
-        discard_n=discard_n,
-        seed=seed,
-        max_run_usd=max_run_usd,
-    )
+    try:
+        summary = judge_flow(
+            criterion.stem,
+            prompt_version=prompt_version,
+            threshold=threshold,
+            discard_n=discard_n,
+            seed=seed,
+            max_run_usd=max_run_usd,
+            force=force,
+        )
+    except ReviewStillRunning as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from None
     typer.echo(summary)
 
 
@@ -154,19 +167,28 @@ def evaluate(
     prompt_version: Annotated[
         str, typer.Option(help="Review prompt version whose scores define the two piles.")
     ],
-    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 2,
+    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
     seed: Annotated[
         int, typer.Option(help="Seed the gold set was drawn with; only echoed into the report.")
     ] = DEFAULT_SEED,
 ) -> None:
     """Compute recall, precision, elusion and richness from the judge labels; write the report."""
+    from elusion.flows.evaluate import MissingLabels
     from elusion.flows.evaluate import evaluate as evaluate_flow
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
-    path = evaluate_flow(
-        criterion.stem, prompt_version=prompt_version, threshold=threshold, seed=seed
-    )
+    try:
+        path = evaluate_flow(
+            criterion.stem, prompt_version=prompt_version, threshold=threshold, seed=seed
+        )
+    except (MissingLabels, ValueError) as exc:
+        # metrics raises ValueError("no labeled rows in the <pile> pile") for an empty
+        # sample; any other ValueError is a bug and keeps its traceback.
+        if isinstance(exc, ValueError) and not str(exc).startswith("no labeled rows"):
+            raise
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from None
     typer.echo(path)
 
 

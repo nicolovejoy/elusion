@@ -35,7 +35,8 @@ Two facts shape the design:
    phase note says plainly that an LLM judged an LLM and that 20 human labels are the
    only human ground truth. This pulls the judge model forward from phase 4; phase 4's
    judge item (grading rationales) is a different use and stays in phase 4.
-4. **Two piles.** Score 2 and above is "flagged"; 0 and 1 is "discard". The judge labels
+4. **Two piles.** Score 3 and above is flagged (owner decision 2026-11-04: level 2 is by
+   definition not a dependency risk); 0, 1 and 2 is "discard". The judge labels
    every flagged paragraph and a uniform random sample of 200 from the discard pile.
    Precision and elusion are then direct Clopper-Pearson proportions. Richness and recall
    are combined from the two piles using the pile sizes.
@@ -80,8 +81,9 @@ need `.env`; the controller hands over the exact command and waits.
   them).
 - `src/elusion/review/prompts/cloud-concentration/v2.md`: same shape as v1 (0-4 scale,
   verbatim quote, JSON fields unchanged so `Verdict` still fits), with the tightened
-  criterion and a line per exclusion. Levels 2, 3 and 4 keep their v1 meaning so that
-  "2 and above" still means flagged. Level 1 becomes "mentions dependence on a vendor
+  criterion and a line per exclusion. Levels 2, 3 and 4 keep their v1 meaning.
+  Score 3 and above is flagged (owner decision 2026-11-04: level 2 is by definition not a
+  dependency risk). Level 1 becomes "mentions dependence on a vendor
   or supplier that is not a cloud, hosting or data-center provider", so supplier risk has
   a home below the flag line. v1.md is never edited.
 - `src/elusion/review/prompts/cloud-concentration/judge-v1.md`: the judge's system

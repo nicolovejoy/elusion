@@ -151,7 +151,18 @@ def test_budget_ok_reports_projection(env) -> None:
     s = judge("c", gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=1.0)
     assert s.labeled == 30
     assert s.cost_usd == pytest.approx(0.30)
-    assert s.cost_projected_usd == pytest.approx(0.01 * 10)
+    # The whole run: 20 probes already billed + 10 labels still to go.
+    assert s.cost_projected_usd == pytest.approx(0.01 * 20 + 0.01 * 10)
+
+
+def test_probe_spend_counts_toward_the_limit(env) -> None:
+    from elusion.flows.evaluate import judge
+    from elusion.flows.review import BudgetExceeded
+
+    path, _ = env
+    # The 10 labels left cost $0.10 < $0.25, but with the $0.20 of probes the run is $0.30.
+    with pytest.raises(BudgetExceeded, match=r"\$0\.30"):
+        judge("c", gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=0.25)
 
 
 class AlwaysRefuses(FakeJudge):
@@ -230,3 +241,39 @@ def test_run_stopped_by_the_budget_is_still_recorded(env) -> None:
         judge("c", gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=0.05)
     (rec,) = runs(path)
     assert rec["labeled"] == 20 and rec["cost_usd"] == pytest.approx(0.20)
+
+
+@pytest.fixture
+def running_review(monkeypatch):
+    """judge() without `gold`: Postgres readers stubbed, one review job still unfinished."""
+    import elusion.flows.evaluate as mod
+
+    monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(mod, "select_gold", lambda *a: gold_of(5))
+    monkeypatch.setattr(
+        mod,
+        "jobs_summary",
+        lambda engine, model, version: {
+            "jobs": 2,
+            "unfinished": True,
+            "unfinished_ids": ["job-abc"],
+        },
+    )
+
+
+def test_refuses_while_a_review_job_is_unfinished(env, running_review) -> None:
+    from elusion.flows.evaluate import ReviewStillRunning, judge
+
+    path, _ = env
+    j = FakeJudge()
+    with pytest.raises(ReviewStillRunning, match=r"job-abc.*--force"):
+        judge("c", provider=j, gold_csv=path)
+    assert j.calls == [] and judge_rows(path) == []
+
+
+def test_force_labels_despite_an_unfinished_review_job(env, running_review) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    s = judge("c", provider=FakeJudge(), gold_csv=path, force=True)
+    assert s.labeled == 5

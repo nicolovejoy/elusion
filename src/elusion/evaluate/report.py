@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from elusion.evaluate.metrics import Estimate
+from elusion.review.providers import EFFORT
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ def render(r: RunReport) -> str:
         f"- review prompt version: {r.prompt_version}",
         f"- judge model: {r.judge_model}",
         f"- judge prompt version: {r.judge_prompt_version}",
+        f"- judge effort: {EFFORT}",
         f"- date: {r.date}",
         f"- seed: {r.seed}",
         "",
@@ -95,8 +97,10 @@ def render(r: RunReport) -> str:
         "- recall: fraction of truly relevant paragraphs the system flagged.",
         "",
         "Richness and recall are not measured on a sample of their own: they combine the",
-        "precision and elusion intervals weighted by pile sizes, so their intervals are",
-        "not exact 95% intervals.",
+        "precision and elusion intervals weighted by pile sizes. Both are monotone in",
+        "precision and elusion, and the two samples are independent, so each derived",
+        "interval covers the true value with probability at least about 90% (0.95 × 0.95),",
+        "not 95%.",
         "",
         "## Judge agreement with the owner",
         "",

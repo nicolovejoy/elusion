@@ -123,3 +123,29 @@ def test_eof_acts_as_quit(tmp_path):
 
     summary = run_session(p, {"f00": "t"}, [("f00", "flagged")], reader=boom, writer=lambda s: None)
     assert summary == {"answered": 0, "skipped": 0, "remaining": 1}
+
+
+def test_label_rejects_non_positive_n():
+    import pytest
+    import typer
+
+    from elusion.evaluate.label import label
+
+    for n in (0, -4, 1):
+        with pytest.raises(typer.BadParameter, match="need at least 2"):
+            label("c", n)
+
+
+def test_label_rounds_odd_n_down_with_a_note(tmp_path, monkeypatch, capsys):
+    import elusion.evaluate.label as mod
+
+    seen = {}
+
+    def fake_select(path, n, seed):
+        seen["n"] = n
+        return []
+
+    monkeypatch.setattr(mod, "select_for_audit", fake_select)
+    mod.label("c", 7, seed=1)
+    assert seen["n"] == 6
+    assert "rounding n=7 down to 6" in capsys.readouterr().out

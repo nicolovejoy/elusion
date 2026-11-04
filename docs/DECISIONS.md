@@ -22,3 +22,4 @@ One line each, newest first. Format: `YYYY-MM-DD — decision — why`.
 - 2026-11-03 — Repo is public; secrets only in `.env` — learning artifact meant to be shown.
 - 2026-11-04 — Criterion cloud-concentration tightened to cloud/hosting/data-center providers; suppliers, component vendors, payment processors excluded — v1 top hits were supplier risk; v1 scores kept for phase 4 comparison.
 - 2026-11-04 — Price row for claude-opus-5-5 (judge model): $4 input, $20 output, $5 cache write (5m), $0.20 cache read per MTok — source: https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-11-04; claude-api skill agrees on input/output/cache read).
+- 2026-11-04 — Flag line is score >= 3, not 2 — level 2 means a provider is mentioned without dependence risk, so it is a non-hit by definition; 119 of the first 161 v2 paragraphs at >= 2 were 2s.

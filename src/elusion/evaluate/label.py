@@ -86,9 +86,21 @@ def run_session(
 
 
 def label(criterion: str, n: int, seed: int = DEFAULT_SEED) -> str:
-    """Select, load paragraph text, run the session; returns the summary line."""
+    """Select, load paragraph text, run the session; returns the summary line.
+
+    `n` is split evenly between the piles, so it must be at least 2; an odd n is rounded
+    down (with a note) rather than silently labeling one fewer than asked.
+    """
     from elusion.config import settings
     from elusion.review.corpus import load_texts
+
+    if n < 2:
+        raise typer.BadParameter(
+            f"n={n}: need at least 2 (n/2 flagged + n/2 discard)", param_hint="--n"
+        )
+    if n % 2:
+        typer.echo(f"note: rounding n={n} down to {n - 1} (half flagged, half discard)")
+        n -= 1
 
     path = gold_path(criterion, settings.data_dir)
     selection = select_for_audit(path, n, seed)

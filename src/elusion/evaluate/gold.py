@@ -154,7 +154,7 @@ def select_gold(
     engine: Engine,
     model: str,
     prompt_version: str,
-    threshold: int = 2,
+    threshold: int = 3,
     discard_n: int = 200,
     seed: int = DEFAULT_SEED,
 ) -> list[tuple[str, Pile]]:

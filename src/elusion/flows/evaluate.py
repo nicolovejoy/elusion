@@ -27,6 +27,7 @@ from the CSV `pile` column, so the report always describes the scores as they st
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,11 +91,20 @@ def label_batch(
     return run_batch(lambda text: provider.label(system, text), texts, concurrency)
 
 
+class ReviewStillRunning(RuntimeError):
+    """A review job for the pair has no finished_at, so its score set may be partial."""
+
+
+def _unfinished_msg(jobs: dict, model: str, version: str) -> str:
+    ids = ", ".join(jobs["unfinished_ids"])
+    return f"review job(s) {ids} for ({model}, {version}) still running (no finished_at)"
+
+
 @flow(name="judge")
 def judge(
     criterion: str,
     prompt_version: str = "v2",
-    threshold: int = 2,
+    threshold: int = 3,
     discard_n: int = 200,
     seed: int = DEFAULT_SEED,
     max_run_usd: float | None = None,
@@ -103,12 +113,18 @@ def judge(
     provider: Judge | None = None,
     gold: list[tuple[str, Pile]] | None = None,
     gold_csv: Path | None = None,
+    force: bool = False,
 ) -> JudgeSummary:
     """Label the gold set of the review run (settings.review_model, `prompt_version`).
 
     `prompt_version` names the review prompt whose scores define the piles; the judge's
     own prompt is always JUDGE_PROMPT_VERSION. `gold` and `gold_csv` default to
     `select_gold` over Postgres and data/gold/<criterion>.csv; tests pass their own.
+
+    While a review job for the pair is unfinished the scores may be partial: the discard
+    sample would be drawn from them, and once the review finishes, new flagged docs would
+    lack labels and a re-draw would pay again. So the flow raises ReviewStillRunning
+    unless `force` (for a row left unfinished by a killed process).
 
     Spend guard as in the review flow: PROBE_DOCS attempts one at a time (their rows kept),
     then mean cost per attempt times the ids not yet attempted; above `max_run_usd`
@@ -124,6 +140,14 @@ def judge(
     if gold is None:
         review_version = f"{criterion}/{prompt_version}"
         engine = db.make_engine(settings.database_url)
+        jobs = jobs_summary(engine, settings.review_model, review_version)
+        if jobs["unfinished"]:
+            msg = _unfinished_msg(jobs, settings.review_model, review_version)
+            if not force:
+                raise ReviewStillRunning(
+                    f"{msg}; wait for it to finish, or pass --force if it was killed"
+                )
+            log.warning("%s; continuing because force=True", msg)
         gold = select_gold(
             engine, settings.review_model, review_version, threshold, discard_n, seed
         )
@@ -185,12 +209,15 @@ def judge(
             probe_ok += len(first.answers)
             todo = todo[1:]
         if project:
-            mean, projected = project_cost(probe_costs, len(todo))
+            # The limit is on the whole run: probes already billed plus the rest.
+            mean, rest = project_cost(probe_costs, len(todo))
+            spent = sum(probe_costs)
+            projected = spent + rest
             summary.cost_projected_usd = projected
             msg = (
-                f"projected cost ${projected:.2f} for {len(todo)} more labels "
-                f"(mean ${mean:.5f}/doc over {len(probe_costs)} probe attempts, "
-                f"{probe_ok} with a label); limit ${max_run_usd:.2f}"
+                f"projected run cost ${projected:.2f} = ${spent:.2f} probes + ${rest:.2f} "
+                f"for {len(todo)} more labels (mean ${mean:.5f}/doc over {len(probe_costs)} "
+                f"probe attempts, {probe_ok} with a label); limit ${max_run_usd:.2f}"
             )
             log.info(msg)
             if projected > max_run_usd:
@@ -236,7 +263,7 @@ def report_path(reports_dir: Path, criterion: str, model: str, prompt_version: s
 def evaluate(
     criterion: str,
     prompt_version: str = "v2",
-    threshold: int = 2,
+    threshold: int = 3,
     seed: int = DEFAULT_SEED,
     engine: Engine | None = None,
     data_dir: Path | None = None,
@@ -253,6 +280,9 @@ def evaluate(
     discard sample = this judge's labeled docs that currently score below the threshold.
     `seed` is not used to sample anything here; it is written into the report as the
     seed the gold set was drawn with. Tests pass a fake `engine` and their own paths.
+
+    An unfinished review job for the pair only warns (on stderr): the report is still
+    written, and its wall-clock line says a job has not finished.
     """
     log = get_run_logger()
     review_model = review_model or settings.review_model
@@ -260,6 +290,13 @@ def evaluate(
     engine = engine or db.make_engine(settings.database_url)
     csv = gold_path(criterion, data_dir or settings.data_dir)
     version = f"{criterion}/{prompt_version}"
+
+    jobs = jobs_summary(engine, review_model, version)
+    if jobs["unfinished"]:
+        msg = _unfinished_msg(jobs, review_model, version)
+        msg += "; the scores may be partial, so this report may be too"
+        print(f"WARNING: {msg}", file=sys.stderr)
+        log.warning(msg)
 
     scores = scores_for(engine, review_model, version)
     if not scores:
@@ -282,7 +319,6 @@ def evaluate(
     shared = [h for h in humans if h.doc_id in judged]
     agreement = metrics.agreement(shared, list(judged.values())) if shared else None
 
-    jobs = jobs_summary(engine, review_model, version)
     wall_clock = None
     if jobs["jobs"]:
         end = datetime.now(UTC) if jobs["unfinished"] else jobs["finished_at"]
