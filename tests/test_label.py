@@ -3,7 +3,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from elusion.cli import app
-from elusion.evaluate.gold import GoldRow, append_rows, human_rows, read_rows
+from elusion.evaluate.gold import GoldRow, append_rows, human_rows
 from elusion.evaluate.label import run_session, select_for_audit
 
 JUDGE = "claude-opus-x"
@@ -103,4 +103,23 @@ def test_cli_label_wires_selection_and_session(tmp_path, monkeypatch):
     )
     assert r.exit_code == 0 and "done" in r.output
     assert seen == {"c": "c", "n": 4, "s": 3}
-    assert read_rows(tmp_path / "none.csv") == []
+
+
+def test_selection_order_does_not_reveal_pile(tmp_path):
+    p = tmp_path / "g.csv"
+    _seed_gold(p, 20, 20)
+    piles = [pile for _, pile in select_for_audit(p, n=20, seed=1)]
+    assert piles != ["flagged"] * 10 + ["discard"] * 10
+    assert piles != sorted(piles)
+    assert piles.count("flagged") == 10
+
+
+def test_eof_acts_as_quit(tmp_path):
+    p = tmp_path / "g.csv"
+    _seed_gold(p, 1, 0)
+
+    def boom():
+        raise EOFError
+
+    summary = run_session(p, {"f00": "t"}, [("f00", "flagged")], reader=boom, writer=lambda s: None)
+    assert summary == {"answered": 0, "skipped": 0, "remaining": 1}

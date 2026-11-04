@@ -33,18 +33,23 @@ PROMPT = "[y]es / [n]o / [s]kip / [q]uit: "
 
 
 def select_for_audit(path: Path, n: int, seed: int) -> list[tuple[str, str]]:
-    """(doc_id, pile) pairs: n//2 flagged then n//2 discard, skipping already-audited docs.
+    """(doc_id, pile) pairs: n//2 flagged and n//2 discard, shuffled together.
+
+    Already-audited docs are skipped. The shuffle (same seeded rng) keeps the pile from
+    being guessable from the position in the session.
 
     Candidates are sorted before the seeded draw so the pick depends only on the CSV and
     the seed. A pile with fewer candidates than n//2 is taken whole.
     """
     done = labeled_ids(path, HUMAN)
     rng = random.Random(seed)
+    judged = judge_rows(path)
     picked: list[tuple[str, str]] = []
     for pile in ("flagged", "discard"):
-        ids = sorted({r.doc_id for r in judge_rows(path) if r.pile == pile} - done)
+        ids = sorted({r.doc_id for r in judged if r.pile == pile} - done)
         take = min(n // 2, len(ids))
         picked += [(d, pile) for d in rng.sample(ids, take)]
+    rng.shuffle(picked)
     return picked
 
 
@@ -61,7 +66,13 @@ def run_session(
     total = len(selection)
     for i, (doc_id, pile) in enumerate(selection, 1):
         writer(f"\n--- {i}/{total} ---\n{textwrap.fill(texts[doc_id], width=width)}\n")
-        while (key := reader().strip().lower()) not in ("y", "n", "s", "q"):
+        while True:
+            try:
+                key = reader().strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                key = "q"
+            if key in ("y", "n", "s", "q"):
+                break
             writer("Please type y, n, s or q.")
         if key == "q":
             return {"answered": answered, "skipped": skipped, "remaining": total - i + 1}
