@@ -75,6 +75,7 @@ def test_judge_command_passes_criterion_name_and_defaults(monkeypatch) -> None:
         "threshold": 3,
         "discard_n": 200,
         "seed": DEFAULT_SEED,
+        "review_model": None,
         "max_run_usd": None,
         "force": False,
     }
@@ -111,6 +112,8 @@ def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> 
         "prompt_version": "v2",
         "threshold": 3,
         "seed": DEFAULT_SEED,
+        "review_model": None,
+        "discard_n": 200,
     }
     assert "docs/reports/cloud-concentration-m-v2.md" in result.output
 
@@ -186,3 +189,30 @@ def test_evaluate_other_value_errors_still_raise(monkeypatch, tmp_path) -> None:
         app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
     )
     assert isinstance(r.exception, ValueError)
+
+
+def test_review_model_and_discard_n_pass_through(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    seen_j, seen_e = {}, {}
+    monkeypatch.setattr(mod, "judge", lambda criterion, **kw: seen_j.update(kw) or "ok")
+    monkeypatch.setattr(mod, "evaluate", lambda criterion, **kw: seen_e.update(kw) or "p.md")
+    base = ["--criterion", _crit(tmp_path), "--prompt-version", "v2", "--review-model", "x"]
+    assert CliRunner().invoke(app, ["judge", *base]).exit_code == 0
+    assert CliRunner().invoke(app, ["evaluate", *base, "--discard-n", "50"]).exit_code == 0
+    assert seen_j["review_model"] == "x"
+    assert seen_e["review_model"] == "x" and seen_e["discard_n"] == 50
+
+
+def test_evaluate_missing_discard_labels_exits_1(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    def missing(criterion, **kw):
+        raise mod.MissingDiscardLabels("2 sampled discard paragraphs have no m label")
+
+    monkeypatch.setattr(mod, "evaluate", missing)
+    r = CliRunner().invoke(
+        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+    )
+    assert r.exit_code == 1 and "Traceback" not in r.output
+    assert "2 sampled discard paragraphs" in r.output

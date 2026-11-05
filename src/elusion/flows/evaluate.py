@@ -52,6 +52,7 @@ from elusion.evaluate.gold import (
     judge_runs_path,
     labeled_ids,
     select_gold,
+    split_piles,
 )
 from elusion.evaluate.report import RunReport, render
 from elusion.flows.review import (
@@ -107,6 +108,7 @@ def judge(
     threshold: int = 3,
     discard_n: int = 200,
     seed: int = DEFAULT_SEED,
+    review_model: str | None = None,
     max_run_usd: float | None = None,
     batch_size: int = 50,
     concurrency: int = 8,
@@ -115,7 +117,7 @@ def judge(
     gold_csv: Path | None = None,
     force: bool = False,
 ) -> JudgeSummary:
-    """Label the gold set of the review run (settings.review_model, `prompt_version`).
+    """Label the gold set of the review run (`review_model`, `prompt_version`).
 
     `prompt_version` names the review prompt whose scores define the piles; the judge's
     own prompt is always JUDGE_PROMPT_VERSION. `gold` and `gold_csv` default to
@@ -132,6 +134,7 @@ def judge(
     spend, and a probe without a single usable label raises RuntimeError.
     """
     log = get_run_logger()
+    review_model = review_model or settings.review_model
     if max_run_usd is None:
         max_run_usd = settings.max_run_usd
     prompt = load_prompt(criterion, JUDGE_PROMPT_VERSION)
@@ -140,19 +143,17 @@ def judge(
     if gold is None:
         review_version = f"{criterion}/{prompt_version}"
         engine = db.make_engine(settings.database_url)
-        jobs = jobs_summary(engine, settings.review_model, review_version)
+        jobs = jobs_summary(engine, review_model, review_version)
         if jobs["unfinished"]:
-            msg = _unfinished_msg(jobs, settings.review_model, review_version)
+            msg = _unfinished_msg(jobs, review_model, review_version)
             if not force:
                 raise ReviewStillRunning(
                     f"{msg}; wait for it to finish, or pass --force if it was killed"
                 )
             log.warning("%s; continuing because force=True", msg)
-        gold = select_gold(
-            engine, settings.review_model, review_version, threshold, discard_n, seed
-        )
+        gold = select_gold(engine, review_model, review_version, threshold, discard_n, seed)
         if not gold:
-            raise RuntimeError(f"no scores for ({settings.review_model}, {review_version})")
+            raise RuntimeError(f"no scores for ({review_model}, {review_version})")
     pile = dict(gold)
     done = labeled_ids(path, provider.model)
     todo = [d for d in pile if d not in done]
@@ -255,6 +256,10 @@ class MissingLabels(RuntimeError):
     """Some flagged paragraph has no judge label, so precision cannot be computed."""
 
 
+class MissingDiscardLabels(MissingLabels):
+    """Some doc in the pair's seeded discard draw has no judge label, so elusion is biased."""
+
+
 def report_path(reports_dir: Path, criterion: str, model: str, prompt_version: str) -> Path:
     return reports_dir / f"{criterion}-{model}-{prompt_version.replace('/', '-')}.md"
 
@@ -269,6 +274,7 @@ def evaluate(
     data_dir: Path | None = None,
     reports_dir: Path = Path("docs/reports"),
     review_model: str | None = None,
+    discard_n: int = 200,
     judge_model: str | None = None,
     today: str | None = None,
 ) -> Path:
@@ -277,9 +283,11 @@ def evaluate(
 
     Flagged = every doc scoring >= `threshold` under the pair; each must carry a label by
     `judge_model`, otherwise MissingLabels (re-running `elusion judge` fills them). The
-    discard sample = this judge's labeled docs that currently score below the threshold.
-    `seed` is not used to sample anything here; it is written into the report as the
-    seed the gold set was drawn with. Tests pass a fake `engine` and their own paths.
+    discard sample = the seeded draw of `discard_n` from this pair's own discard pile
+    (`split_piles`, the same draw `elusion judge` made); each drawn doc must carry a label
+    by `judge_model`, otherwise MissingDiscardLabels. Labels for docs outside the draw
+    (e.g. flagged by another review run) are never counted, so elusion stays a uniform
+    sample. Tests pass a fake `engine` and their own paths.
 
     An unfinished review job for the pair only warns (on stderr): the report is still
     written, and its wall-clock line says a job has not finished.
@@ -310,7 +318,14 @@ def evaluate(
             f"e.g. {min(missing)}; re-run `elusion judge` to fill them"
         )
     flagged_rows = [judged[d] for d in sorted(flagged)]
-    discard_rows = [r for d, r in sorted(judged.items()) if d in scores and d not in flagged]
+    draw = {d for d, pile in split_piles(scores, threshold, discard_n, seed) if pile == "discard"}
+    missing_d = draw - judged.keys()
+    if missing_d:
+        raise MissingDiscardLabels(
+            f"{len(missing_d)} sampled discard paragraphs have no {judge_model} label in {csv}; "
+            "re-run `elusion judge` with the same seed"
+        )
+    discard_rows = [judged[d] for d in sorted(draw)]
     n_flagged, n_discard = len(flagged), len(scores) - len(flagged)
 
     precision = metrics.precision(flagged_rows)
@@ -333,6 +348,7 @@ def evaluate(
         judge_prompt_version=", ".join(sorted({r.prompt_version for r in judged.values()})),
         date=today or datetime.now(UTC).date().isoformat(),
         seed=seed,
+        discard_n=discard_n,
         threshold=threshold,
         population=len(scores),
         n_flagged=n_flagged,

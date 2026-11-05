@@ -13,6 +13,7 @@ def make_report(**kw) -> RunReport:
         judge_prompt_version="cloud-concentration/judge-v1",
         date="2026-11-04",
         seed=20261104,
+        discard_n=200,
         threshold=2,
         population=12906,
         n_flagged=117,
@@ -105,3 +106,11 @@ def test_render_states_derived_interval_coverage() -> None:
     md = " ".join(render(make_report()).split())
     assert "at least about 90% (0.95 × 0.95), not 95%" in md
     assert "monotone" in md and "independent" in md
+
+
+def test_render_discard_sample_line() -> None:
+    md = render(make_report())
+    assert (
+        "- discard sample: 200 drawn with seed 20261104 from the pair's discard pile; "
+        "200 labeled by the judge" in md
+    )

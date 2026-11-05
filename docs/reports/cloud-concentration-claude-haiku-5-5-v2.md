@@ -6,7 +6,7 @@
 - judge model: claude-opus-5-5
 - judge prompt version: cloud-concentration/judge-v1
 - judge effort: low
-- date: 2026-11-04
+- date: 2026-11-05
 - seed: 20261104
 
 ## Population
@@ -17,7 +17,7 @@ Every paragraph scored under the review model and prompt version above.
 - flagged (score >= 3): 75
 - discard (score < 3): 17861
 - threshold: 3
-- discard sample labeled by the judge: 200
+- discard sample: 200 drawn with seed 20261104 from the pair's discard pile; 200 labeled by the judge
 
 ## Metrics
 

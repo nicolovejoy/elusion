@@ -101,6 +101,10 @@ def judge(
         int, typer.Option(help="Paragraphs sampled at random from the discard pile.")
     ] = 200,
     seed: Annotated[int, typer.Option(help="Seed for the discard sample.")] = DEFAULT_SEED,
+    review_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
+    ] = None,
     max_run_usd: Annotated[
         float | None,
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
@@ -127,6 +131,7 @@ def judge(
             threshold=threshold,
             discard_n=discard_n,
             seed=seed,
+            review_model=review_model,
             max_run_usd=max_run_usd,
             force=force,
         )
@@ -169,18 +174,30 @@ def evaluate(
     ],
     threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
     seed: Annotated[
-        int, typer.Option(help="Seed the gold set was drawn with; only echoed into the report.")
+        int, typer.Option(help="Seed the discard sample was drawn with.")
     ] = DEFAULT_SEED,
+    discard_n: Annotated[
+        int, typer.Option(help="Size of the discard sample, as given to `judge`.")
+    ] = 200,
+    review_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
+    ] = None,
 ) -> None:
     """Compute recall, precision, elusion and richness from the judge labels; write the report."""
-    from elusion.flows.evaluate import MissingLabels
+    from elusion.flows.evaluate import MissingLabels  # MissingDiscardLabels subclasses it
     from elusion.flows.evaluate import evaluate as evaluate_flow
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
     try:
         path = evaluate_flow(
-            criterion.stem, prompt_version=prompt_version, threshold=threshold, seed=seed
+            criterion.stem,
+            prompt_version=prompt_version,
+            threshold=threshold,
+            seed=seed,
+            discard_n=discard_n,
+            review_model=review_model,
         )
     except (MissingLabels, ValueError) as exc:
         # metrics raises ValueError("no labeled rows in the <pile> pile") for an empty

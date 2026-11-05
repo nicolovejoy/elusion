@@ -7,7 +7,16 @@ import pytest
 import sqlalchemy as sa
 from prefect.testing.utilities import prefect_test_harness
 
-from elusion.evaluate.gold import HUMAN, GoldRow, append_judge_run, append_rows, gold_path
+from elusion.evaluate import metrics
+from elusion.evaluate.gold import (
+    DEFAULT_SEED,
+    HUMAN,
+    GoldRow,
+    append_judge_run,
+    append_rows,
+    gold_path,
+    split_piles,
+)
 
 JUDGE = "fake-judge"
 # A real Engine object (Prefect validates flow parameter types) that is never queried:
@@ -29,6 +38,13 @@ def row(doc_id: str, label: int, labeler: str = JUDGE, pile: str = "flagged") ->
 
 # f00-f03 flagged (score 3), g00-g15 discard (score 0); 20 docs in the population.
 SCORES = {**{f"f{i:02d}": 3 for i in range(4)}, **{f"g{i:02d}": 0 for i in range(16)}}
+
+
+def seeded_draw(scores, n):
+    return {d for d, pile in split_piles(scores, 3, n, DEFAULT_SEED) if pile == "discard"}
+
+
+DRAW_10 = sorted(seeded_draw(SCORES, 10))
 
 
 @pytest.fixture
@@ -64,7 +80,8 @@ def env(monkeypatch, tmp_path):
     append_rows(
         csv,
         [row("f00", 1), row("f01", 1), row("f02", 1), row("f03", 0)]
-        + [row(f"g{i:02d}", 1 if i == 0 else 0, pile="discard") for i in range(10)]
+        # the judge labeled exactly the seeded draw of 10 from the 16-doc discard pile
+        + [row(d, 1 if d == "g00" else 0, pile="discard") for d in DRAW_10]
         # another judge model's row: not this judge, ignored
         + [row("g11", 1, labeler="other-judge", pile="discard")]
         + [row("f00", 1, labeler=HUMAN), row("g00", 1, labeler=HUMAN)],
@@ -83,6 +100,7 @@ def run(tmp_path, **kw):
         data_dir=tmp_path,
         reports_dir=tmp_path / "reports",
         review_model="rev-model",
+        discard_n=10,
         judge_model=JUDGE,
         today="2026-11-04",
     )
@@ -91,7 +109,7 @@ def run(tmp_path, **kw):
 
 def test_writes_the_report_and_returns_its_path(env) -> None:
     tmp_path, seen = env
-    path = run(tmp_path, seed=7)
+    path = run(tmp_path)
     assert path == tmp_path / "reports" / "c-rev-model-v2.md"
     md = path.read_text()
 
@@ -102,13 +120,16 @@ def test_writes_the_report_and_returns_its_path(env) -> None:
     assert "- population N: 20" in md
     assert "- flagged (score >= 3): 4" in md
     assert "- discard (score < 3): 16" in md
-    assert "- discard sample labeled by the judge: 10" in md
+    assert (
+        "- discard sample: 10 drawn with seed 20261104 from the pair's discard pile; "
+        "10 labeled by the judge" in md
+    )
     assert "(k/n = 3/4)" in md  # precision
     assert "(k/n = 1/10)" in md  # elusion; the other judge's g11 row is not counted
     assert "- agreement: 1.000" in md and "(k/n = 2/2)" in md
     assert "- judge model: fake-judge" in md
     assert "- judge prompt version: c/judge-v1" in md
-    assert "- seed: 7" in md and "- date: 2026-11-04" in md
+    assert "- seed: 20261104" in md and "- date: 2026-11-04" in md
     assert "$0.7500 (sum over 2 review_jobs rows)" in md
     assert "- judge run: $0.7500" in md
     assert "across 2 review_jobs rows: 1:02:03" in md
@@ -124,10 +145,14 @@ def test_piles_come_from_scores_not_the_csv_pile_column(env, monkeypatch) -> Non
     # the CSV still says "discard"; f03 drops to 2 and is now a discard-sample row.
     rescored = {**SCORES, "g00": 3, "f03": 2}
     monkeypatch.setattr(mod, "scores_for", lambda e, m, p: dict(rescored))
+    # the draw changes with the pile, so label every g doc (all 0) to cover whichever it picks
+    append_rows(
+        gold_path("c", tmp_path), [row(f"g{i:02d}", 0, pile="discard") for i in range(1, 16)]
+    )
     md = run(tmp_path).read_text()
     assert "- flagged (score >= 3): 4" in md
     assert "(k/n = 4/4)" in md  # f00 f01 f02 g00
-    assert "(k/n = 0/10)" in md  # f03 + g01..g09
+    assert "(k/n = 0/10)" in md  # seeded draw of 10 from the 15 remaining discard docs
 
 
 def test_refuses_when_flagged_docs_lack_a_judge_label(env, monkeypatch) -> None:
@@ -186,3 +211,33 @@ def test_no_warning_when_every_review_job_finished(env, capsys) -> None:
     tmp_path, _ = env
     run(tmp_path)
     assert "still running" not in capsys.readouterr().err
+
+
+def test_discard_sample_is_the_seeded_draw_not_every_labeled_doc(env) -> None:
+    tmp_path, _ = env
+    outside = sorted(d for d in SCORES if d.startswith("g") and d not in DRAW_10)[0]
+    assert outside not in seeded_draw(SCORES, 10)  # precondition
+    append_rows(gold_path("c", tmp_path), [row(outside, 1, pile="discard")])
+    text = run(tmp_path).read_text()
+    est = metrics.clopper_pearson(1, 10)  # g00 only; the extra relevant label is not drawn
+    assert f"elusion: {1 / 10:.3f} [{est[0]:.3f}, {est[1]:.3f}] (k/n = 1/10)" in text
+    assert "drawn with seed 20261104 from the pair's discard pile" in text
+
+
+def test_missing_discard_label_refuses_and_counts(env) -> None:
+    from elusion.flows.evaluate import MissingDiscardLabels
+
+    tmp_path, _ = env
+    unlabeled = seeded_draw(SCORES, 12) - set(DRAW_10)
+    assert len(unlabeled) == 2  # precondition: the draw of 12 reaches two unlabeled docs
+    with pytest.raises(
+        MissingDiscardLabels, match="2 sampled discard paragraphs have no fake-judge label"
+    ):
+        run(tmp_path, discard_n=12)
+    assert not (tmp_path / "reports").exists()
+
+
+def test_review_model_option_selects_the_pair(env) -> None:
+    tmp_path, seen = env
+    run(tmp_path, review_model="other-model")
+    assert seen["scores_for"][1] == "other-model"

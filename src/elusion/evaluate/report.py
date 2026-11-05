@@ -28,6 +28,7 @@ class RunReport:
     judge_prompt_version: str
     date: str  # ISO date the report was produced
     seed: int
+    discard_n: int  # size of the seeded discard draw
     threshold: int
     population: int  # every paragraph scored under (review_model, prompt_version)
     n_flagged: int
@@ -80,7 +81,8 @@ def render(r: RunReport) -> str:
         f"- flagged (score >= {r.threshold}): {r.n_flagged}",
         f"- discard (score < {r.threshold}): {r.n_discard}",
         f"- threshold: {r.threshold}",
-        f"- discard sample labeled by the judge: {r.elusion.n}",
+        f"- discard sample: {r.discard_n} drawn with seed {r.seed} from the pair's discard pile; "
+        f"{r.elusion.n} labeled by the judge",
         "",
         "## Metrics",
         "",
