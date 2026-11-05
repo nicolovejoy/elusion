@@ -103,8 +103,9 @@ def run(tmp_path, **kw):
         discard_n=10,
         judge_model=JUDGE,
         today="2026-11-04",
+        log_mlflow=False,  # only the logging tests touch MLflow, and then on a file:// store
     )
-    return evaluate("c", **{**args, **kw})
+    return evaluate("c", **{**args, **kw}).report_path
 
 
 def test_writes_the_report_and_returns_its_path(env) -> None:
@@ -241,3 +242,58 @@ def test_review_model_option_selects_the_pair(env) -> None:
     tmp_path, seen = env
     run(tmp_path, review_model="other-model")
     assert seen["scores_for"][1] == "other-model"
+
+
+def test_evaluate_logs_one_run_and_returns_its_id(env, monkeypatch) -> None:
+    import mlflow
+
+    import elusion.flows.evaluate as mod
+    from elusion.config import Settings
+
+    tmp_path, _ = env
+    uri = f"file://{tmp_path}/mlruns"
+    monkeypatch.setattr(mod, "settings", Settings(mlflow_tracking_uri=uri))
+    monkeypatch.setattr(mod, "provider_for", lambda e, m, v: "anthropic")
+    (tmp_path / "prompts" / "c").mkdir(parents=True)
+    (tmp_path / "prompts" / "c" / "v2.md").write_text("prompt")
+    (tmp_path / "criteria").mkdir()
+    (tmp_path / "criteria" / "c.md").write_text("criterion")
+    monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path / "prompts")
+    monkeypatch.chdir(tmp_path)
+    from elusion.flows.evaluate import evaluate
+
+    result = evaluate(
+        "c",
+        prompt_version="v2",
+        engine=FAKE_ENGINE,
+        data_dir=tmp_path,
+        reports_dir=tmp_path / "reports",
+        review_model="rev-model",
+        discard_n=10,
+        judge_model=JUDGE,
+        today="2026-11-04",
+        log_mlflow=True,
+    )
+    assert result.run_id and len(result.run_id) == 32
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    run = client.get_run(result.run_id)
+    assert run.data.params["provider"] == "anthropic"
+    names = {a.path for a in client.list_artifacts(result.run_id)}
+    assert "c-rev-model-v2.md" in names
+    assert {"v2.md", "c.md"} <= names  # the prompt file and the criterion file
+    assert not any(n.endswith(".csv") for n in names)
+
+
+def test_report_is_written_even_when_logging_fails(env, monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+
+    def boom(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(mod, "log_run", boom)
+    monkeypatch.setattr(mod, "provider_for", lambda e, m, v: "anthropic")
+    with pytest.raises(RuntimeError, match="report written to .*c-rev-model-v2.md"):
+        run(tmp_path, log_mlflow=True)
+    assert (tmp_path / "reports" / "c-rev-model-v2.md").is_file()

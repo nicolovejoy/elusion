@@ -48,6 +48,11 @@ class Settings:
     # Spend guard: the review flow refuses to continue a run projected to cost more.
     max_run_usd: float = field(default_factory=lambda: float(_env("ELUSION_MAX_RUN_USD", "10")))
 
+    # MLflow tracking server (compose service, remapped off 5000, which macOS uses).
+    mlflow_tracking_uri: str = field(
+        default_factory=lambda: _env("MLFLOW_TRACKING_URI", "http://localhost:5001")
+    )
+
     @property
     def corpus_dir(self) -> Path:
         return self.data_dir / "corpus"

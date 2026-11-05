@@ -9,6 +9,7 @@ from elusion.review.db import (
     finish_job,
     get_job,
     insert_scores,
+    provider_for,
     review_jobs,
     score_row,
     scores,
@@ -120,3 +121,18 @@ def test_jobs_summary_sums_cost_and_spans_all_jobs() -> None:
     finally:
         with engine.begin() as conn:
             conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))
+
+
+def test_provider_for_returns_the_pairs_provider_or_none() -> None:
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    assert provider_for(engine, model, "v1") is None
+    row = {**score_row("p" + uuid.uuid4().hex[:15], "v1", "anthropic", _review()), "model": model}
+    try:
+        insert_scores(engine, [row])
+        assert provider_for(engine, model, "v1") == "anthropic"
+        assert provider_for(engine, model, "v2") is None
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.model == model))

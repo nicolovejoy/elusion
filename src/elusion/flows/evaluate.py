@@ -55,6 +55,7 @@ from elusion.evaluate.gold import (
     split_piles,
 )
 from elusion.evaluate.report import RunReport, render
+from elusion.evaluate.tracking import log_run
 from elusion.flows.review import (
     PROBE_DOCS,
     BatchResult,
@@ -65,8 +66,8 @@ from elusion.flows.review import (
 )
 from elusion.review import db
 from elusion.review.corpus import load_texts
-from elusion.review.db import jobs_summary, scores_for
-from elusion.review.prompt import load_prompt
+from elusion.review.db import jobs_summary, provider_for, scores_for
+from elusion.review.prompt import PROMPTS_DIR, load_prompt
 from elusion.review.providers import AnthropicProvider, Judge
 
 JUDGE_PROMPT_VERSION = "judge-v1"  # prompts/<criterion>/judge-v1.md
@@ -260,6 +261,14 @@ class MissingDiscardLabels(MissingLabels):
     """Some doc in the pair's seeded discard draw has no judge label, so elusion is biased."""
 
 
+@dataclass
+class EvalResult:
+    """What `evaluate` returns: the report file and the MLflow run id (None if not logged)."""
+
+    report_path: Path
+    run_id: str | None
+
+
 def report_path(reports_dir: Path, criterion: str, model: str, prompt_version: str) -> Path:
     return reports_dir / f"{criterion}-{model}-{prompt_version.replace('/', '-')}.md"
 
@@ -277,9 +286,10 @@ def evaluate(
     discard_n: int = 200,
     judge_model: str | None = None,
     today: str | None = None,
-) -> Path:
+    log_mlflow: bool = True,
+) -> EvalResult:
     """Compute the metrics of the review run (review_model, `prompt_version`) from the
-    judge's labels, write the Markdown report and return its path.
+    judge's labels, write the Markdown report and log one MLflow run for it.
 
     Flagged = every doc scoring >= `threshold` under the pair; each must carry a label by
     `judge_model`, otherwise MissingLabels (re-running `elusion judge` fills them). The
@@ -291,6 +301,9 @@ def evaluate(
 
     An unfinished review job for the pair only warns (on stderr): the report is still
     written, and its wall-clock line says a job has not finished.
+
+    The report is written before MLflow is touched. If logging fails (server down) the
+    report stays on disk and the RuntimeError names its path. `log_mlflow=False` skips it.
     """
     log = get_run_logger()
     review_model = review_model or settings.review_model
@@ -369,4 +382,19 @@ def evaluate(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render(report), encoding="utf-8")
     log.info("report written to %s", path)
-    return path
+    if not log_mlflow:
+        return EvalResult(path, None)
+    provider = provider_for(engine, review_model, version) or "unknown"
+    artifacts = [
+        path,
+        PROMPTS_DIR / criterion / f"{prompt_version}.md",
+        Path("criteria") / f"{criterion}.md",
+    ]
+    try:
+        run_id = log_run(
+            report, provider, [a for a in artifacts if a.is_file()], settings.mlflow_tracking_uri
+        )
+    except Exception as exc:
+        raise RuntimeError(f"report written to {path}, but MLflow logging failed: {exc}") from exc
+    log.info("MLflow run %s", run_id)
+    return EvalResult(path, run_id)

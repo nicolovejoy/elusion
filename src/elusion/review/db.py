@@ -142,6 +142,19 @@ def scores_for(engine: Engine, model: str, prompt_version: str) -> dict[str, int
         return {doc_id: score for doc_id, score in conn.execute(stmt)}
 
 
+def provider_for(engine: Engine, model: str, prompt_version: str) -> str | None:
+    """The provider that produced the pair's scores (None if no rows; first by name if mixed)."""
+    stmt = (
+        sa.select(scores.c.provider)
+        .where(scores.c.model == model, scores.c.prompt_version == prompt_version)
+        .distinct()
+        .order_by(scores.c.provider)
+    )
+    with engine.connect() as conn:
+        found = [p for (p,) in conn.execute(stmt) if p]
+    return found[0] if found else None
+
+
 def insert_scores(engine: Engine, rows: Iterable[ScoreRow]) -> int:
     """Insert score rows, skipping existing keys. Returns rows actually inserted."""
     batch = list(rows)

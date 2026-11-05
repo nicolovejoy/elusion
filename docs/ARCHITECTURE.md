@@ -162,7 +162,7 @@ Prefect flow `evaluate`: piles recomputed from `scores`, joined to the judge row
   `documents`, flagged judged relevant  ──▶ companies found
         Clopper-Pearson 95% intervals and the k/n behind them
         ▼
-docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow artifact (phase 4)
+docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow artifact (built)
 ```
 
 ## Where each phase reads and writes
@@ -172,7 +172,7 @@ docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow art
 | 1 collect | HuggingFace JSONL | Parquet, `documents`, Kafka |
 | 2 review | Kafka, `documents`, `scores`, Parquet text | `scores`, job table |
 | 3 judge, label, evaluate | `scores`, `review_jobs`, `documents`, Parquet text, `data/gold/` | `data/gold/<criterion>.csv`, `.judge-runs.jsonl`, `docs/reports/` |
-| 4 leaderboard | report, `scores` | MLflow runs and registry |
+| 4 leaderboard | report, scores, prompt file | MLflow run (params, metrics, report, prompt) |
 | 5 dedupe | Parquet | Delta table of clusters; `scores` for members |
 | 6 production | same as 2, on AKS | same as 2 |
 

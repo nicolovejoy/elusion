@@ -191,7 +191,7 @@ def evaluate(
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
     try:
-        path = evaluate_flow(
+        result = evaluate_flow(
             criterion.stem,
             prompt_version=prompt_version,
             threshold=threshold,
@@ -206,7 +206,12 @@ def evaluate(
             raise
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from None
-    typer.echo(path)
+    typer.echo(result.report_path)
+    if result.run_id:
+        from elusion.config import settings
+
+        typer.echo(f"mlflow run {result.run_id}")
+        typer.echo(f"{settings.mlflow_tracking_uri}/#/experiments")
 
 
 if __name__ == "__main__":

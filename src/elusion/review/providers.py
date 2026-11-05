@@ -47,6 +47,9 @@ from elusion.review.pricing import cost_usd
 # long paragraph overflowed 512 mid-JSON in the live run.
 MAX_TOKENS = 1024
 EFFORT = "low"  # output_config effort for both review and judge calls
+# Generation settings per provider name (the `scores.provider` value). MLflow logs this dict:
+# evaluate only sees the provider name in the scores table, not a provider instance.
+GENERATION_SETTINGS: dict[str, dict] = {"anthropic": {"effort": EFFORT}}
 REQUEST_TIMEOUT_S = 60.0
 MAX_RETRIES = 5  # the SDK retries 429/5xx with exponential backoff
 

@@ -94,12 +94,13 @@ def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> 
 
     import elusion.flows.evaluate as mod
     from elusion.evaluate.gold import DEFAULT_SEED
+    from elusion.flows.evaluate import EvalResult
 
     seen = {}
 
     def fake_flow(criterion, **kw):
         seen.update(criterion=criterion, **kw)
-        return Path("docs/reports/cloud-concentration-m-v2.md")
+        return EvalResult(Path("docs/reports/cloud-concentration-m-v2.md"), "a" * 32)
 
     monkeypatch.setattr(mod, "evaluate", fake_flow)
     result = CliRunner().invoke(
@@ -116,6 +117,8 @@ def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> 
         "discard_n": 200,
     }
     assert "docs/reports/cloud-concentration-m-v2.md" in result.output
+    assert f"mlflow run {'a' * 32}" in result.output
+    assert "/#/experiments" in result.output
 
 
 def _crit(tmp_path):
@@ -192,11 +195,18 @@ def test_evaluate_other_value_errors_still_raise(monkeypatch, tmp_path) -> None:
 
 
 def test_review_model_and_discard_n_pass_through(monkeypatch, tmp_path) -> None:
+    from pathlib import Path
+
     import elusion.flows.evaluate as mod
+    from elusion.flows.evaluate import EvalResult
 
     seen_j, seen_e = {}, {}
     monkeypatch.setattr(mod, "judge", lambda criterion, **kw: seen_j.update(kw) or "ok")
-    monkeypatch.setattr(mod, "evaluate", lambda criterion, **kw: seen_e.update(kw) or "p.md")
+    monkeypatch.setattr(
+        mod,
+        "evaluate",
+        lambda criterion, **kw: seen_e.update(kw) or EvalResult(Path("p.md"), None),
+    )
     base = ["--criterion", _crit(tmp_path), "--prompt-version", "v2", "--review-model", "x"]
     assert CliRunner().invoke(app, ["judge", *base]).exit_code == 0
     assert CliRunner().invoke(app, ["evaluate", *base, "--discard-n", "50"]).exit_code == 0
