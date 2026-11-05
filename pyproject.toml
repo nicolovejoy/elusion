@@ -40,6 +40,9 @@ packages = ["src/elusion"]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.format]
+exclude = ["*.md"]  # ruff 0.17 formats fenced code in markdown; the docs keep their hand layout
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
