@@ -1,5 +1,7 @@
 """MLflow logging, against a file:// tracking store under tmp_path: nothing leaves the machine."""
 
+from pathlib import Path
+
 import mlflow
 import pytest
 
@@ -48,10 +50,12 @@ def test_run_metrics_omits_wall_clock_metrics_when_unknown():
 
 
 def test_run_params_names_the_pair_and_settings(report):
-    p = run_params(report, "anthropic")
+    p = run_params(report, "anthropic", Path("docs/reports/r.md"))
     assert p["review_model"] == report.review_model and p["provider"] == "anthropic"
     assert p["generation_settings"] == '{"effort": "low"}'
     assert p["threshold"] == "2" and p["discard_n"] == "200"
+    assert p["review_jobs"] == str(report.review_jobs) == "2"
+    assert p["report_path"] == "docs/reports/r.md"
 
 
 def test_log_run_writes_params_metrics_and_only_safe_artifacts(report, tmp_path):
@@ -60,10 +64,12 @@ def test_log_run_writes_params_metrics_and_only_safe_artifacts(report, tmp_path)
     prompt.write_text("prompt")
     gold = tmp_path / "gold.csv"
     gold.write_text("doc_id,label\n")
-    run_id = log_run(report, "anthropic", [prompt], uri)
+    run_id = log_run(report, "anthropic", [prompt], uri, Path("docs/reports/r.md"))
     client = mlflow.MlflowClient(tracking_uri=uri)
     run = client.get_run(run_id)
     assert run.data.params["prompt_version"] == report.prompt_version
+    assert run.data.params["report_path"] == "docs/reports/r.md"
+    assert run.data.params["review_jobs"] == "2"
     assert run.data.metrics["precision_point"] == pytest.approx(report.precision.point)
     assert run.data.tags["elusion.pair"] == f"{report.review_model}|{report.prompt_version}"
     names = {a.path for a in client.list_artifacts(run_id)}

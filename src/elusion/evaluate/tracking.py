@@ -35,7 +35,7 @@ def pair_tag(report: RunReport) -> str:
     return f"{report.review_model}|{report.prompt_version}"
 
 
-def run_params(report: RunReport, provider: str) -> dict[str, str]:
+def run_params(report: RunReport, provider: str, report_path: Path) -> dict[str, str]:
     return {
         "criterion": report.criterion,
         "review_model": report.review_model,
@@ -47,6 +47,8 @@ def run_params(report: RunReport, provider: str) -> dict[str, str]:
         "threshold": str(report.threshold),
         "seed": str(report.seed),
         "discard_n": str(report.discard_n),
+        "review_jobs": str(report.review_jobs),
+        "report_path": str(report_path),
     }
 
 
@@ -83,7 +85,13 @@ def run_metrics(report: RunReport) -> dict[str, float]:
     return m
 
 
-def log_run(report: RunReport, provider: str, artifacts: list[Path], tracking_uri: str) -> str:
+def log_run(
+    report: RunReport,
+    provider: str,
+    artifacts: list[Path],
+    tracking_uri: str,
+    report_path: Path,
+) -> str:
     """Create one MLflow run for `report` and return its run id."""
     import mlflow
 
@@ -91,7 +99,7 @@ def log_run(report: RunReport, provider: str, artifacts: list[Path], tracking_ur
     mlflow.set_experiment(experiment_name(report.criterion))
     with mlflow.start_run(run_name=f"{report.review_model}/{report.prompt_version}") as run:
         mlflow.set_tags({"phase": "4", "elusion.pair": pair_tag(report)})
-        mlflow.log_params(run_params(report, provider))
+        mlflow.log_params(run_params(report, provider, report_path))
         mlflow.log_metrics(run_metrics(report))
         for path in artifacts:
             mlflow.log_artifact(str(path))

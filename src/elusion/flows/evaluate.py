@@ -392,7 +392,11 @@ def evaluate(
     ]
     try:
         run_id = log_run(
-            report, provider, [a for a in artifacts if a.is_file()], settings.mlflow_tracking_uri
+            report,
+            provider,
+            [a for a in artifacts if a.is_file()],
+            settings.mlflow_tracking_uri,
+            path,
         )
     except Exception as exc:
         raise RuntimeError(f"report written to {path}, but MLflow logging failed: {exc}") from exc

@@ -278,6 +278,8 @@ def test_evaluate_logs_one_run_and_returns_its_id(env, monkeypatch) -> None:
     client = mlflow.MlflowClient(tracking_uri=uri)
     run = client.get_run(result.run_id)
     assert run.data.params["provider"] == "anthropic"
+    assert run.data.params["report_path"] == str(result.report_path)
+    assert run.data.params["review_jobs"] == "2"
     names = {a.path for a in client.list_artifacts(result.run_id)}
     assert "c-rev-model-v2.md" in names
     assert {"v2.md", "c.md"} <= names  # the prompt file and the criterion file
