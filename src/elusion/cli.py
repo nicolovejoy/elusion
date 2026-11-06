@@ -154,6 +154,40 @@ def judge(
 
 
 @app.command()
+def grade(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
+    ],
+    prompt_version: Annotated[
+        str, typer.Option(help="Review prompt version whose flagged rationales are graded.")
+    ],
+    review_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
+    ] = None,
+    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
+    max_run_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+) -> None:
+    """Have the grader model judge whether each flagged rationale is a sound reading."""
+    from elusion.flows.grade import grade as grade_flow
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    typer.echo(
+        grade_flow(
+            criterion.stem,
+            prompt_version=prompt_version,
+            review_model=review_model,
+            threshold=threshold,
+            max_run_usd=max_run_usd,
+        )
+    )
+
+
+@app.command()
 def label(
     criterion: Annotated[
         Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")

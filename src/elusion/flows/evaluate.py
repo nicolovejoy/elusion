@@ -20,9 +20,10 @@ starts. Idempotency is by (doc_id, labeler): ids the judge model already labeled
 skipped, and a failed call (refusal, truncation, invalid JSON) writes no row, so a plain
 re-run retries exactly those ids. There is no Kafka here: the gold ids are a fixed list.
 
-`evaluate`: scores + judge labels -> metrics -> docs/reports/<criterion>-<model>-<v>.md.
-It makes no LLM call. The two piles are recomputed from the current scores, not taken
-from the CSV `pile` column, so the report always describes the scores as they stand.
+`evaluate`: scores + judge labels (+ rationale grades, if any) -> metrics ->
+docs/reports/<criterion>-<model>-<v>.md. It makes no LLM call. The two piles are
+recomputed from the current scores, not taken from the CSV `pile` column, so the report
+always describes the scores as they stand.
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ from elusion.evaluate.gold import (
     select_gold,
     split_piles,
 )
+from elusion.evaluate.grades import grade_cost_usd, grade_runs_path, grades_path, rows_for
 from elusion.evaluate.report import RunReport, render
 from elusion.evaluate.tracking import log_run
 from elusion.flows.review import (
@@ -353,6 +355,29 @@ def evaluate(
         wall_clock = end - jobs["started_at"]
     relevant = [r.doc_id for r in flagged_rows if r.label == 1]
 
+    # Rationale grades for the pair's flagged docs by the same model that judged. They
+    # join the judge's labels here, in memory; neither file feeds the other.
+    grades_csv = grades_path(criterion, data_dir or settings.data_dir)
+    grades = {g.doc_id: g for g in rows_for(grades_csv, review_model, version, judge_model)}
+    grades = {d: g for d, g in grades.items() if d in flagged}
+    graded: dict = {}
+    if grades:
+        sound_by_label = {(s, lab): 0 for s in (0, 1) for lab in (0, 1)}
+        for d, g in grades.items():
+            sound_by_label[(g.sound, judged[d].label)] += 1
+        graded = dict(
+            rationale_sound=metrics.proportion(sum(g.sound for g in grades.values()), len(grades)),
+            quote_verbatim=metrics.proportion(
+                sum(g.quote_verbatim for g in grades.values()), len(grades)
+            ),
+            sound_by_label=sound_by_label,
+            grader_model=judge_model,
+            grader_prompt_version=", ".join(
+                sorted({g.grader_prompt_version for g in grades.values()})
+            ),
+            grade_cost_usd=grade_cost_usd(grade_runs_path(grades_csv)),
+        )
+
     report = RunReport(
         criterion=criterion,
         review_model=review_model,
@@ -377,6 +402,7 @@ def evaluate(
         review_wall_clock=wall_clock,
         review_unfinished=jobs["unfinished"],
         companies=company_counts(engine, relevant),
+        **graded,
     )
     path = report_path(reports_dir, criterion, review_model, prompt_version)
     path.parent.mkdir(parents=True, exist_ok=True)

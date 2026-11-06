@@ -241,3 +241,29 @@ def test_review_provider_and_model_pass_through(monkeypatch) -> None:
     r = CliRunner().invoke(app, [*base, "--provider", "openai", "--model", "m"])
     assert r.exit_code == 0, r.output
     assert (seen["provider_name"], seen["model"]) == ("openai", "m")
+
+
+def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
+    import elusion.flows.grade as mod
+
+    seen = {}
+    monkeypatch.setattr(
+        mod, "grade", lambda criterion, **kw: seen.update(criterion=criterion, **kw) or "grade ok"
+    )
+    r = CliRunner().invoke(app, ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v2"])
+    assert r.exit_code == 0, r.output
+    assert seen == {
+        "criterion": "c",
+        "prompt_version": "v2",
+        "review_model": None,
+        "threshold": 3,
+        "max_run_usd": None,
+    }
+    assert "grade ok" in r.output
+    seen.clear()
+    args = ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v3"]
+    args += ["--review-model", "m", "--threshold", "4", "--max-run-usd", "2.5"]
+    r = CliRunner().invoke(app, args)
+    assert r.exit_code == 0, r.output
+    got = (seen["prompt_version"], seen["review_model"], seen["threshold"], seen["max_run_usd"])
+    assert got == ("v3", "m", 4, 2.5)

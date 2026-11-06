@@ -44,6 +44,13 @@ class RunReport:
     review_wall_clock: timedelta | None  # None when there are no review_jobs rows
     review_unfinished: bool  # a job has no finished_at: wall-clock runs to now
     companies: list[tuple[str, int]]
+    # Rationale grades; all None/0 until `elusion grade` has run for the pair.
+    rationale_sound: Estimate | None = None
+    quote_verbatim: Estimate | None = None
+    sound_by_label: dict[tuple[int, int], int] | None = None  # keyed (sound, label)
+    grader_model: str | None = None
+    grader_prompt_version: str | None = None
+    grade_cost_usd: float = 0.0
 
 
 def _interval(e: Estimate) -> str:
@@ -115,13 +122,36 @@ def render(r: RunReport) -> str:
             "",
             metric_line("agreement", r.agreement),
         ]
+    lines += ["", "## Rationale quality", ""]
+    if r.rationale_sound is None or r.quote_verbatim is None or r.sound_by_label is None:
+        lines.append("No grades yet; run `elusion grade` to add them.")
+    else:
+        by = r.sound_by_label
+        lines += [
+            f"The grader ({r.grader_model}) read each flagged paragraph with the reviewer's",
+            "rationale and quote and said whether the rationale is a faithful reading. The",
+            "quote check is mechanical: does the quote occur in the paragraph.",
+            "",
+            f"- grader model: {r.grader_model}",
+            metric_line("rationale sound", r.rationale_sound),
+            metric_line("quote verbatim", r.quote_verbatim),
+            "",
+            "Rationale soundness against the judge's label, over the flagged paragraphs:",
+            "",
+            f"- sound and relevant: {by.get((1, 1), 0)}",
+            f"- sound and not relevant: {by.get((1, 0), 0)}",
+            f"- unsound and relevant: {by.get((0, 1), 0)}",
+            f"- unsound and not relevant: {by.get((0, 0), 0)}",
+        ]
+    total = r.review_cost_usd + r.judge_cost_usd + r.grade_cost_usd
     lines += [
         "",
         "## Cost",
         "",
         f"- review run: ${r.review_cost_usd:.4f} (sum over {r.review_jobs} review_jobs rows)",
         f"- judge run: ${r.judge_cost_usd:.4f} (sum over the judge-runs ledger)",
-        f"- total: ${r.review_cost_usd + r.judge_cost_usd:.4f}",
+        f"- grade run: ${r.grade_cost_usd:.4f} (sum over the grade-runs ledger)",
+        f"- total: ${total:.4f}",
         "",
         "## Wall-clock",
         "",

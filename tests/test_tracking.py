@@ -80,3 +80,32 @@ def test_log_run_writes_params_metrics_and_only_safe_artifacts(report, tmp_path)
 
 def test_agreement_none_logs_no_agreement_metrics(report_without_agreement):
     assert not any(k.startswith("agreement_") for k in run_metrics(report_without_agreement))
+
+
+def test_run_metrics_adds_rationale_estimates_and_grade_cost_when_graded():
+    from tests.test_report import GRADED
+
+    m = run_metrics(make_report(**GRADED))
+    for name in ("rationale_sound", "quote_verbatim"):
+        assert {f"{name}_{s}" for s in ("point", "low", "high", "k", "n")} <= m.keys()
+    assert m["rationale_sound_k"] == 2.0 and m["quote_verbatim_n"] == 4.0
+    assert m["grade_cost_usd"] == 0.25
+    assert m["total_cost_usd"] == pytest.approx(0.834 + 1.23 + 0.25)
+
+
+def test_run_metrics_skips_grade_metrics_when_ungraded(report):
+    m = run_metrics(report)
+    assert not [k for k in m if k.startswith(("rationale_sound", "quote_verbatim", "grade"))]
+    assert m["total_cost_usd"] == pytest.approx(report.review_cost_usd + report.judge_cost_usd)
+
+
+def test_run_params_names_the_grader_only_when_graded():
+    from tests.test_report import GRADED
+
+    p = run_params(
+        make_report(**GRADED, grader_prompt_version="c/grade-v1"), "anthropic", Path("r.md")
+    )
+    assert p["grader_model"] == "claude-opus-5-5"
+    assert p["grader_prompt_version"] == "c/grade-v1"
+    p = run_params(make_report(), "anthropic", Path("r.md"))
+    assert "grader_model" not in p and "grader_prompt_version" not in p

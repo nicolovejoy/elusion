@@ -114,3 +114,38 @@ def test_render_discard_sample_line() -> None:
         "- discard sample: 200 drawn with seed 20261104 from the pair's discard pile; "
         "200 labeled by the judge" in md
     )
+
+
+GRADED = dict(
+    rationale_sound=Estimate(0.5, 0.0676, 0.9324, 2, 4),
+    quote_verbatim=Estimate(0.75, 0.1941, 0.9937, 3, 4),
+    sound_by_label={(1, 1): 2, (1, 0): 0, (0, 1): 1, (0, 0): 1},
+    grader_model="claude-opus-5-5",
+    grade_cost_usd=0.25,
+)
+
+
+def test_render_rationale_quality_section() -> None:
+    md = render(make_report(**GRADED))
+    assert "## Rationale quality" in md
+    assert "- rationale sound: 0.500 [0.068, 0.932] (k/n = 2/4)" in md
+    assert "- quote verbatim: 0.750 [0.194, 0.994] (k/n = 3/4)" in md
+    assert "- sound and relevant: 2" in md
+    assert "- sound and not relevant: 0" in md
+    assert "- unsound and relevant: 1" in md
+    assert "- unsound and not relevant: 1" in md
+    assert "- grader model: claude-opus-5-5" in md
+    assert "No grades yet" not in md
+
+
+def test_render_without_grades_says_so() -> None:
+    md = render(make_report())
+    assert "## Rationale quality" in md
+    assert "No grades yet; run `elusion grade` to add them." in md
+    assert "rationale sound" not in md
+
+
+def test_render_cost_includes_the_grade_run() -> None:
+    md = render(make_report(**GRADED))
+    assert "- grade run: $0.2500" in md
+    assert f"- total: ${0.834 + 1.23 + 0.25:.4f}" in md

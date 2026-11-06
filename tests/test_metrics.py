@@ -100,3 +100,14 @@ def test_agreement_ignores_non_shared_ids():
 def test_agreement_no_overlap_raises():
     with pytest.raises(ValueError):
         agreement([row("a", 1)], [row("b", 1)])
+
+
+def test_proportion_is_public_and_matches_the_pile_estimates():
+    from elusion.evaluate.metrics import proportion
+
+    e = proportion(3, 4)
+    assert (e.k, e.n, e.point) == (3, 4, 0.75)
+    assert (e.low, e.high) == clopper_pearson(3, 4)
+    assert precision([row("a", 1), row("b", 1), row("c", 1), row("d", 0)]) == e
+    with pytest.raises(ValueError):
+        proportion(0, 0)

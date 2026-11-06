@@ -299,3 +299,94 @@ def test_report_is_written_even_when_logging_fails(env, monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="report written to .*c-rev-model-v2.md"):
         run(tmp_path, log_mlflow=True)
     assert (tmp_path / "reports" / "c-rev-model-v2.md").is_file()
+
+
+def add_grades(tmp_path, grader=JUDGE):
+    from elusion.evaluate.grades import (
+        GradeRow,
+        append_grade_run,
+        grade_runs_path,
+        grades_path,
+    )
+    from elusion.evaluate.grades import append_rows as append_grades
+
+    def g(doc, sound, quote, model="rev-model", pv="c/v2", who=grader):
+        return GradeRow(doc, model, pv, 3, who, "c/grade-v1", sound, quote, "r", "2026-11-05")
+
+    path = grades_path("c", tmp_path)
+    append_grades(
+        path,
+        [g("f00", 1, 1), g("f01", 1, 1), g("f02", 0, 1), g("f03", 0, 0)]
+        # not counted: a non-flagged doc, another grader, another reviewer, another prompt
+        + [g("g00", 1, 1), g("f00", 0, 0, who="other"), g("f00", 0, 0, model="x")]
+        + [g("f01", 0, 0, pv="c/v3")],
+    )
+    append_grade_run(grade_runs_path(path), {"cost_usd": 0.25})
+
+
+def test_report_has_rationale_quality_when_graded(env) -> None:
+    tmp_path, _ = env
+    add_grades(tmp_path)
+    md = run(tmp_path).read_text()
+    assert "## Rationale quality" in md
+    assert "- rationale sound: 0.500 [" in md and "(k/n = 2/4)" in md
+    assert "- quote verbatim: 0.750 [" in md and "(k/n = 3/4)" in md
+    # f00,f01: sound and relevant; f02: unsound and relevant; f03: unsound, not relevant
+    assert "- sound and relevant: 2" in md
+    assert "- sound and not relevant: 0" in md
+    assert "- unsound and relevant: 1" in md
+    assert "- unsound and not relevant: 1" in md
+    assert "- grade run: $0.2500" in md
+    assert "- total: $1.7500" in md  # 0.75 review + 0.75 judge + 0.25 grade
+
+
+def test_report_without_grades_says_so(env) -> None:
+    tmp_path, _ = env
+    md = run(tmp_path).read_text()
+    assert "No grades yet; run `elusion grade` to add them." in md
+    assert "rationale sound" not in md
+
+
+def run_logged(tmp_path) -> str:
+    from elusion.flows.evaluate import evaluate
+
+    return evaluate(
+        "c",
+        prompt_version="v2",
+        engine=FAKE_ENGINE,
+        data_dir=tmp_path,
+        reports_dir=tmp_path / "reports",
+        review_model="rev-model",
+        discard_n=10,
+        judge_model=JUDGE,
+        today="2026-11-04",
+        log_mlflow=True,
+    ).run_id
+
+
+def test_logged_run_has_grade_metrics_only_when_graded(env, monkeypatch) -> None:
+    import mlflow
+
+    import elusion.flows.evaluate as mod
+    from elusion.config import Settings
+
+    tmp_path, _ = env
+    uri = f"file://{tmp_path}/mlruns"
+    monkeypatch.setattr(mod, "settings", Settings(mlflow_tracking_uri=uri))
+    monkeypatch.setattr(mod, "provider_for", lambda e, m, v: "anthropic")
+    monkeypatch.chdir(tmp_path)
+    client = mlflow.MlflowClient(tracking_uri=uri)
+
+    data = client.get_run(run_logged(tmp_path)).data
+    assert "rationale_sound_point" not in data.metrics and "grader_model" not in data.params
+
+    add_grades(tmp_path)
+    second = run_logged(tmp_path)
+    data = client.get_run(second).data
+    assert data.metrics["rationale_sound_point"] == 0.5
+    assert data.metrics["quote_verbatim_k"] == 3.0
+    assert data.metrics["grade_cost_usd"] == 0.25
+    assert data.params["grader_model"] == JUDGE
+    assert data.params["grader_prompt_version"] == "c/grade-v1"
+    names = {a.path for a in client.list_artifacts(second)}
+    assert not any(n.endswith(".csv") for n in names)

@@ -43,13 +43,18 @@ def clopper_pearson(k: int, n: int, confidence: float = 0.95) -> tuple[float, fl
     return low, high
 
 
+def proportion(k: int, n: int) -> Estimate:
+    """k successes out of n with a Clopper-Pearson interval; n must be positive."""
+    if n == 0:
+        raise ValueError("proportion needs n > 0")
+    low, high = clopper_pearson(k, n)
+    return Estimate(k / n, low, high, k, n)
+
+
 def _proportion(rows: list[GoldRow], pile: str) -> Estimate:
     if not rows:
         raise ValueError(f"no labeled rows in the {pile} pile")
-    k = sum(1 for r in rows if r.label == 1)
-    n = len(rows)
-    low, high = clopper_pearson(k, n)
-    return Estimate(k / n, low, high, k, n)
+    return proportion(sum(1 for r in rows if r.label == 1), len(rows))
 
 
 def precision(flagged_rows: list[GoldRow]) -> Estimate:
