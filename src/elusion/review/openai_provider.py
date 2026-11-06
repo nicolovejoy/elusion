@@ -97,16 +97,22 @@ class OpenAIProvider:
             },
             **kwargs,
         )
-        u = resp.usage
-        cached = u.input_tokens_details.cached_tokens or 0
-        uncached = u.input_tokens - cached
+        u = resp.usage  # Optional in the SDK: a failed or cancelled response may carry none
+        if u is None:
+            cached = uncached = out_tokens = 0
+        else:
+            cached = u.input_tokens_details.cached_tokens or 0
+            uncached = u.input_tokens - cached
+            out_tokens = u.output_tokens
 
         def fail(stop_reason: str) -> ReviewError:
-            return ReviewError(stop_reason, resp.model, uncached, u.output_tokens, 0, cached)
+            return ReviewError(stop_reason, resp.model, uncached, out_tokens, 0, cached)
 
         if resp.status != "completed":
             details = resp.incomplete_details
             raise fail(str((details.reason if details else None) or resp.status))
+        if u is None:
+            raise fail("missing_usage")
         if any(
             c.type == "refusal"
             for item in resp.output
@@ -120,8 +126,10 @@ class OpenAIProvider:
             raise fail("invalid_json") from exc
         usage = {
             "input_tokens": uncached,
-            "output_tokens": u.output_tokens,
-            "cost_usd": cost_usd(resp.model, uncached, u.output_tokens, 0, cached),
+            "output_tokens": out_tokens,
+            # Priced by the pinned id, not the served one: if the API served a different
+            # model, the flow's check_model_echo must be the one to stop the run.
+            "cost_usd": cost_usd(self.model, uncached, out_tokens, 0, cached),
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": cached,
         }

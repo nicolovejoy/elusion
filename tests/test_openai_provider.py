@@ -94,6 +94,23 @@ def test_incomplete_max_output_tokens_raises_review_error_with_usage() -> None:
     assert (e.value.input_tokens, e.value.output_tokens) == (1000, 50)
 
 
+def test_failed_response_without_usage_is_a_review_error() -> None:
+    r = response(status="failed")
+    r.usage = None
+    p, _ = provider(r)
+    with pytest.raises(ReviewError) as e:
+        p.review("s", "t")
+    assert e.value.stop_reason == "failed"
+    assert (e.value.input_tokens, e.value.output_tokens) == (0, 0)
+
+
+def test_cost_uses_pinned_model_so_served_drift_reaches_the_echo_check() -> None:
+    p, _ = provider(response(model="gpt-6-luna-2026-12-01"))
+    r = p.review("s", "t")
+    assert r.model == "gpt-6-luna-2026-12-01"  # as served; the flow compares it to p.model
+    assert r.cost_usd == cost_usd(MODEL, 1000, 50, 0, 0)
+
+
 def test_refusal_raises_review_error() -> None:
     p, _ = provider(response(refusal="I cannot help with that"))
     with pytest.raises(ReviewError) as e:

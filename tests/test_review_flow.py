@@ -426,3 +426,30 @@ def test_alias_model_echo_mismatch_stops_before_storing(env) -> None:
     with engine.connect() as conn:
         n = conn.execute(sa.select(sa.func.count()).where(scores.c.prompt_version == version))
         assert n.scalar_one() == 0
+
+
+def test_real_openai_provider_served_drift_stops_before_storing(env) -> None:
+    from types import SimpleNamespace as NS
+
+    from elusion.flows.review import review
+    from elusion.review.openai_provider import OpenAIProvider
+
+    engine, version = env
+    good = '{"score": 3, "rationale": "r", "quote": "q"}'
+    resp = NS(
+        status="completed",
+        incomplete_details=None,
+        model="gpt-6-luna-2026-12-01",
+        output=[NS(type="message", content=[NS(type="output_text", text=good)])],
+        output_text=good,
+        usage=NS(input_tokens=100, output_tokens=10, input_tokens_details=NS(cached_tokens=0)),
+    )
+    client = NS(responses=NS(create=lambda **kw: resp))
+    provider = OpenAIProvider("gpt-6-luna", client=client)
+    with pytest.raises(RuntimeError, match=r"pin the served snapshot id \(--model or"):
+        review(
+            "cloud-concentration", sample=5, batch_size=5, provider=provider, ids=ListIdSource(IDS)
+        )
+    with engine.connect() as conn:
+        n = conn.execute(sa.select(sa.func.count()).where(scores.c.prompt_version == version))
+        assert n.scalar_one() == 0
