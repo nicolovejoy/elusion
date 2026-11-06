@@ -4,8 +4,9 @@
 > number of such providers, as a material risk.
 
 A paragraph counts when the business says it depends on a third party that runs its
-computing infrastructure: a cloud platform, a hosting company or a data-center operator.
-Three typical shapes:
+computing infrastructure: a cloud platform, a hosting company or a data-center operator. A
+named or described provider of a third-party software (SaaS) application also counts when
+the paragraph says the company depends on it to operate. Three typical shapes:
 
 - It names a specific provider as something the business depends on, for example "we host
   substantially all of our services on Amazon Web Services" or an outage at Microsoft Azure

@@ -50,4 +50,5 @@ def test_loads_v3_with_exact_version_string_and_gap_rules() -> None:
         assert field in prompt.text
     for phrase in ("SaaS", "ISP", "outsourc", "on-site"):
         assert phrase in prompt.text
+    assert "Generic IT outsourcing" in prompt.text  # unique to v3
     assert load_prompt("cloud-concentration", "v2").text != prompt.text
