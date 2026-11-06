@@ -15,6 +15,9 @@ from __future__ import annotations
 PRICES: dict[str, dict[str, float]] = {
     "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_write": 0.125, "cache_read": 0.01},
     "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cache_write": 5.00, "cache_read": 0.20},
+    # OpenAI bills cached input at a discount and has no separate cache-write charge in our
+    # accounting (cache_write is listed on the model page but we never count such tokens).
+    "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_write": 0.125, "cache_read": 0.01},
 }
 
 

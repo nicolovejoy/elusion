@@ -1,0 +1,137 @@
+"""OpenAIProvider against a fake Responses client: no network, kwargs are recorded."""
+
+import json
+from types import SimpleNamespace as NS
+
+import pytest
+
+from elusion.review.openai_provider import OpenAIProvider
+from elusion.review.pricing import cost_usd
+from elusion.review.providers import (
+    AnthropicProvider,
+    Judgement,
+    Review,
+    ReviewError,
+    make_provider,
+)
+
+MODEL = "gpt-6-luna"
+GOOD = json.dumps({"score": 3, "rationale": "names one cloud vendor", "quote": "AWS"})
+
+
+def response(
+    text: str = GOOD,
+    status: str = "completed",
+    reason: str | None = None,
+    refusal: str | None = None,
+    prompt: int = 1000,
+    cached: int = 0,
+    out: int = 50,
+    model: str = MODEL,
+):
+    """Shaped like the SDK's Response: a refusal is a content part inside a message item."""
+    part = NS(type="refusal", refusal=refusal) if refusal else NS(type="output_text", text=text)
+    return NS(
+        status=status,
+        incomplete_details=NS(reason=reason) if reason else None,
+        model=model,
+        output=[NS(type="message", content=[part])],
+        output_text="" if refusal else text,
+        usage=NS(
+            input_tokens=prompt,
+            output_tokens=out,
+            input_tokens_details=NS(cached_tokens=cached),
+        ),
+    )
+
+
+class FakeResponses:
+    def __init__(self, resp) -> None:
+        self.resp = resp
+        self.kw: dict = {}
+
+    def create(self, **kw):
+        self.kw = kw
+        return self.resp
+
+
+def provider(resp, **kw) -> tuple[OpenAIProvider, FakeResponses]:
+    fake = FakeResponses(resp)
+    return OpenAIProvider(MODEL, client=NS(responses=fake), **kw), fake
+
+
+def test_review_request_shape_and_cost() -> None:
+    p, fake = provider(response(prompt=1000, cached=400, out=50))
+    r = p.review("system text", "the paragraph")
+    kw = fake.kw
+    assert kw["model"] == MODEL
+    assert kw["instructions"] == "system text"
+    assert kw["input"] == "the paragraph"
+    assert kw["max_output_tokens"] == 1024
+    assert "temperature" not in kw
+    fmt = kw["text"]["format"]
+    assert fmt["type"] == "json_schema" and fmt["strict"] is True and fmt["name"] == "verdict"
+    assert fmt["schema"]["additionalProperties"] is False
+    assert isinstance(r, Review) and r.verdict.score == 3 and r.model == MODEL
+    assert r.cost_usd == cost_usd(MODEL, 600, 50, 0, 400)
+
+
+def test_cached_tokens_map_to_cache_read_bucket() -> None:
+    p, _ = provider(response(prompt=1000, cached=400))
+    r = p.review("s", "t")
+    assert r.cache_read_input_tokens == 400
+    assert r.input_tokens == 600
+    assert r.cache_creation_input_tokens == 0
+
+
+def test_incomplete_max_output_tokens_raises_review_error_with_usage() -> None:
+    p, _ = provider(
+        response(text='{"score": 3, "rat', status="incomplete", reason="max_output_tokens")
+    )
+    with pytest.raises(ReviewError) as e:
+        p.review("s", "t")
+    assert e.value.stop_reason == "max_output_tokens"
+    assert (e.value.input_tokens, e.value.output_tokens) == (1000, 50)
+
+
+def test_refusal_raises_review_error() -> None:
+    p, _ = provider(response(refusal="I cannot help with that"))
+    with pytest.raises(ReviewError) as e:
+        p.review("s", "t")
+    assert e.value.stop_reason == "refusal"
+    assert e.value.output_tokens == 50
+
+
+def test_prose_answer_is_invalid_json() -> None:
+    p, _ = provider(response(text="I think 3"))
+    with pytest.raises(ReviewError) as e:
+        p.review("s", "t")
+    assert e.value.stop_reason == "invalid_json"
+
+
+def test_label_returns_judgement() -> None:
+    p, fake = provider(response(text=json.dumps({"relevant": True, "rationale": "yes"})))
+    j = p.label("s", "t")
+    assert isinstance(j, Judgement) and j.label.relevant is True
+    assert fake.kw["text"]["format"]["name"] == "label"
+    assert "relevant" in fake.kw["text"]["format"]["schema"]["properties"]
+
+
+def test_temperature_is_sent_only_when_set() -> None:
+    p, fake = provider(response(), temperature=0.0)
+    p.review("s", "t")
+    assert fake.kw["temperature"] == 0.0
+    assert p.generation_settings == {"temperature": 0.0}
+    p2, _ = provider(response())
+    assert p2.generation_settings == {}
+
+
+def test_make_provider_dispatches_and_rejects_unknown(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    a = make_provider("anthropic", "claude-haiku-5-5")
+    assert isinstance(a, AnthropicProvider)
+    o = make_provider("openai", MODEL)
+    assert isinstance(o, OpenAIProvider) and o.model == MODEL and o.name == "openai"
+    with pytest.raises(ValueError, match="nope"):
+        make_provider("nope", "m")

@@ -17,11 +17,11 @@ dependencies = [
   "pydantic",
   "typer",
   "python-dotenv",
+  "openai>=3.43.0",
 ]
 
 [project.optional-dependencies]
 spark = ["pyspark", "delta-spark"]
-openai = ["openai"]
 
 [dependency-groups]
 dev = ["pytest", "ruff"]

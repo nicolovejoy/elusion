@@ -49,6 +49,8 @@ def test_review_command_passes_criterion_name(monkeypatch) -> None:
         "concurrency": 8,
         "prompt_version": "v1",
         "max_run_usd": None,
+        "provider_name": "anthropic",
+        "model": None,
     }
     assert "summary" in result.output
 
@@ -226,3 +228,16 @@ def test_evaluate_missing_discard_labels_exits_1(monkeypatch, tmp_path) -> None:
     )
     assert r.exit_code == 1 and "Traceback" not in r.output
     assert "2 sampled discard paragraphs" in r.output
+
+
+def test_review_provider_and_model_pass_through(monkeypatch) -> None:
+    import elusion.flows.review as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "review", lambda criterion, sample, **kw: seen.update(kw) or "ok")
+    base = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
+    assert CliRunner().invoke(app, base).exit_code == 0
+    assert (seen["provider_name"], seen["model"]) == ("anthropic", None)
+    r = CliRunner().invoke(app, [*base, "--provider", "openai", "--model", "m"])
+    assert r.exit_code == 0, r.output
+    assert (seen["provider_name"], seen["model"]) == ("openai", "m")

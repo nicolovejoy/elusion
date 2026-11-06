@@ -404,3 +404,25 @@ def test_no_usable_verdict_in_probe_fails_job(env, monkeypatch) -> None:
             sa.select(review_jobs).where(review_jobs.c.prompt_version == version)
         ).one()
     assert job.status == "failed"
+
+
+def test_alias_model_echo_mismatch_stops_before_storing(env) -> None:
+    """An alias pin is served under a dated id; the echo check stops before any score row."""
+    from elusion.flows.review import review
+
+    engine, version = env
+    provider = FakeProvider(model="gpt-x-mini")
+
+    def served_dated(system, paragraph):
+        r = FakeProvider.review(provider, system, paragraph)
+        r.model = "gpt-x-mini-2026-01-01"
+        return r
+
+    provider.review = served_dated
+    with pytest.raises(RuntimeError, match="pin the served snapshot id"):
+        review(
+            "cloud-concentration", sample=5, batch_size=5, provider=provider, ids=ListIdSource(IDS)
+        )
+    with engine.connect() as conn:
+        n = conn.execute(sa.select(sa.func.count()).where(scores.c.prompt_version == version))
+        assert n.scalar_one() == 0

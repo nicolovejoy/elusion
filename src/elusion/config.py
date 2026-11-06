@@ -42,6 +42,9 @@ class Settings:
         default_factory=lambda: _env("ELUSION_REVIEW_MODEL", "claude-haiku-5-5")
     )
 
+    # Pinned OpenAI review model (phase 4). See docs/DECISIONS.md for the id and its prices.
+    openai_model: str = field(default_factory=lambda: _env("ELUSION_OPENAI_MODEL", "gpt-6-luna"))
+
     # Pinned model snapshot id used for the judge pass that labels the gold set.
     judge_model: str = field(default_factory=lambda: _env("ELUSION_JUDGE_MODEL", "claude-opus-5-5"))
 

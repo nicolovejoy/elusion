@@ -65,6 +65,11 @@ def review(
         float | None,
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
     ] = None,
+    provider: Annotated[str, typer.Option(help="Reviewer: anthropic or openai.")] = "anthropic",
+    model: Annotated[
+        str | None,
+        typer.Option(help="Pinned model id; default ELUSION_REVIEW_MODEL / ELUSION_OPENAI_MODEL."),
+    ] = None,
 ) -> None:
     """Score up to SAMPLE paragraphs from the topic against a CRITERION."""
     from elusion.flows.review import review as review_flow
@@ -79,6 +84,8 @@ def review(
         concurrency=concurrency,
         prompt_version=prompt_version,
         max_run_usd=max_run_usd,
+        provider_name=provider,
+        model=model,
     )
     typer.echo(summary)
 

@@ -39,12 +39,12 @@ from elusion.review.corpus import load_texts
 from elusion.review.pricing import cost_usd
 from elusion.review.prompt import load_prompt
 from elusion.review.providers import (
-    AnthropicProvider,
     Judge,
     Judgement,
     Provider,
     Review,
     ReviewError,
+    make_provider,
 )
 from elusion.review.sampler import IdSource, KafkaIdSource, group_id
 
@@ -160,7 +160,7 @@ def check_model_echo(
     if answer.model != provider.model:
         raise RuntimeError(
             f"API served model {answer.model!r} but the pinned model is {provider.model!r}; "
-            f"pin the served snapshot id ({env_var}) so idempotency holds"
+            f"pin the served snapshot id (--model or {env_var}) so idempotency holds"
         )
 
 
@@ -172,6 +172,8 @@ def review(
     concurrency: int = 8,
     prompt_version: str = "v1",
     provider: Provider | None = None,
+    provider_name: str = "anthropic",
+    model: str | None = None,
     ids: IdSource | None = None,
     max_run_usd: float | None = None,
 ) -> ReviewSummary:
@@ -189,7 +191,7 @@ def review(
     if max_run_usd is None:
         max_run_usd = settings.max_run_usd
     prompt = load_prompt(criterion, prompt_version)
-    provider = provider or AnthropicProvider(settings.review_model)
+    provider = provider or make_provider(provider_name, model)
     engine = db.make_engine(settings.database_url)
     db.ensure_schema(engine)
     job_id = db.start_job(
