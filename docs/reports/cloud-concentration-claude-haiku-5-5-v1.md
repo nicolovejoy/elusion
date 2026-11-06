@@ -6,7 +6,7 @@
 - judge model: claude-opus-5-5
 - judge prompt version: cloud-concentration/judge-v1
 - judge effort: low
-- date: 2026-11-05
+- date: 2026-11-06
 - seed: 20261104
 
 ## Population
@@ -45,11 +45,29 @@ Fraction of the owner's blind labels the judge matched.
 
 - agreement: 0.800 [0.563, 0.943] (k/n = 16/20)
 
+## Rationale quality
+
+The grader (claude-opus-5-5) read each flagged paragraph with the reviewer's
+rationale and quote and said whether the rationale is a faithful reading. The
+quote check is mechanical: does the quote occur in the paragraph.
+
+- grader model: claude-opus-5-5
+- rationale sound: 0.476 [0.320, 0.636] (k/n = 20/42)
+- quote verbatim: 0.976 [0.874, 0.999] (k/n = 41/42)
+
+Rationale soundness against the judge's label, over the flagged paragraphs:
+
+- sound and relevant: 12
+- sound and not relevant: 8
+- unsound and relevant: 1
+- unsound and not relevant: 21
+
 ## Cost
 
 - review run: $0.8394 (sum over 6 review_jobs rows)
-- judge run: $1.2157 (sum over the judge-runs ledger)
-- total: $2.0551
+- judge run: $1.6611 (sum over the judge-runs ledger)
+- grade run: $0.1807 (sum over the grade-runs ledger)
+- total: $2.6812
 
 ## Wall-clock
 
