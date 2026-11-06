@@ -4,7 +4,7 @@
 
 # LLM providers
 ANTHROPIC_API_KEY=op://Private/Anthropic elusion/credential
-OPENAI_API_KEY=                       # optional, phase 4
+OPENAI_API_KEY=op://Private/OpenAI elusion/credential   # phase 4 leaderboard
 OLLAMA_HOST=http://localhost:11434    # optional, phase 4
 
 # Pinned models (change only via a DECISIONS.md line)
