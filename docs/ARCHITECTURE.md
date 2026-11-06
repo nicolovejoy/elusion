@@ -160,9 +160,27 @@ Prefect flow `evaluate`: piles recomputed from `scores`, joined to the judge row
   human rows ⋈ judge rows               ──▶ judge agreement with the owner
   review_jobs, judge-runs ledger        ──▶ cost, wall-clock
   `documents`, flagged judged relevant  ──▶ companies found
+  grades for the pair (if any)          ──▶ rationale sound, quote verbatim, sound x label
         Clopper-Pearson 95% intervals and the k/n behind them
         ▼
-docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow artifact (built)
+docs/reports/<criterion>-<model>-<version>.md (committed)
+        ▼
+MLflow run in experiment elusion/<criterion>, named <review model>/<prompt version>:
+  params, metrics (point/low/high/k/n per metric, costs), artifacts (report, review
+  prompt, criterion file); never a gold row, a grade row or a label
+```
+
+Rationale grading (phase 4) sits beside the judge and feeds evaluate:
+
+```
+Postgres `scores`, the pair's flagged docs that have a rationale
+        ▼
+Prefect flow `grade` ──▶ LLM call (judge model + grade-v1: paragraph plus the reviewer's
+        │                score, rationale and quote; never a label); spend guard as in review
+        ├──▶ data/grades/<criterion>.csv               one row per (doc, review model,
+        │                                              prompt version, grader); quote_verbatim
+        │                                              checked in Python, not by the model
+        └──▶ data/grades/<criterion>.grade-runs.jsonl  one line per grade run, per pair: counts, cost
 ```
 
 ## Where each phase reads and writes
@@ -172,7 +190,7 @@ docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow art
 | 1 collect | HuggingFace JSONL | Parquet, `documents`, Kafka |
 | 2 review | Kafka, `documents`, `scores`, Parquet text | `scores`, job table |
 | 3 judge, label, evaluate | `scores`, `review_jobs`, `documents`, Parquet text, `data/gold/` | `data/gold/<criterion>.csv`, `.judge-runs.jsonl`, `docs/reports/` |
-| 4 leaderboard | report, scores, prompt file | MLflow run (params, metrics, report, prompt) |
+| 4 leaderboard | report, scores, prompt file, `data/grades/` | MLflow run (params, metrics, report, prompt); `data/grades/<criterion>.csv`, `.grade-runs.jsonl` |
 | 5 dedupe | Parquet | Delta table of clusters; `scores` for members |
 | 6 production | same as 2, on AKS | same as 2 |
 
@@ -184,5 +202,6 @@ docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow art
 | Redpanda (Kafka) | 9092 | 9092 external, 29092 internal | collect (produce), review (consume) |
 | MLflow 3.17 | 5001 | 5000 | leaderboard |
 | Prefect 3.9 | 4200 | 4200 | every flow |
+| Ollama 0.40 (Homebrew service, not compose) | 11434 | — | review with a local model (phase 4) |
 
 Host ports 5432 and 5000 are taken on the dev Mac by Homebrew Postgres and AirPlay.

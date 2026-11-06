@@ -12,7 +12,8 @@ documents inside the pile the system discarded, measured by sampling that pile.
 ## Status
 
 Phases 0 to 3 are done: collection, first-pass LLM review, validation. Phase 4 (MLflow
-leaderboard) is next. See `docs/PHASES.md`.
+leaderboard) is in progress: OpenAI and local Ollama providers, prompt v3 and rationale
+grading are built, and four of the five planned runs are in. See `docs/PHASES.md`.
 
 ## First result
 

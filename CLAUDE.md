@@ -67,8 +67,15 @@ uv sync                       # install
 uv run pytest                 # tests
 uv run elusion collect --year 2019
 uv run elusion review --criterion criteria/cloud-concentration.md --sample 20000
-uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2   # the --run <mlflow run id> form is phase 4
+uv run elusion review --criterion criteria/cloud-concentration.md --prompt-version v2 --sample 20000 --provider openai --model gpt-6-luna
+uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]
+uv run elusion grade --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]
+uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]   # report + one MLflow run
 ```
+
+Commands that call a paid model need the API keys from 1Password: prefix them with
+`op run --env-file=.env.tpl --`. Run judge, grade and evaluate for one criterion one at a
+time: the gold and grades CSVs are appended without a cross-process lock.
 
 ## Metrics vocabulary (use these words exactly)
 
