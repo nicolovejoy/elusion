@@ -7,16 +7,20 @@ from pydantic import ValidationError
 
 from elusion.config import Settings
 from elusion.review.providers import (
+    GRADE_SCHEMA,
     LABEL_SCHEMA,
     VERDICT_SCHEMA,
     AnthropicProvider,
+    Grade,
+    Grader,
     Judge,
     Label,
     Provider,
     ReviewError,
     Verdict,
+    grader_message,
 )
-from tests.fakes import FakeJudge, FakeProvider
+from tests.fakes import FakeGrader, FakeJudge, FakeProvider
 
 
 def test_verdict_rejects_out_of_range_score():
@@ -206,3 +210,51 @@ def test_label_unusable_answers_raise_review_error(monkeypatch, text, stop_reaso
     assert e.stop_reason == expected and e.model == "claude-haiku-5-5"
     assert (e.input_tokens, e.output_tokens) == (10, 20)
     assert (e.cache_creation_input_tokens, e.cache_read_input_tokens) == (0, 30)
+
+
+def test_fake_grader_satisfies_protocol():
+    g: Grader = FakeGrader()
+    v = Verdict(score=3, rationale="r", quote="q")
+    assert g.grade("sys", "para", v).grade.sound is True
+
+
+def test_grade_request_sends_paragraph_and_verdict_not_label(monkeypatch):
+    seen = {}
+    grade = Grade(sound=False, rationale="invents a provider")
+    verdict = Verdict(score=3, rationale="names AWS", quote="we use AWS")
+    provider = stub_create(monkeypatch, grade.model_dump_json(), seen=seen)
+    g = provider.grade("GRADER SYSTEM", "the paragraph", verdict)
+
+    assert seen["messages"] == [
+        {"role": "user", "content": grader_message("the paragraph", verdict)}
+    ]
+    assert seen["messages"][0]["content"] == (
+        "PARAGRAPH:\nthe paragraph\n\nREVIEWER SCORE: 3\n"
+        "REVIEWER RATIONALE: names AWS\nREVIEWER QUOTE: we use AWS"
+    )
+    fmt = seen["output_config"]["format"]
+    assert fmt == {"type": "json_schema", "schema": GRADE_SCHEMA}
+    assert fmt["schema"]["required"] == ["sound", "rationale"]
+    assert seen["system"] == [
+        {"type": "text", "text": "GRADER SYSTEM", "cache_control": {"type": "ephemeral"}}
+    ]
+    assert g.grade == grade
+    assert g.model == "claude-haiku-5-5"
+    assert g.cost_usd > 0
+
+
+@pytest.mark.parametrize(
+    ("text", "stop_reason", "expected"),
+    [
+        ("", "refusal", "refusal"),
+        ('{"sound": true, "ratio', "max_tokens", "max_tokens"),
+        ('{"sound": true, "ratio', "end_turn", "invalid_json"),
+        ('{"sound": "maybe", "rationale": "r"}', "end_turn", "invalid_json"),
+    ],
+)
+def test_grade_unusable_answers_raise_review_error(monkeypatch, text, stop_reason, expected):
+    provider = stub_create(monkeypatch, text, stop_reason=stop_reason)
+    with pytest.raises(ReviewError) as exc:
+        provider.grade("s", "p", Verdict(score=0, rationale="r", quote=""))
+    assert exc.value.stop_reason == expected
+    assert (exc.value.input_tokens, exc.value.output_tokens) == (10, 20)

@@ -29,6 +29,15 @@ def test_loads_judge_v1_with_exact_version_string() -> None:
     assert "0-4" not in prompt.text  # yes/no judge, no scale
 
 
+def test_loads_grade_v1_with_exact_version_string() -> None:
+    prompt = load_prompt("cloud-concentration", "grade-v1")
+    assert prompt.version == "cloud-concentration/grade-v1"
+    for field in ("sound", "rationale"):
+        assert field in prompt.text
+    assert "Do not re-score" in prompt.text
+    assert "label" not in prompt.text.lower()  # the grader never sees or hears of a label
+
+
 def test_default_version_is_v1() -> None:
     assert load_prompt("cloud-concentration") == load_prompt("cloud-concentration", "v1")
 

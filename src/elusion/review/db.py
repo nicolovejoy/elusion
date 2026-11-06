@@ -30,7 +30,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID, insert
 from sqlalchemy.engine import Engine
 
 from elusion.collect.db import make_engine  # noqa: F401  (re-exported for callers)
-from elusion.review.providers import Review
+from elusion.review.providers import Review, Verdict
 
 metadata = sa.MetaData()
 
@@ -140,6 +140,22 @@ def scores_for(engine: Engine, model: str, prompt_version: str) -> dict[str, int
     )
     with engine.connect() as conn:
         return {doc_id: score for doc_id, score in conn.execute(stmt)}
+
+
+def verdicts_for(
+    engine: Engine, model: str, prompt_version: str, min_score: int
+) -> dict[str, Verdict]:
+    """Every doc under (model, prompt_version) scored >= min_score, as its full Verdict."""
+    stmt = sa.select(scores.c.doc_id, scores.c.score, scores.c.rationale, scores.c.quote).where(
+        scores.c.model == model,
+        scores.c.prompt_version == prompt_version,
+        scores.c.score >= min_score,
+    )
+    with engine.connect() as conn:
+        return {
+            doc_id: Verdict(score=score, rationale=rationale, quote=quote)
+            for doc_id, score, rationale, quote in conn.execute(stmt)
+        }
 
 
 def provider_for(engine: Engine, model: str, prompt_version: str) -> str | None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from elusion.review.providers import Judgement, Label, Review, Verdict
+from elusion.review.providers import Grade, Grading, Judgement, Label, Review, Verdict
 
 
 class FakeProvider:
@@ -66,6 +66,30 @@ class FakeJudge:
         self.calls.append((system, paragraph))
         return Judgement(
             label=Label(relevant=self.relevant(paragraph), rationale="canned"),
+            model=self.model,
+            input_tokens=100,
+            output_tokens=20,
+            cost_usd=0.0,
+        )
+
+
+class FakeGrader:
+    """Test-only grader: answers `sound` from a predicate on the paragraph text.
+
+    `calls` records (system, paragraph, verdict) exactly as sent.
+    """
+
+    name = "fake"
+
+    def __init__(self, model: str = "fake-grader", sound=lambda text: True) -> None:
+        self.model = model
+        self.sound = sound
+        self.calls: list[tuple[str, str, Verdict]] = []
+
+    def grade(self, system: str, paragraph: str, verdict: Verdict) -> Grading:
+        self.calls.append((system, paragraph, verdict))
+        return Grading(
+            grade=Grade(sound=self.sound(paragraph), rationale="canned"),
             model=self.model,
             input_tokens=100,
             output_tokens=20,

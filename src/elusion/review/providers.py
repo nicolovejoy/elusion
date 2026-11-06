@@ -81,6 +81,28 @@ class Label(BaseModel):
 LABEL_SCHEMA = transform_schema(Label.model_json_schema())
 
 
+class Grade(BaseModel):
+    """The grader's answer: is the reviewer's rationale a sound reading, and why."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sound: bool = Field(description="True if the reviewer's rationale is a faithful reading")
+    rationale: str = Field(description="One sentence saying why")
+
+
+GRADE_SCHEMA = transform_schema(Grade.model_json_schema())
+
+
+def grader_message(paragraph: str, verdict: Verdict) -> str:
+    """The user turn for a grading call: the paragraph and one reviewer's answer, no label."""
+    return (
+        f"PARAGRAPH:\n{paragraph}\n\n"
+        f"REVIEWER SCORE: {verdict.score}\n"
+        f"REVIEWER RATIONALE: {verdict.rationale}\n"
+        f"REVIEWER QUOTE: {verdict.quote}"
+    )
+
+
 class ReviewError(Exception):
     """The API answered but gave no usable Verdict (or, for the judge, Label).
 
@@ -129,6 +151,17 @@ class Judgement:
     cache_read_input_tokens: int = 0
 
 
+@dataclass
+class Grading:
+    grade: Grade
+    model: str  # as served by the API, not as requested
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+
 # runtime_checkable: Prefect builds a pydantic schema from the flow signature, which
 # isinstance-checks parameters; a plain Protocol cannot be used with isinstance.
 @runtime_checkable
@@ -145,6 +178,14 @@ class Judge(Protocol):
     model: str
 
     def label(self, system: str, paragraph: str) -> Judgement: ...
+
+
+@runtime_checkable
+class Grader(Protocol):
+    name: str
+    model: str
+
+    def grade(self, system: str, paragraph: str, verdict: Verdict) -> Grading: ...
 
 
 _Out = TypeVar("_Out", bound=BaseModel)
@@ -166,6 +207,12 @@ class AnthropicProvider:
     def label(self, system: str, paragraph: str) -> Judgement:
         label, model, usage = self._call(system, paragraph, Label, LABEL_SCHEMA)
         return Judgement(label, model, **usage)
+
+    def grade(self, system: str, paragraph: str, verdict: Verdict) -> Grading:
+        grade, model, usage = self._call(
+            system, grader_message(paragraph, verdict), Grade, GRADE_SCHEMA
+        )
+        return Grading(grade, model, **usage)
 
     def _call(
         self, system: str, paragraph: str, out: type[_Out], schema: dict
