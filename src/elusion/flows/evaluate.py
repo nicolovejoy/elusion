@@ -375,7 +375,7 @@ def evaluate(
             grader_prompt_version=", ".join(
                 sorted({g.grader_prompt_version for g in grades.values()})
             ),
-            grade_cost_usd=grade_cost_usd(grade_runs_path(grades_csv)),
+            grade_cost_usd=grade_cost_usd(grade_runs_path(grades_csv), review_model, version),
         )
 
     report = RunReport(

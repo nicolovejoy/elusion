@@ -128,12 +128,22 @@ def append_grade_run(path: Path, record: dict) -> None:
         f.write(json.dumps(record) + "\n")
 
 
-def grade_cost_usd(path: Path) -> float:
-    """Total `cost_usd` over every grade run recorded in `path`; 0.0 if there is none."""
+def grade_cost_usd(
+    path: Path, review_model: str | None = None, review_prompt_version: str | None = None
+) -> float:
+    """Total `cost_usd` over the grade runs recorded in `path`; 0.0 if there is none.
+
+    With `review_model` and/or `review_prompt_version`, only runs whose ledger record
+    carries those exact values count, so a pair sees its own grading spend.
+    """
     if not path.is_file():
         return 0.0
+    want = {"review_model": review_model, "review_prompt_version": review_prompt_version}
     with path.open(encoding="utf-8") as f:
-        return sum(json.loads(line)["cost_usd"] for line in f if line.strip())
+        records = [json.loads(line) for line in f if line.strip()]
+    return sum(
+        r["cost_usd"] for r in records if all(v is None or r.get(k) == v for k, v in want.items())
+    )
 
 
 def quote_is_verbatim(quote: str, paragraph: str) -> bool:

@@ -106,3 +106,16 @@ def test_quote_is_verbatim():
     assert quote_is_verbatim("host substantially all of our services", para) is True
     assert quote_is_verbatim("", para) is False  # no quote is not a verbatim quote
     assert quote_is_verbatim("we run mostly on AWS", para) is False  # paraphrase
+
+
+def test_grade_cost_filters_by_pair(tmp_path):
+    ledger = grade_runs_path(tmp_path / "grades" / "c.csv")
+    a = {"review_model": "m1", "review_prompt_version": "c/v2"}
+    append_grade_run(ledger, {**a, "cost_usd": 0.25})
+    append_grade_run(ledger, {**a, "cost_usd": 0.5})
+    append_grade_run(ledger, {**a, "review_prompt_version": "c/v3", "cost_usd": 1.0})
+    append_grade_run(ledger, {**a, "review_model": "m2", "cost_usd": 2.0})
+    assert grade_cost_usd(ledger) == pytest.approx(3.75)
+    assert grade_cost_usd(ledger, "m1", "c/v2") == pytest.approx(0.75)
+    assert grade_cost_usd(ledger, "m2", "c/v2") == pytest.approx(2.0)
+    assert grade_cost_usd(ledger, "m3", "c/v2") == 0.0

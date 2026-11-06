@@ -321,7 +321,12 @@ def add_grades(tmp_path, grader=JUDGE):
         + [g("g00", 1, 1), g("f00", 0, 0, who="other"), g("f00", 0, 0, model="x")]
         + [g("f01", 0, 0, pv="c/v3")],
     )
-    append_grade_run(grade_runs_path(path), {"cost_usd": 0.25})
+    ledger = grade_runs_path(path)
+    pair = {"review_model": "rev-model", "review_prompt_version": "c/v2"}
+    append_grade_run(ledger, {**pair, "cost_usd": 0.25})
+    # other pairs' spend, same ledger: never counted for this pair
+    append_grade_run(ledger, {**pair, "review_prompt_version": "c/v3", "cost_usd": 4.0})
+    append_grade_run(ledger, {**pair, "review_model": "x", "cost_usd": 8.0})
 
 
 def test_report_has_rationale_quality_when_graded(env) -> None:
