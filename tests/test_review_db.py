@@ -148,6 +148,10 @@ def test_verdicts_for_returns_rows_at_or_above_min_score_as_verdicts() -> None:
     for s, i in ids.items():
         r = score_row(i, "v1", "anthropic", _review())
         rows.append({**r, "model": model, "score": s, "rationale": f"r{s}", "quote": f"q{s}"})
+    # qualifying scores without a usable rationale are skipped, not graded
+    for rationale in (None, ""):
+        r = score_row("v" + uuid.uuid4().hex[:15], "v1", "anthropic", _review())
+        rows.append({**r, "model": model, "score": 4, "rationale": rationale, "quote": "q"})
     try:
         insert_scores(engine, rows)
         got = verdicts_for(engine, model, "v1", min_score=2)

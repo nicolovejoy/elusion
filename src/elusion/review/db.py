@@ -145,11 +145,16 @@ def scores_for(engine: Engine, model: str, prompt_version: str) -> dict[str, int
 def verdicts_for(
     engine: Engine, model: str, prompt_version: str, min_score: int
 ) -> dict[str, Verdict]:
-    """Every doc under (model, prompt_version) scored >= min_score, as its full Verdict."""
+    """Every doc under (model, prompt_version) scored >= min_score, as its full Verdict.
+
+    Rows whose rationale is NULL or empty are left out: there is no reason to grade.
+    """
     stmt = sa.select(scores.c.doc_id, scores.c.score, scores.c.rationale, scores.c.quote).where(
         scores.c.model == model,
         scores.c.prompt_version == prompt_version,
         scores.c.score >= min_score,
+        scores.c.rationale.is_not(None),
+        scores.c.rationale != "",
     )
     with engine.connect() as conn:
         return {
