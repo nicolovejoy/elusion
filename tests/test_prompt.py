@@ -41,3 +41,13 @@ def test_missing_version_raises_naming_path() -> None:
 def test_missing_criterion_raises() -> None:
     with pytest.raises(FileNotFoundError, match="no-such-criterion"):
         load_prompt("no-such-criterion")
+
+
+def test_loads_v3_with_exact_version_string_and_gap_rules() -> None:
+    prompt = load_prompt("cloud-concentration", "v3")
+    assert prompt.version == "cloud-concentration/v3"
+    for field in ("score", "rationale", "quote"):
+        assert field in prompt.text
+    for phrase in ("SaaS", "ISP", "outsourc", "on-site"):
+        assert phrase in prompt.text
+    assert load_prompt("cloud-concentration", "v2").text != prompt.text
