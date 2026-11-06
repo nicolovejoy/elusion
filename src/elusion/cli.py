@@ -59,13 +59,18 @@ def review(
         ),
     ],
     batch_size: Annotated[int, typer.Option(help="Ids per batch (and per offset commit).")] = 50,
-    concurrency: Annotated[int, typer.Option(help="Parallel LLM calls per batch.")] = 8,
+    concurrency: Annotated[
+        int,
+        typer.Option(help="Parallel LLM calls per batch; 2 is sensible for a local ollama model."),
+    ] = 8,
     prompt_version: Annotated[str, typer.Option(help="Prompt file version.")] = "v1",
     max_run_usd: Annotated[
         float | None,
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
     ] = None,
-    provider: Annotated[str, typer.Option(help="Reviewer: anthropic or openai.")] = "anthropic",
+    provider: Annotated[
+        str, typer.Option(help="Reviewer: anthropic, openai or ollama.")
+    ] = "anthropic",
     model: Annotated[
         str | None,
         typer.Option(help="Pinned model id; default ELUSION_REVIEW_MODEL / ELUSION_OPENAI_MODEL."),

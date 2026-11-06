@@ -49,7 +49,11 @@ MAX_TOKENS = 1024
 EFFORT = "low"  # output_config effort for both review and judge calls
 # Generation settings per provider name (the `scores.provider` value). MLflow logs this dict:
 # evaluate only sees the provider name in the scores table, not a provider instance.
-GENERATION_SETTINGS: dict[str, dict] = {"anthropic": {"effort": EFFORT}, "openai": {}}
+GENERATION_SETTINGS: dict[str, dict] = {
+    "anthropic": {"effort": EFFORT},
+    "openai": {},
+    "ollama": {"temperature": 0.0},
+}
 REQUEST_TIMEOUT_S = 60.0
 MAX_RETRIES = 5  # the SDK retries 429/5xx with exponential backoff
 
@@ -219,4 +223,8 @@ def make_provider(provider: str, model: str | None = None) -> Provider:
         from elusion.review.openai_provider import OpenAIProvider
 
         return OpenAIProvider(model or settings.openai_model)
-    raise ValueError(f"unknown provider {provider!r}; expected anthropic or openai")
+    if provider == "ollama":
+        from elusion.review.openai_provider import OllamaProvider
+
+        return OllamaProvider(model or settings.ollama_model)
+    raise ValueError(f"unknown provider {provider!r}; expected anthropic, openai or ollama")

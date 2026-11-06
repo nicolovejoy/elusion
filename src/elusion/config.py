@@ -45,6 +45,11 @@ class Settings:
     # Pinned OpenAI review model (phase 4). See docs/DECISIONS.md for the id and its prices.
     openai_model: str = field(default_factory=lambda: _env("ELUSION_OPENAI_MODEL", "gpt-6-luna"))
 
+    # Local Ollama server and the model it serves (phase 4). Pinned by name:tag; the digest
+    # is recorded in docs/DECISIONS.md.
+    ollama_host: str = field(default_factory=lambda: _env("OLLAMA_HOST", "http://localhost:11434"))
+    ollama_model: str = field(default_factory=lambda: _env("ELUSION_OLLAMA_MODEL", "qwen2.5:14b"))
+
     # Pinned model snapshot id used for the judge pass that labels the gold set.
     judge_model: str = field(default_factory=lambda: _env("ELUSION_JUDGE_MODEL", "claude-opus-5-5"))
 

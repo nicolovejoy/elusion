@@ -37,3 +37,8 @@ def cost_usd(
         + cache_creation_input_tokens * p["cache_write"]
         + cache_read_input_tokens * p["cache_read"]
     ) / 1_000_000
+
+
+def register_free(model: str) -> None:
+    """Add an all-zero price row (a local model): cost_usd returns 0.0 instead of raising."""
+    PRICES.setdefault(model, {"input": 0.0, "output": 0.0, "cache_write": 0.0, "cache_read": 0.0})

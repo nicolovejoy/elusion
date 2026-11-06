@@ -31,7 +31,7 @@ from typing import TypeVar
 import openai
 from pydantic import BaseModel, ValidationError
 
-from elusion.review.pricing import cost_usd
+from elusion.review.pricing import cost_usd, register_free
 from elusion.review.providers import (
     MAX_RETRIES,
     MAX_TOKENS,
@@ -129,6 +129,95 @@ class OpenAIProvider:
             "output_tokens": out_tokens,
             # Priced by the pinned id, not the served one: if the API served a different
             # model, the flow's check_model_echo must be the one to stop the run.
+            "cost_usd": cost_usd(self.model, uncached, out_tokens, 0, cached),
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": cached,
+        }
+        return parsed, resp.model, usage
+
+
+class OllamaProvider(OpenAIProvider):
+    """A local model served by Ollama, called through its OpenAI-compatible endpoint.
+
+    Ollama is a local server that runs open-weight models; its `/v1` endpoint speaks the
+    OpenAI wire format, so the same `openai` SDK works with `base_url=f"{host}/v1"` and a
+    dummy api key. Ollama documents both `/v1/chat/completions` (with `response_format`,
+    `temperature`, `max_tokens`) and a non-stateful `/v1/responses`; we use chat completions
+    with a strict JSON-schema `response_format`, the better-trodden path:
+    https://docs.ollama.com/api/openai-compatibility and
+    https://docs.ollama.com/capabilities/structured-outputs
+
+    LIVE PROBE PENDING (Task 7): nothing here has run against a real Ollama yet. If the
+    endpoint rejects or ignores the json_schema `response_format`, switch to the native
+    `/api/chat` with `format=<schema>` over httpx (spec decision 5). A model that ignores
+    the schema and answers in prose is a counted ReviewError("invalid_json"), not a crash.
+
+    Cost is zero (the price is wall-clock and your Mac); Ollama has no prompt-cache buckets
+    we can see, so both cache counts are 0 unless the endpoint reports cached tokens.
+    """
+
+    name = "ollama"
+
+    def __init__(
+        self,
+        model: str,
+        host: str | None = None,
+        client: openai.OpenAI | None = None,
+        temperature: float = 0.0,
+    ) -> None:
+        from elusion.config import settings
+
+        register_free(model)
+        super().__init__(
+            model,
+            client=client,
+            api_key="ollama",  # required by the SDK, ignored by Ollama
+            base_url=f"{host or settings.ollama_host}/v1",
+            temperature=temperature,
+        )
+
+    def _call(
+        self, system: str, paragraph: str, out: type[_Out], name: str
+    ) -> tuple[_Out, str, dict]:
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": paragraph},
+            ],
+            max_tokens=MAX_TOKENS,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": name, "schema": out.model_json_schema(), "strict": True},
+            },
+            temperature=self.temperature,
+        )
+        u = resp.usage  # Optional in the SDK
+        if u is None:
+            cached = uncached = out_tokens = 0
+        else:
+            details = u.prompt_tokens_details
+            cached = (details.cached_tokens if details else None) or 0
+            uncached = u.prompt_tokens - cached
+            out_tokens = u.completion_tokens
+
+        def fail(stop_reason: str) -> ReviewError:
+            return ReviewError(stop_reason, resp.model, uncached, out_tokens, 0, cached)
+
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise fail("length")
+        if choice.message.refusal:
+            raise fail("refusal")
+        if u is None:
+            raise fail("missing_usage")
+        try:
+            parsed = out.model_validate(json.loads(choice.message.content or ""))
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise fail("invalid_json") from exc
+        usage = {
+            "input_tokens": uncached,
+            "output_tokens": out_tokens,
             "cost_usd": cost_usd(self.model, uncached, out_tokens, 0, cached),
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": cached,

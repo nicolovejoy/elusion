@@ -50,3 +50,12 @@ def test_openai_row_exists_and_cost_works_with_cache_write_zero():
     assert cost_usd(settings.openai_model, 1_000_000, 1_000_000, 0, 1_000_000) == pytest.approx(
         p["input"] + p["output"] + p["cache_read"]
     )
+
+
+def test_register_free_adds_zero_row():
+    from elusion.review.pricing import register_free
+
+    with pytest.raises(KeyError):
+        cost_usd("local:1b", 10, 10)
+    register_free("local:1b")
+    assert cost_usd("local:1b", 10, 10, 5, 5) == 0.0
