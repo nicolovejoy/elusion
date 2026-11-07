@@ -145,5 +145,14 @@ def resolve(reviewer: str, tracking_uri: str | None = None) -> Manifest:
     try:
         local = mlflow.artifacts.download_artifacts(artifact_uri=f"models:/{name}@{alias}")
     except MlflowException as exc:
-        raise LookupError(f"no alias {alias!r} on registered model {name!r}") from exc
+        # MLflow words a missing alias "Registered model alias X not found" (error code
+        # INVALID_PARAMETER_VALUE on a file store, RESOURCE_DOES_NOT_EXIST on a server), and
+        # a missing model "Registered Model with name=X not found". Anything else, such as an
+        # unreachable server, is not a lookup miss and propagates unchanged.
+        message = str(exc)
+        if "alias" in message and "not found" in message:
+            raise LookupError(f"no alias {alias!r} on registered model {name!r}") from exc
+        if exc.error_code == "RESOURCE_DOES_NOT_EXIST":
+            raise LookupError(f"no registered model {name!r}") from exc
+        raise
     return Manifest.from_json((Path(local) / "artifacts" / "manifest.json").read_text("utf-8"))

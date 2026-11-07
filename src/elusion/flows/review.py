@@ -203,7 +203,7 @@ def review(
             )
         from elusion.review import registry
 
-        manifest = registry.resolve(reviewer)
+        manifest = registry.resolve(reviewer, settings.mlflow_tracking_uri)
         if manifest.criterion != criterion:
             raise ValueError(
                 f"reviewer {reviewer!r} was built for criterion {manifest.criterion!r}, "

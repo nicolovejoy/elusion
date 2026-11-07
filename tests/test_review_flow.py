@@ -463,7 +463,10 @@ def test_reviewer_resolves_manifest_and_refuses_overrides(env, monkeypatch) -> N
     manifest = registry.Manifest(
         "ollama", "pinned-model", "cloud-concentration/v2", "cloud-concentration", 2, {}
     )
-    monkeypatch.setattr(registry, "resolve", lambda reviewer: manifest)
+    resolved_with = []
+    monkeypatch.setattr(
+        registry, "resolve", lambda reviewer, uri=None: resolved_with.append(uri) or manifest
+    )
     seen = {}
 
     def load(criterion, v="v1"):
@@ -484,6 +487,7 @@ def test_reviewer_resolves_manifest_and_refuses_overrides(env, monkeypatch) -> N
         reviewer="elusion-reviewer@champion",
         ids=ListIdSource(IDS),
     )
+    assert resolved_with == [settings.mlflow_tracking_uri]
     assert seen["load"] == ("cloud-concentration", "v2")
     assert seen["made"] == ("ollama", "pinned-model")
     assert get_job(engine, s.job_id)["model"] == "pinned-model"

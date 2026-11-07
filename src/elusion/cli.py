@@ -91,17 +91,22 @@ def review(
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
 
-    summary = review_flow(
-        criterion.stem,
-        sample,
-        batch_size=batch_size,
-        concurrency=concurrency,
-        prompt_version=prompt_version,
-        max_run_usd=max_run_usd,
-        provider_name=provider,
-        model=model,
-        reviewer=reviewer,
-    )
+    try:
+        summary = review_flow(
+            criterion.stem,
+            sample,
+            batch_size=batch_size,
+            concurrency=concurrency,
+            prompt_version=prompt_version,
+            max_run_usd=max_run_usd,
+            provider_name=provider,
+            model=model,
+            reviewer=reviewer,
+        )
+    except (LookupError, ValueError) as exc:
+        # Reviewer problems (bad NAME@ALIAS, missing alias, wrong criterion, flag clash).
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
     typer.echo(summary)
 
 

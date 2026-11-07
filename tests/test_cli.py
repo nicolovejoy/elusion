@@ -255,6 +255,21 @@ def test_review_reviewer_passes_through(monkeypatch) -> None:
     assert seen["reviewer"] == "elusion-reviewer@champion"
 
 
+def test_review_reviewer_errors_exit_1_without_traceback(monkeypatch) -> None:
+    import elusion.flows.review as mod
+
+    args = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
+    for exc in (LookupError("no alias 'x' on registered model 'm'"), ValueError("bad flags")):
+
+        def fail(criterion, sample, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(mod, "review", fail)
+        r = CliRunner().invoke(app, [*args, "--reviewer", "m@x"])
+        assert r.exit_code == 1 and str(exc) in r.output
+        assert "Traceback" not in r.output
+
+
 def test_promote_command_prints_version_alias_and_registry_url(monkeypatch) -> None:
     import elusion.review.registry as mod
 

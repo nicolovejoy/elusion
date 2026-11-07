@@ -4,6 +4,7 @@ from pathlib import Path
 
 import mlflow
 import pytest
+from mlflow.exceptions import MlflowException
 
 from elusion.review.providers import Verdict
 from elusion.review.registry import Manifest, ReviewerModel, log_reviewer, promote, resolve
@@ -52,6 +53,28 @@ def test_resolve_missing_alias_raises_lookup_error(uri, prompt) -> None:
     promote(_log(uri, prompt), tracking_uri=uri)
     with pytest.raises(LookupError, match="no alias 'challenger' on registered model"):
         resolve("elusion-reviewer@challenger", tracking_uri=uri)
+
+
+def test_resolve_missing_model_is_a_distinct_lookup_error(uri) -> None:
+    with pytest.raises(LookupError, match="no registered model 'ghost'"):
+        resolve("ghost@champion", tracking_uri=uri)
+
+
+def test_resolve_other_mlflow_failures_propagate_unchanged(uri, monkeypatch) -> None:
+    def down(artifact_uri):
+        raise MlflowException("connection refused", error_code="INTERNAL_ERROR")
+
+    monkeypatch.setattr(mlflow.artifacts, "download_artifacts", down)
+    with pytest.raises(MlflowException, match="connection refused"):
+        resolve("elusion-reviewer@champion", tracking_uri=uri)
+
+
+def test_promote_run_without_a_logged_reviewer_raises_lookup_error(uri) -> None:
+    mlflow.set_experiment("t")
+    with mlflow.start_run() as run:
+        pass
+    with pytest.raises(LookupError, match="has no logged 'reviewer' model"):
+        promote(run.info.run_id, tracking_uri=uri)
 
 
 def test_predict_uses_injected_provider_and_returns_frame() -> None:
