@@ -453,3 +453,45 @@ def test_real_openai_provider_served_drift_stops_before_storing(env) -> None:
     with engine.connect() as conn:
         n = conn.execute(sa.select(sa.func.count()).where(scores.c.prompt_version == version))
         assert n.scalar_one() == 0
+
+
+def test_reviewer_resolves_manifest_and_refuses_overrides(env, monkeypatch) -> None:
+    import elusion.review.registry as registry
+    from elusion.flows.review import review
+
+    engine, version = env
+    manifest = registry.Manifest(
+        "ollama", "pinned-model", "cloud-concentration/v2", "cloud-concentration", 2, {}
+    )
+    monkeypatch.setattr(registry, "resolve", lambda reviewer: manifest)
+    seen = {}
+
+    def load(criterion, v="v1"):
+        seen["load"] = (criterion, v)
+        return Prompt("system text", version)
+
+    import elusion.flows.review as mod
+
+    monkeypatch.setattr(mod, "load_prompt", load)
+    monkeypatch.setattr(
+        mod,
+        "make_provider",
+        lambda name, model=None: seen.update(made=(name, model)) or FakeProvider(model=model),
+    )
+    s = review(
+        "cloud-concentration",
+        sample=2,
+        reviewer="elusion-reviewer@champion",
+        ids=ListIdSource(IDS),
+    )
+    assert seen["load"] == ("cloud-concentration", "v2")
+    assert seen["made"] == ("ollama", "pinned-model")
+    assert get_job(engine, s.job_id)["model"] == "pinned-model"
+
+    for override in ({"provider_name": "openai"}, {"model": "m"}, {"prompt_version": "v1"}):
+        with pytest.raises(ValueError, match="--reviewer cannot be combined"):
+            review(
+                "cloud-concentration", sample=1, reviewer="elusion-reviewer@champion", **override
+            )
+    with pytest.raises(ValueError, match="built for criterion 'cloud-concentration'"):
+        review("other-criterion", sample=1, reviewer="elusion-reviewer@champion")

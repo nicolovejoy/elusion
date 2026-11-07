@@ -63,17 +63,26 @@ def review(
         int,
         typer.Option(help="Parallel LLM calls per batch; 2 is sensible for a local ollama model."),
     ] = 8,
-    prompt_version: Annotated[str, typer.Option(help="Prompt file version.")] = "v1",
+    prompt_version: Annotated[
+        str | None, typer.Option(help="Prompt file version; default v1.")
+    ] = None,
     max_run_usd: Annotated[
         float | None,
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
     ] = None,
     provider: Annotated[
-        str, typer.Option(help="Reviewer: anthropic, openai or ollama.")
-    ] = "anthropic",
+        str | None, typer.Option(help="Provider: anthropic (default), openai or ollama.")
+    ] = None,
     model: Annotated[
         str | None,
         typer.Option(help="Pinned model id; default ELUSION_REVIEW_MODEL / ELUSION_OPENAI_MODEL."),
+    ] = None,
+    reviewer: Annotated[
+        str | None,
+        typer.Option(
+            help="Registered reviewer NAME@ALIAS, e.g. elusion-reviewer@champion; it sets "
+            "provider, model and prompt version, so those flags must not be given."
+        ),
     ] = None,
 ) -> None:
     """Score up to SAMPLE paragraphs from the topic against a CRITERION."""
@@ -91,8 +100,29 @@ def review(
         max_run_usd=max_run_usd,
         provider_name=provider,
         model=model,
+        reviewer=reviewer,
     )
     typer.echo(summary)
+
+
+@app.command()
+def promote(
+    run: Annotated[str, typer.Option(help="MLflow run id whose reviewer to register.")],
+    name: Annotated[str, typer.Option(help="Registered model name.")] = "elusion-reviewer",
+    alias: Annotated[str, typer.Option(help="Alias to point at the new version.")] = "champion",
+) -> None:
+    """Register a run's reviewer as a new model version and alias it (default: champion)."""
+    from elusion.config import settings
+    from elusion.review.registry import REGISTRY_URL
+    from elusion.review.registry import promote as promote_run
+
+    try:
+        version = promote_run(run, name, alias, settings.mlflow_tracking_uri)
+    except LookupError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"{name} version {version} aliased {alias}")
+    typer.echo(f"{REGISTRY_URL}/{name}")
 
 
 # Mirrors evaluate.gold.DEFAULT_SEED; a literal so `elusion --help` does not import the

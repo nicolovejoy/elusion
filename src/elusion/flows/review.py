@@ -170,12 +170,13 @@ def review(
     sample: int,
     batch_size: int = 50,
     concurrency: int = 8,
-    prompt_version: str = "v1",
+    prompt_version: str | None = None,
     provider: Provider | None = None,
-    provider_name: str = "anthropic",
+    provider_name: str | None = None,
     model: str | None = None,
     ids: IdSource | None = None,
     max_run_usd: float | None = None,
+    reviewer: str | None = None,
 ) -> ReviewSummary:
     """Score up to `sample` ids from the topic against `criterion` (a criterion name).
 
@@ -186,12 +187,33 @@ def review(
     a verdict the flow raises RuntimeError. When BudgetExceeded is raised the probe
     batch's offsets stay uncommitted, and its scores are already in Postgres, so a
     re-run skips them.
+
+    `reviewer` is `<name>@<alias>` of a registered reviewer: its provider, pinned model and
+    prompt replace `provider_name`, `model` and `prompt_version`, which must then be left
+    unset (None means "not passed"; the defaults, anthropic and v1, apply only without a
+    reviewer).
     """
     log = get_run_logger()
     if max_run_usd is None:
         max_run_usd = settings.max_run_usd
-    prompt = load_prompt(criterion, prompt_version)
-    provider = provider or make_provider(provider_name, model)
+    if reviewer is not None:
+        if provider_name is not None or model is not None or prompt_version is not None:
+            raise ValueError(
+                "--reviewer cannot be combined with --provider, --model or --prompt-version"
+            )
+        from elusion.review import registry
+
+        manifest = registry.resolve(reviewer)
+        if manifest.criterion != criterion:
+            raise ValueError(
+                f"reviewer {reviewer!r} was built for criterion {manifest.criterion!r}, "
+                f"not {criterion!r}"
+            )
+        # The manifest holds the full pair key "<criterion>/<v>"; load_prompt wants the "<v>".
+        provider_name, model = manifest.provider, manifest.model
+        prompt_version = manifest.prompt_version.removeprefix(f"{criterion}/")
+    prompt = load_prompt(criterion, prompt_version or "v1")
+    provider = provider or make_provider(provider_name or "anthropic", model)
     engine = db.make_engine(settings.database_url)
     db.ensure_schema(engine)
     job_id = db.start_job(

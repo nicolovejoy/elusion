@@ -102,9 +102,16 @@ def log_run(
     artifacts: list[Path],
     tracking_uri: str,
     report_path: Path,
+    prompt_path: Path | None = None,
 ) -> str:
-    """Create one MLflow run for `report` and return its run id."""
+    """Create one MLflow run for `report` and return its run id.
+
+    With `prompt_path` (the review prompt file) the run also logs a registrable reviewer
+    model: the provider, pinned model and prompt, which `elusion promote` can register.
+    """
     import mlflow
+
+    from elusion.review.registry import Manifest, log_reviewer
 
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name(report.criterion))
@@ -114,4 +121,14 @@ def log_run(
         mlflow.log_metrics(run_metrics(report))
         for path in artifacts:
             mlflow.log_artifact(str(path))
+        if prompt_path is not None:
+            manifest = Manifest(
+                provider,
+                report.review_model,
+                report.prompt_version,
+                report.criterion,
+                report.threshold,
+                GENERATION_SETTINGS.get(provider, {}),
+            )
+            log_reviewer(manifest, prompt_path)
         return run.info.run_id

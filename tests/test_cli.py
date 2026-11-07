@@ -47,10 +47,11 @@ def test_review_command_passes_criterion_name(monkeypatch) -> None:
         "sample": 20,
         "batch_size": 10,
         "concurrency": 8,
-        "prompt_version": "v1",
+        "prompt_version": None,
         "max_run_usd": None,
-        "provider_name": "anthropic",
+        "provider_name": None,
         "model": None,
+        "reviewer": None,
     }
     assert "summary" in result.output
 
@@ -237,10 +238,42 @@ def test_review_provider_and_model_pass_through(monkeypatch) -> None:
     monkeypatch.setattr(mod, "review", lambda criterion, sample, **kw: seen.update(kw) or "ok")
     base = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
     assert CliRunner().invoke(app, base).exit_code == 0
-    assert (seen["provider_name"], seen["model"]) == ("anthropic", None)
+    assert (seen["provider_name"], seen["model"]) == (None, None)
     r = CliRunner().invoke(app, [*base, "--provider", "openai", "--model", "m"])
     assert r.exit_code == 0, r.output
     assert (seen["provider_name"], seen["model"]) == ("openai", "m")
+
+
+def test_review_reviewer_passes_through(monkeypatch) -> None:
+    import elusion.flows.review as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "review", lambda criterion, sample, **kw: seen.update(kw) or "ok")
+    args = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
+    r = CliRunner().invoke(app, [*args, "--reviewer", "elusion-reviewer@champion"])
+    assert r.exit_code == 0, r.output
+    assert seen["reviewer"] == "elusion-reviewer@champion"
+
+
+def test_promote_command_prints_version_alias_and_registry_url(monkeypatch) -> None:
+    import elusion.review.registry as mod
+
+    seen = {}
+
+    def fake_promote(run_id, name, alias, tracking_uri):
+        seen.update(run_id=run_id, name=name, alias=alias)
+        return 3
+
+    monkeypatch.setattr(mod, "promote", fake_promote)
+    r = CliRunner().invoke(app, ["promote", "--run", "abc123"])
+    assert r.exit_code == 0, r.output
+    assert seen == {"run_id": "abc123", "name": "elusion-reviewer", "alias": "champion"}
+    assert "elusion-reviewer version 3 aliased champion" in r.output
+    assert "http://localhost:5001/#/models/elusion-reviewer" in r.output
+    r = CliRunner().invoke(
+        app, ["promote", "--run", "abc123", "--name", "other", "--alias", "challenger"]
+    )
+    assert (seen["name"], seen["alias"]) == ("other", "challenger")
 
 
 def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:

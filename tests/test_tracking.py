@@ -109,3 +109,26 @@ def test_run_params_names_the_grader_only_when_graded():
     assert p["grader_prompt_version"] == "c/grade-v1"
     p = run_params(make_report(), "anthropic", Path("r.md"))
     assert "grader_model" not in p and "grader_prompt_version" not in p
+
+
+def test_log_run_with_prompt_path_logs_a_reviewer_model(report, tmp_path):
+    uri = f"file://{tmp_path}/mlruns"
+    prompt = tmp_path / "v2.md"
+    prompt.write_text("prompt")
+    run_id = log_run(report, "anthropic", [prompt], uri, Path("r.md"), prompt_path=prompt)
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    # MLflow 3 keeps a logged model beside the run, not under the run's artifacts.
+    run = client.get_run(run_id)
+    [model] = client.search_logged_models(experiment_ids=[run.info.experiment_id])
+    assert model.name == "reviewer" and model.source_run_id == run_id
+    local = Path(mlflow.artifacts.download_artifacts(artifact_uri=f"models:/{model.model_id}"))
+    assert (local / "MLmodel").is_file() and (local / "artifacts" / "manifest.json").is_file()
+    assert "reviewer" not in {a.path for a in client.list_artifacts(run_id)}
+
+
+def test_log_run_without_prompt_path_logs_no_model(report, tmp_path):
+    uri = f"file://{tmp_path}/mlruns"
+    run_id = log_run(report, "anthropic", [], uri, Path("r.md"))
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    experiment_id = client.get_run(run_id).info.experiment_id
+    assert not client.search_logged_models(experiment_ids=[experiment_id])

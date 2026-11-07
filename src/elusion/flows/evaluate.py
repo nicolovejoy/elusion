@@ -408,9 +408,10 @@ def evaluate(
     if not log_mlflow:
         return EvalResult(path, None)
     provider = provider_for(engine, review_model, version) or "unknown"
+    prompt_path = PROMPTS_DIR / criterion / f"{prompt_version}.md"
     artifacts = [
         path,
-        PROMPTS_DIR / criterion / f"{prompt_version}.md",
+        prompt_path,
         Path("criteria") / f"{criterion}.md",
     ]
     try:
@@ -420,6 +421,7 @@ def evaluate(
             [a for a in artifacts if a.is_file()],
             settings.mlflow_tracking_uri,
             path,
+            prompt_path=prompt_path if prompt_path.is_file() else None,
         )
     except Exception as exc:
         raise RuntimeError(f"report written to {path}, but MLflow logging failed: {exc}") from exc
