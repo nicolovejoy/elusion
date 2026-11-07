@@ -65,13 +65,13 @@ Rationale soundness against the judge's label, over the flagged paragraphs:
 ## Cost
 
 - review run: $0.0000 (sum over 2 review_jobs rows)
-- judge run: $2.4135 (sum over the judge-runs ledger)
-- grade run: $0.2522 (sum over the grade-runs ledger)
+- judge run: $2.4135 (whole criterion, every review pair: judge-runs ledger)
+- grade run: $0.2522 (this review pair: grade-runs ledger)
 - total: $2.6657
 
 ## Wall-clock
 
-- review run, first start to last finish across 2 review_jobs rows: 12:14:37
+- review run, summed over 2 review_jobs rows (each from its start to its finish): 10:44:28
 
 ## Companies found
 

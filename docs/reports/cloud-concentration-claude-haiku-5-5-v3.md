@@ -6,7 +6,7 @@
 - judge model: claude-opus-5-5
 - judge prompt version: cloud-concentration/judge-v1
 - judge effort: low
-- date: 2026-11-06
+- date: 2026-11-07
 - seed: 20261104
 
 ## Population
@@ -65,13 +65,13 @@ Rationale soundness against the judge's label, over the flagged paragraphs:
 ## Cost
 
 - review run: $1.3921 (sum over 1 review_jobs rows)
-- judge run: $2.0698 (sum over the judge-runs ledger)
-- grade run: $0.2533 (sum over the grade-runs ledger)
-- total: $3.7152
+- judge run: $2.4135 (whole criterion, every review pair: judge-runs ledger)
+- grade run: $0.2533 (this review pair: grade-runs ledger)
+- total: $4.0589
 
 ## Wall-clock
 
-- review run, first start to last finish across 1 review_jobs rows: 0:39:59
+- review run, summed over 1 review_jobs rows (each from its start to its finish): 0:39:59
 
 ## Companies found
 
