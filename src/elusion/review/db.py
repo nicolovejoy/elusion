@@ -238,8 +238,13 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
 
     Returns jobs (row count), cost_usd (sum), started_at (earliest start), finished_at
     (latest finish, None if none finished), unfinished (some row has no finished_at)
-    and unfinished_ids (those rows' job ids, sorted: a running job, or a killed one).
-    A crashed and resumed review is several rows, so cost and wall-clock span them all.
+    and unfinished_ids (those rows' job ids, sorted: a running job, or a killed one),
+    and busy_s: each row's own duration summed, a row with no finish counted up to now.
+    A crashed and resumed review is several rows, so cost and busy time cover them all.
+    Busy time, not the first-start-to-last-finish span: a failed start or a probe hours
+    before the main run would otherwise count the idle gap between rows as review time.
+    Rows of one pair do not overlap in practice (one consumer group), so nothing is
+    counted twice.
     """
     j = review_jobs.c
     stmt = sa.select(
@@ -248,9 +253,15 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
         sa.func.min(j.started_at),
         sa.func.max(j.finished_at),
         sa.func.count() - sa.func.count(j.finished_at),
+        sa.func.coalesce(
+            sa.func.sum(
+                sa.extract("epoch", sa.func.coalesce(j.finished_at, sa.func.now()) - j.started_at)
+            ),
+            0,
+        ),
     ).where(j.model == model, j.prompt_version == prompt_version)
     with engine.connect() as conn:
-        jobs, cost, started, finished, unfinished = conn.execute(stmt).one()
+        jobs, cost, started, finished, unfinished, busy = conn.execute(stmt).one()
         open_ids = conn.execute(
             sa.select(j.job_id)
             .where(j.model == model, j.prompt_version == prompt_version, j.finished_at.is_(None))
@@ -264,6 +275,7 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
         "finished_at": finished,
         "unfinished": unfinished > 0,
         "unfinished_ids": open_ids,
+        "busy_s": float(busy),
     }
 
 

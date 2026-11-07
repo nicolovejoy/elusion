@@ -66,6 +66,7 @@ def env(monkeypatch, tmp_path):
             "finished_at": T0 + timedelta(hours=1, minutes=2, seconds=3),
             "unfinished": False,
             "unfinished_ids": [],
+            "busy_s": 3600.0,  # less than the 1:02:03 span: a gap between the two jobs
         }
 
     def fake_company_counts(engine, doc_ids):
@@ -133,7 +134,7 @@ def test_writes_the_report_and_returns_its_path(env) -> None:
     assert "- seed: 20261104" in md and "- date: 2026-11-04" in md
     assert "$0.7500 (sum over 2 review_jobs rows)" in md
     assert "- judge run: $0.7500" in md
-    assert "across 2 review_jobs rows: 1:02:03" in md
+    assert "summed over 2 review_jobs rows (each from its start to its finish): 1:00:00" in md
     assert "- Acme Corp: 3" in md
     assert "-1/" not in md and "corpus" not in md
 
@@ -200,6 +201,7 @@ def test_warns_but_writes_the_report_while_a_review_job_is_unfinished(
             "finished_at": None,
             "unfinished": True,
             "unfinished_ids": ["job-abc"],
+            "busy_s": 60.0,
         },
     )
     path = run(tmp_path)

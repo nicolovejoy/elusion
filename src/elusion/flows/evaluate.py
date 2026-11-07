@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from prefect import flow, get_run_logger, task
@@ -349,10 +349,7 @@ def evaluate(
     shared = [h for h in humans if h.doc_id in judged]
     agreement = metrics.agreement(shared, list(judged.values())) if shared else None
 
-    wall_clock = None
-    if jobs["jobs"]:
-        end = datetime.now(UTC) if jobs["unfinished"] else jobs["finished_at"]
-        wall_clock = end - jobs["started_at"]
+    wall_clock = timedelta(seconds=jobs["busy_s"]) if jobs["jobs"] else None
     relevant = [r.doc_id for r in flagged_rows if r.label == 1]
 
     # Rationale grades for the pair's flagged docs by the same model that judged. They

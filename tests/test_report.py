@@ -79,7 +79,9 @@ def test_render_says_population_not_corpus() -> None:
 def test_render_cost_wall_clock_and_companies() -> None:
     md = render(make_report())
     assert "$0.8340" in md and "$1.2300" in md and "$2.0640" in md
-    assert "first start to last finish across 2 review_jobs rows: 0:45:12" in md
+    assert "summed over 2 review_jobs rows (each from its start to its finish): 0:45:12" in md
+    assert "judge run: $1.2300 (whole criterion, every review pair: judge-runs ledger)" in md
+    assert "(this review pair: grade-runs ledger)" in md
     assert "- Acme Corp: 5\n- Beta Inc: 2" in md
 
 
@@ -92,7 +94,7 @@ def test_render_without_human_labels_jobs_or_companies() -> None:
 
 def test_render_marks_an_unfinished_review() -> None:
     md = render(make_report(review_unfinished=True))
-    assert "to now" in md
+    assert "or to now for one still running" in md
 
 
 def test_render_states_judge_effort() -> None:

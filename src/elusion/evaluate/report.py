@@ -41,7 +41,7 @@ class RunReport:
     review_cost_usd: float
     judge_cost_usd: float
     review_jobs: int  # review_jobs rows for the pair
-    review_wall_clock: timedelta | None  # None when there are no review_jobs rows
+    review_wall_clock: timedelta | None  # review_jobs durations summed; None if no rows
     review_unfinished: bool  # a job has no finished_at: wall-clock runs to now
     companies: list[tuple[str, int]]
     # Rationale grades; all None/0 until `elusion grade` has run for the pair.
@@ -149,8 +149,9 @@ def render(r: RunReport) -> str:
         "## Cost",
         "",
         f"- review run: ${r.review_cost_usd:.4f} (sum over {r.review_jobs} review_jobs rows)",
-        f"- judge run: ${r.judge_cost_usd:.4f} (sum over the judge-runs ledger)",
-        f"- grade run: ${r.grade_cost_usd:.4f} (sum over the grade-runs ledger)",
+        f"- judge run: ${r.judge_cost_usd:.4f} "
+        "(whole criterion, every review pair: judge-runs ledger)",
+        f"- grade run: ${r.grade_cost_usd:.4f} (this review pair: grade-runs ledger)",
         f"- total: ${total:.4f}",
         "",
         "## Wall-clock",
@@ -159,9 +160,11 @@ def render(r: RunReport) -> str:
     if r.review_wall_clock is None:
         lines.append("- review run: no review_jobs rows for this model and prompt version")
     else:
-        end = "now (a job has not finished)" if r.review_unfinished else "last finish"
+        each = "each from its start to its finish"
+        if r.review_unfinished:
+            each += ", or to now for one still running"
         lines.append(
-            f"- review run, first start to {end} across {r.review_jobs} review_jobs rows: "
+            f"- review run, summed over {r.review_jobs} review_jobs rows ({each}): "
             f"{_duration(r.review_wall_clock)}"
         )
     lines += [
