@@ -28,6 +28,7 @@ always describes the scores as they stand.
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -246,6 +247,9 @@ def judge(
             "cost_usd": summary.cost_usd,
             "model": provider.model,
             "prompt_version": prompt.version,
+            # The review pair this run was for. Older records lack these two fields.
+            "review_model": review_model,
+            "review_prompt_version": f"{criterion}/{prompt_version}",
             "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         try:
@@ -273,7 +277,9 @@ class EvalResult:
 
 
 def report_path(reports_dir: Path, criterion: str, model: str, prompt_version: str) -> Path:
-    return reports_dir / f"{criterion}-{model}-{prompt_version.replace('/', '-')}.md"
+    # Windows rejects < > : " / \ | ? * in a filename; an Ollama tag like qwen2.5:14b has a colon.
+    name = re.sub(r'[<>:"/\\|?*]', "-", f"{criterion}-{model}-{prompt_version}")
+    return reports_dir / f"{name}.md"
 
 
 def report_date(now: datetime) -> str:
@@ -404,7 +410,7 @@ def evaluate(
         recall=metrics.recall(precision, elusion, n_flagged, n_discard),
         agreement=agreement,
         review_cost_usd=jobs["cost_usd"],
-        judge_cost_usd=judge_cost_usd(judge_runs_path(csv)),
+        judge_cost_criterion_usd=judge_cost_usd(judge_runs_path(csv)),
         review_jobs=jobs["jobs"],
         review_wall_clock=wall_clock,
         review_unfinished=jobs["unfinished"],

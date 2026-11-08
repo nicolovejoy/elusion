@@ -344,7 +344,7 @@ def test_report_has_rationale_quality_when_graded(env) -> None:
     assert "- unsound and relevant: 1" in md
     assert "- unsound and not relevant: 1" in md
     assert "- grade run: $0.2500" in md
-    assert "- total: $1.7500" in md  # 0.75 review + 0.75 judge + 0.25 grade
+    assert "- total for this pair (review + grade): $1.0000" in md  # 0.75 + 0.25; no judge
 
 
 def test_report_without_grades_says_so(env) -> None:
@@ -407,3 +407,13 @@ def test_report_date_is_the_pacific_calendar_day() -> None:
 
     assert report_date(datetime(2026, 11, 8, 0, 38, tzinfo=UTC)) == "2026-11-07"
     assert report_date(datetime(2026, 11, 8, 9, 0, tzinfo=UTC)) == "2026-11-08"
+
+
+def test_report_path_has_no_character_windows_rejects(tmp_path) -> None:
+    """`:` in an Ollama tag broke a Windows checkout of the committed report."""
+    from elusion.flows.evaluate import report_path
+
+    got = report_path(tmp_path, "cloud-concentration", "qwen2.5:14b", "v2")
+    assert got.name == "cloud-concentration-qwen2.5-14b-v2.md"
+    bad = report_path(tmp_path, "c", 'a<b>c:d"e/f\\g|h?i*j', "x/y")
+    assert bad.name == "c-a-b-c-d-e-f-g-h-i-j-x-y.md"

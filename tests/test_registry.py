@@ -7,7 +7,15 @@ import pytest
 from mlflow.exceptions import MlflowException
 
 from elusion.review.providers import Verdict
-from elusion.review.registry import Manifest, ReviewerModel, log_reviewer, promote, resolve
+from elusion.review.registry import (
+    Manifest,
+    ReviewerError,
+    ReviewerModel,
+    log_reviewer,
+    promote,
+    registry_url,
+    resolve,
+)
 from tests.fakes import FakeProvider
 
 MANIFEST = Manifest("anthropic", "claude-x-1", "c/v2", "c", 2, {"effort": "low"})
@@ -51,12 +59,12 @@ def test_log_promote_resolve_round_trip(uri, prompt) -> None:
 
 def test_resolve_missing_alias_raises_lookup_error(uri, prompt) -> None:
     promote(_log(uri, prompt), tracking_uri=uri)
-    with pytest.raises(LookupError, match="no alias 'challenger' on registered model"):
+    with pytest.raises(ReviewerError, match="no alias 'challenger' on registered model"):
         resolve("elusion-reviewer@challenger", tracking_uri=uri)
 
 
 def test_resolve_missing_model_is_a_distinct_lookup_error(uri) -> None:
-    with pytest.raises(LookupError, match="no registered model 'ghost'"):
+    with pytest.raises(ReviewerError, match="no registered model 'ghost'"):
         resolve("ghost@champion", tracking_uri=uri)
 
 
@@ -69,11 +77,11 @@ def test_resolve_other_mlflow_failures_propagate_unchanged(uri, monkeypatch) -> 
         resolve("elusion-reviewer@champion", tracking_uri=uri)
 
 
-def test_promote_run_without_a_logged_reviewer_raises_lookup_error(uri) -> None:
+def test_promote_run_without_a_logged_reviewer_raises_reviewer_error(uri) -> None:
     mlflow.set_experiment("t")
     with mlflow.start_run() as run:
         pass
-    with pytest.raises(LookupError, match="has no logged 'reviewer' model"):
+    with pytest.raises(ReviewerError, match="has no logged 'reviewer' model"):
         promote(run.info.run_id, tracking_uri=uri)
 
 
@@ -96,3 +104,22 @@ def test_logged_model_artifacts_contain_no_gold_or_grades(uri, prompt) -> None:
     names = sorted(str(p.relative_to(local)) for p in local.rglob("*") if p.is_file())
     assert "artifacts/manifest.json" in names and "artifacts/v2.md" in names
     assert not [n for n in names if "gold" in n or "grades" in n]
+
+
+def test_promote_unknown_run_id_is_a_reviewer_error(uri) -> None:
+    with pytest.raises(ReviewerError, match="no run 'deadbeef'"):
+        promote("deadbeef", tracking_uri=uri)
+
+
+def test_promote_other_mlflow_failures_propagate_unchanged(uri, monkeypatch) -> None:
+    def down(self, run_id):
+        raise MlflowException("connection refused", error_code="INTERNAL_ERROR")
+
+    monkeypatch.setattr(mlflow.MlflowClient, "get_run", down)
+    with pytest.raises(MlflowException, match="connection refused"):
+        promote("abc", tracking_uri=uri)
+
+
+def test_registry_url_follows_the_tracking_uri() -> None:
+    assert registry_url("http://mlflow.example:9/") == "http://mlflow.example:9/#/models"
+    assert registry_url("http://localhost:5001") == "http://localhost:5001/#/models"

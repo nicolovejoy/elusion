@@ -33,7 +33,19 @@ from elusion.review.providers import make_provider
 DEFAULT_NAME = "elusion-reviewer"
 DEFAULT_ALIAS = "champion"
 MODEL_PATH = "reviewer"
-REGISTRY_URL = "http://localhost:5001/#/models"
+
+
+class ReviewerError(ValueError):
+    """The owner named a reviewer that cannot be used: bad alias, missing run, flag clash.
+
+    The CLI turns this (and only this, plus ProviderConfigError) into a one-line error;
+    any other exception is a bug and keeps its traceback.
+    """
+
+
+def registry_url(tracking_uri: str) -> str:
+    """Where the MLflow UI lists registered models, for the configured tracking server."""
+    return f"{tracking_uri.rstrip('/')}/#/models"
 
 
 @dataclass(frozen=True)
@@ -103,6 +115,8 @@ def log_reviewer(manifest: Manifest, prompt_path: Path) -> None:
             name=MODEL_PATH,
             python_model=ReviewerModel(),
             artifacts={"manifest": str(manifest_path), "prompt": str(prompt_path)},
+            # The model is loaded in this checkout only; elusion is not published on PyPI, so
+            # this entry is a label, not something `mlflow models serve` could install.
             pip_requirements=["elusion"],
         )
 
@@ -120,7 +134,13 @@ def promote(
     client = mlflow.MlflowClient()
     # MLflow 3 stores a logged model apart from the run's artifacts, so `runs:/<id>/reviewer`
     # only works through a warned fallback. Find the logged model by its source run instead.
-    experiment_id = client.get_run(run_id).info.experiment_id
+    try:
+        experiment_id = client.get_run(run_id).info.experiment_id
+    except MlflowException as exc:
+        # A server says RESOURCE_DOES_NOT_EXIST; a file store words it "Run 'x' not found".
+        if exc.error_code == "RESOURCE_DOES_NOT_EXIST" or "not found" in str(exc):
+            raise ReviewerError(f"no run {run_id!r} in the tracking store") from exc
+        raise
     found = client.search_logged_models(
         experiment_ids=[experiment_id],
         filter_string=f"source_run_id = '{run_id}' AND name = '{MODEL_PATH}'",
@@ -128,7 +148,7 @@ def promote(
         max_results=1,
     )
     if not found:
-        raise LookupError(f"run {run_id} has no logged {MODEL_PATH!r} model")
+        raise ReviewerError(f"run {run_id} has no logged {MODEL_PATH!r} model")
     version = mlflow.register_model(f"models:/{found[0].model_id}", name)
     client.set_registered_model_alias(name, alias, version.version)
     return int(version.version)
@@ -138,7 +158,7 @@ def resolve(reviewer: str, tracking_uri: str | None = None) -> Manifest:
     """Read the manifest of the version `<name>@<alias>` points at."""
     name, sep, alias = reviewer.partition("@")
     if not sep or not name or not alias:
-        raise ValueError(f"--reviewer expects <name>@<alias>, got {reviewer!r}")
+        raise ReviewerError(f"--reviewer expects <name>@<alias>, got {reviewer!r}")
     if tracking_uri:
         mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_registry_uri(tracking_uri)
@@ -151,8 +171,8 @@ def resolve(reviewer: str, tracking_uri: str | None = None) -> Manifest:
         # unreachable server, is not a lookup miss and propagates unchanged.
         message = str(exc)
         if "alias" in message and "not found" in message:
-            raise LookupError(f"no alias {alias!r} on registered model {name!r}") from exc
+            raise ReviewerError(f"no alias {alias!r} on registered model {name!r}") from exc
         if exc.error_code == "RESOURCE_DOES_NOT_EXIST":
-            raise LookupError(f"no registered model {name!r}") from exc
+            raise ReviewerError(f"no registered model {name!r}") from exc
         raise
     return Manifest.from_json((Path(local) / "artifacts" / "manifest.json").read_text("utf-8"))

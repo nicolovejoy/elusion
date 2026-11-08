@@ -24,7 +24,7 @@ def make_report(**kw) -> RunReport:
         recall=Estimate(0.83, 0.41, 0.97, -1, 12906),
         agreement=Estimate(0.9, 0.683, 0.988, 18, 20),
         review_cost_usd=0.834,
-        judge_cost_usd=1.23,
+        judge_cost_criterion_usd=1.23,
         review_jobs=2,
         review_wall_clock=timedelta(minutes=45, seconds=12, microseconds=7),
         review_unfinished=False,
@@ -78,7 +78,9 @@ def test_render_says_population_not_corpus() -> None:
 
 def test_render_cost_wall_clock_and_companies() -> None:
     md = render(make_report())
-    assert "$0.8340" in md and "$1.2300" in md and "$2.0640" in md
+    assert "$0.8340" in md and "$1.2300" in md and "$2.0640" not in md
+    assert "- total for this pair (review + grade): $0.8340" in md
+    assert md.index("judge run:") < md.index("total for this pair")
     assert "summed over 2 review_jobs rows (each from its start to its finish): 0:45:12" in md
     assert "judge run: $1.2300 (whole criterion, every review pair: judge-runs ledger)" in md
     assert "(this review pair: grade-runs ledger)" in md
@@ -150,4 +152,4 @@ def test_render_without_grades_says_so() -> None:
 def test_render_cost_includes_the_grade_run() -> None:
     md = render(make_report(**GRADED))
     assert "- grade run: $0.2500" in md
-    assert f"- total: ${0.834 + 1.23 + 0.25:.4f}" in md
+    assert f"- total for this pair (review + grade): ${0.834 + 0.25:.4f}" in md

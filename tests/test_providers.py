@@ -57,7 +57,7 @@ USAGE = dict(
 )
 
 
-def stub_create(monkeypatch, text, stop_reason="end_turn", usage=None, seen=None):
+def stub_create(monkeypatch, text, stop_reason="end_turn", usage=None, seen=None, served=None):
     client = anthropic.Anthropic(api_key="test")
 
     def fake_create(**kwargs):
@@ -66,7 +66,7 @@ def stub_create(monkeypatch, text, stop_reason="end_turn", usage=None, seen=None
         return SimpleNamespace(
             content=[SimpleNamespace(type="text", text=text)],
             stop_reason=stop_reason,
-            model="claude-haiku-5-5",
+            model=served or "claude-haiku-5-5",
             usage=SimpleNamespace(**(usage or USAGE)),
         )
 
@@ -258,3 +258,14 @@ def test_grade_unusable_answers_raise_review_error(monkeypatch, text, stop_reaso
         provider.grade("s", "p", Verdict(score=0, rationale="r", quote=""))
     assert exc.value.stop_reason == expected
     assert (exc.value.input_tokens, exc.value.output_tokens) == (10, 20)
+
+
+def test_anthropic_prices_by_the_pinned_id_so_drift_reaches_the_echo_check(monkeypatch):
+    """A served id with no price must not KeyError inside the call: the flow's check_model_echo
+    owns that message."""
+    verdict = Verdict(score=2, rationale="r", quote="q")
+    provider = stub_create(
+        monkeypatch, verdict.model_dump_json(), served="claude-haiku-5-5-20990101"
+    )
+    r = provider.review("s", "p")
+    assert r.model == "claude-haiku-5-5-20990101" and r.cost_usd > 0

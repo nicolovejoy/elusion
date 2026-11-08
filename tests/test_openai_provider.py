@@ -251,3 +251,34 @@ def test_make_provider_ollama_defaults_to_settings_model(monkeypatch):
     p = make_provider("ollama")
     assert p.name == "ollama" and p.model == settings.ollama_model
     assert make_provider("ollama", "x:1b").model == "x:1b"
+
+
+def test_make_provider_openai_without_a_key_is_a_clean_value_error(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="OPENAI_API_KEY is not set; run with op run"):
+        make_provider("openai", MODEL)
+
+
+@pytest.mark.parametrize(
+    "host, base_url",
+    [
+        ("127.0.0.1:11434", "http://127.0.0.1:11434/v1"),
+        ("0.0.0.0:11434", "http://0.0.0.0:11434/v1"),
+        ("http://h:1/", "http://h:1/v1"),
+        ("https://h:1", "https://h:1/v1"),
+    ],
+)
+def test_ollama_host_is_normalized(monkeypatch, host, base_url):
+    """Ollama's own server accepts a scheme-less OLLAMA_HOST; httpx does not."""
+    from elusion.review import openai_provider
+    from elusion.review.openai_provider import OllamaProvider
+
+    seen: dict = {}
+
+    class Spy:
+        def __init__(self, **kw) -> None:
+            seen.update(kw)
+
+    monkeypatch.setattr(openai_provider.openai, "OpenAI", Spy)
+    OllamaProvider(OLLAMA_MODEL, host=host)
+    assert seen["base_url"] == base_url

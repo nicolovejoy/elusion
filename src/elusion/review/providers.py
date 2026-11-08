@@ -251,13 +251,19 @@ class AnthropicProvider:
         usage = {
             "input_tokens": u.input_tokens,
             "output_tokens": u.output_tokens,
+            # Priced by the pinned id: a drifted served id then reaches check_model_echo's
+            # message instead of a KeyError from the price table.
             "cost_usd": cost_usd(
-                resp.model, u.input_tokens, u.output_tokens, cache_write, cache_read
+                self.model, u.input_tokens, u.output_tokens, cache_write, cache_read
             ),
             "cache_creation_input_tokens": cache_write,
             "cache_read_input_tokens": cache_read,
         }
         return parsed, resp.model, usage
+
+
+class ProviderConfigError(ValueError):
+    """A provider cannot be built from the owner's input or environment (name, key)."""
 
 
 def make_provider(provider: str, model: str | None = None) -> Provider:
@@ -267,11 +273,19 @@ def make_provider(provider: str, model: str | None = None) -> Provider:
     if provider == "anthropic":
         return AnthropicProvider(model or settings.review_model)
     if provider == "openai":
+        import os
+
         from elusion.review.openai_provider import OpenAIProvider
 
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise ProviderConfigError(
+                "OPENAI_API_KEY is not set; run with op run --env-file=.env.tpl --"
+            )
         return OpenAIProvider(model or settings.openai_model)
     if provider == "ollama":
         from elusion.review.openai_provider import OllamaProvider
 
         return OllamaProvider(model or settings.ollama_model)
-    raise ValueError(f"unknown provider {provider!r}; expected anthropic, openai or ollama")
+    raise ProviderConfigError(
+        f"unknown provider {provider!r}; expected anthropic, openai or ollama"
+    )

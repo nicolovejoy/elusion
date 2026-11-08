@@ -34,7 +34,8 @@ def test_run_metrics_has_point_low_high_k_n_for_each_estimate(report):
             f"{name}_n",
         } <= m.keys()
     assert m["recall_k"] == -1
-    assert m["total_cost_usd"] == pytest.approx(report.review_cost_usd + report.judge_cost_usd)
+    assert m["total_cost_usd"] == pytest.approx(report.review_cost_usd)
+    assert m["judge_cost_criterion_usd"] == 1.23 and "judge_cost_usd" not in m
     assert m["cost_per_1000_docs_usd"] == pytest.approx(
         report.review_cost_usd / report.population * 1000
     )
@@ -90,13 +91,23 @@ def test_run_metrics_adds_rationale_estimates_and_grade_cost_when_graded():
         assert {f"{name}_{s}" for s in ("point", "low", "high", "k", "n")} <= m.keys()
     assert m["rationale_sound_k"] == 2.0 and m["quote_verbatim_n"] == 4.0
     assert m["grade_cost_usd"] == 0.25
-    assert m["total_cost_usd"] == pytest.approx(0.834 + 1.23 + 0.25)
+    assert m["total_cost_usd"] == pytest.approx(0.834 + 0.25)
 
 
 def test_run_metrics_skips_grade_metrics_when_ungraded(report):
     m = run_metrics(report)
     assert not [k for k in m if k.startswith(("rationale_sound", "quote_verbatim", "grade"))]
-    assert m["total_cost_usd"] == pytest.approx(report.review_cost_usd + report.judge_cost_usd)
+    assert m["total_cost_usd"] == pytest.approx(report.review_cost_usd)
+
+
+def test_run_params_records_the_ollama_digest_only_for_ollama(report):
+    from elusion.config import settings
+
+    p = run_params(report, "ollama", Path("r.md"))
+    assert p["model_digest"] == settings.ollama_digest
+    assert settings.ollama_digest.startswith("sha256:7cdf5a01")
+    assert "model_digest" not in run_params(report, "anthropic", Path("r.md"))
+    assert "model_digest" not in run_params(report, "openai", Path("r.md"))
 
 
 def test_run_params_names_the_grader_only_when_graded():

@@ -197,15 +197,16 @@ def review(
     if max_run_usd is None:
         max_run_usd = settings.max_run_usd
     if reviewer is not None:
+        from elusion.review import registry
+        from elusion.review.registry import ReviewerError
+
         if provider_name is not None or model is not None or prompt_version is not None:
-            raise ValueError(
+            raise ReviewerError(
                 "--reviewer cannot be combined with --provider, --model or --prompt-version"
             )
-        from elusion.review import registry
-
         manifest = registry.resolve(reviewer, settings.mlflow_tracking_uri)
         if manifest.criterion != criterion:
-            raise ValueError(
+            raise ReviewerError(
                 f"reviewer {reviewer!r} was built for criterion {manifest.criterion!r}, "
                 f"not {criterion!r}"
             )
@@ -214,6 +215,12 @@ def review(
         prompt_version = manifest.prompt_version.removeprefix(f"{criterion}/")
     prompt = load_prompt(criterion, prompt_version or "v1")
     provider = provider or make_provider(provider_name or "anthropic", model)
+    if provider.model == settings.judge_model:
+        # The judge labels the gold set the reviewers are scored against; it must not also be
+        # one of them.
+        raise ValueError(
+            f"the judge model cannot be a reviewer: {provider.model!r} is ELUSION_JUDGE_MODEL"
+        )
     engine = db.make_engine(settings.database_url)
     db.ensure_schema(engine)
     job_id = db.start_job(

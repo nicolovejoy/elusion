@@ -147,9 +147,9 @@ class OllamaProvider(OpenAIProvider):
     https://docs.ollama.com/api/openai-compatibility and
     https://docs.ollama.com/capabilities/structured-outputs
 
-    LIVE PROBE PENDING (Task 7): nothing here has run against a real Ollama yet. If the
-    endpoint rejects or ignores the json_schema `response_format`, switch to the native
-    `/api/chat` with `format=<schema>` over httpx (spec decision 5). A model that ignores
+    Live probe passed: a 50-doc probe and the full 17,936-doc run (2026-11-06/07) went
+    through chat completions with `json_schema` and 0 failures, so the native `/api/chat`
+    fallback (spec decision 5) was not needed. A model that ignores
     the schema and answers in prose is a counted ReviewError("invalid_json"), not a crash.
 
     Cost is zero (the price is wall-clock and your Mac); Ollama has no prompt-cache buckets
@@ -168,11 +168,15 @@ class OllamaProvider(OpenAIProvider):
         from elusion.config import settings
 
         register_free(model)
+        host = host or settings.ollama_host
+        # Ollama's own server accepts OLLAMA_HOST=127.0.0.1:11434 with no scheme; httpx does not.
+        if "://" not in host:
+            host = f"http://{host}"
         super().__init__(
             model,
             client=client,
             api_key="ollama",  # required by the SDK, ignored by Ollama
-            base_url=f"{host or settings.ollama_host}/v1",
+            base_url=f"{host.rstrip('/')}/v1",
             temperature=temperature,
         )
 

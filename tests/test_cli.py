@@ -255,11 +255,16 @@ def test_review_reviewer_passes_through(monkeypatch) -> None:
     assert seen["reviewer"] == "elusion-reviewer@champion"
 
 
-def test_review_reviewer_errors_exit_1_without_traceback(monkeypatch) -> None:
+def test_review_user_errors_exit_1_without_traceback(monkeypatch) -> None:
     import elusion.flows.review as mod
+    from elusion.review.providers import ProviderConfigError
+    from elusion.review.registry import ReviewerError
 
     args = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
-    for exc in (LookupError("no alias 'x' on registered model 'm'"), ValueError("bad flags")):
+    for exc in (
+        ReviewerError("no alias 'x' on registered model 'm'"),
+        ProviderConfigError("no key"),
+    ):
 
         def fail(criterion, sample, _exc=exc, **kw):
             raise _exc
@@ -268,6 +273,21 @@ def test_review_reviewer_errors_exit_1_without_traceback(monkeypatch) -> None:
         r = CliRunner().invoke(app, [*args, "--reviewer", "m@x"])
         assert r.exit_code == 1 and str(exc) in r.output
         assert "Traceback" not in r.output
+
+
+def test_review_other_lookup_and_value_errors_still_raise(monkeypatch) -> None:
+    """A KeyError from the corpus is a bug, not a reviewer problem: keep its traceback."""
+    import elusion.flows.review as mod
+
+    args = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
+    for exc in (KeyError("3 ids not in the Parquet corpus"), ValueError("a bug")):
+
+        def fail(criterion, sample, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(mod, "review", fail)
+        r = CliRunner().invoke(app, args)
+        assert r.exit_code == 1 and r.exception is exc
 
 
 def test_promote_command_prints_version_alias_and_registry_url(monkeypatch) -> None:
@@ -315,3 +335,24 @@ def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
     assert r.exit_code == 0, r.output
     got = (seen["prompt_version"], seen["review_model"], seen["threshold"], seen["max_run_usd"])
     assert got == ("v3", "m", 4, 2.5)
+
+
+def test_promote_prints_the_registry_under_the_configured_tracking_uri(monkeypatch) -> None:
+    import elusion.config as config
+    import elusion.review.registry as mod
+
+    monkeypatch.setattr(config, "settings", config.Settings(mlflow_tracking_uri="http://m:9"))
+    monkeypatch.setattr(mod, "promote", lambda *a: 4)
+    r = CliRunner().invoke(app, ["promote", "--run", "abc"])
+    assert "http://m:9/#/models/elusion-reviewer" in r.output
+
+
+def test_promote_reviewer_error_exits_1_without_traceback(monkeypatch) -> None:
+    import elusion.review.registry as mod
+
+    def bad(*a):
+        raise mod.ReviewerError("no run 'x'")
+
+    monkeypatch.setattr(mod, "promote", bad)
+    r = CliRunner().invoke(app, ["promote", "--run", "x"])
+    assert r.exit_code == 1 and "error: no run 'x'" in r.output

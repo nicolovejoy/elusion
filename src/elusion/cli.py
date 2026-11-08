@@ -103,8 +103,17 @@ def review(
             model=model,
             reviewer=reviewer,
         )
-    except (LookupError, ValueError) as exc:
-        # Reviewer problems (bad NAME@ALIAS, missing alias, wrong criterion, flag clash).
+    except ValueError as exc:
+        # Only the owner's input problems get a one-line error: a bad NAME@ALIAS, missing alias,
+        # wrong criterion, flag clash (ReviewerError), a bad provider name or missing key
+        # (ProviderConfigError). Anything else, even another ValueError or a KeyError from the
+        # corpus, is a bug and keeps its traceback. Imported here, on the error path, so
+        # `elusion --help` stays fast (the registry imports mlflow).
+        from elusion.review.providers import ProviderConfigError
+        from elusion.review.registry import ReviewerError
+
+        if not isinstance(exc, ReviewerError | ProviderConfigError):
+            raise
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(summary)
@@ -118,16 +127,16 @@ def promote(
 ) -> None:
     """Register a run's reviewer as a new model version and alias it (default: champion)."""
     from elusion.config import settings
-    from elusion.review.registry import REGISTRY_URL
+    from elusion.review.registry import ReviewerError, registry_url
     from elusion.review.registry import promote as promote_run
 
     try:
         version = promote_run(run, name, alias, settings.mlflow_tracking_uri)
-    except LookupError as exc:
+    except ReviewerError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(f"{name} version {version} aliased {alias}")
-    typer.echo(f"{REGISTRY_URL}/{name}")
+    typer.echo(f"{registry_url(settings.mlflow_tracking_uri)}/{name}")
 
 
 # Mirrors evaluate.gold.DEFAULT_SEED; a literal so `elusion --help` does not import the

@@ -49,6 +49,14 @@ class Settings:
     # is recorded in docs/DECISIONS.md.
     ollama_host: str = field(default_factory=lambda: _env("OLLAMA_HOST", "http://localhost:11434"))
     ollama_model: str = field(default_factory=lambda: _env("ELUSION_OLLAMA_MODEL", "qwen2.5:14b"))
+    # sha256 digest of that tag (`ollama show`); `name:tag` can move, the digest cannot. Logged
+    # as an MLflow param; docs/DECISIONS.md (2026-11-06) holds the same value.
+    ollama_digest: str = field(
+        default_factory=lambda: _env(
+            "ELUSION_OLLAMA_DIGEST",
+            "sha256:7cdf5a0187d5c58cc5d369b255592f7841d1c4696d45a8c8a9489440385b22f6",
+        )
+    )
 
     # Pinned model snapshot id used for the judge pass that labels the gold set.
     judge_model: str = field(default_factory=lambda: _env("ELUSION_JUDGE_MODEL", "claude-opus-5-5"))

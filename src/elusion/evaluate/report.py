@@ -39,7 +39,7 @@ class RunReport:
     recall: Estimate
     agreement: Estimate | None  # None when the owner has not labeled anything yet
     review_cost_usd: float
-    judge_cost_usd: float
+    judge_cost_criterion_usd: float  # whole criterion, every review pair; not part of the total
     review_jobs: int  # review_jobs rows for the pair
     review_wall_clock: timedelta | None  # review_jobs durations summed; None if no rows
     review_unfinished: bool  # a job has no finished_at: wall-clock runs to now
@@ -143,16 +143,16 @@ def render(r: RunReport) -> str:
             f"- unsound and relevant: {by.get((0, 1), 0)}",
             f"- unsound and not relevant: {by.get((0, 0), 0)}",
         ]
-    total = r.review_cost_usd + r.judge_cost_usd + r.grade_cost_usd
+    total = r.review_cost_usd + r.grade_cost_usd
     lines += [
         "",
         "## Cost",
         "",
         f"- review run: ${r.review_cost_usd:.4f} (sum over {r.review_jobs} review_jobs rows)",
-        f"- judge run: ${r.judge_cost_usd:.4f} "
+        f"- judge run: ${r.judge_cost_criterion_usd:.4f} "
         "(whole criterion, every review pair: judge-runs ledger)",
         f"- grade run: ${r.grade_cost_usd:.4f} (this review pair: grade-runs ledger)",
-        f"- total: ${total:.4f}",
+        f"- total for this pair (review + grade): ${total:.4f}",
         "",
         "## Wall-clock",
         "",

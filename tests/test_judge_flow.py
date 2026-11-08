@@ -228,6 +228,10 @@ def test_each_run_that_calls_the_judge_is_recorded(env) -> None:
     assert recs[0]["cost_usd"] == pytest.approx(0.40)
     assert {r["model"] for r in recs} == {"claude-opus-5-5"}
     assert {r["prompt_version"] for r in recs} == {"c/judge-v1"}
+    # the review pair the run was for, so a per-pair judge cost is possible for new runs
+    assert {(r["review_model"], r["review_prompt_version"]) for r in recs} == {
+        ("claude-haiku-5-5", "c/v2")
+    }
     assert all(r["finished_at"] for r in recs)
     assert judge_cost_usd(judge_runs_path(path)) == pytest.approx(0.40)
 

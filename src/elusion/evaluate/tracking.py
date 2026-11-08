@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from elusion.config import settings
 from elusion.evaluate.metrics import Estimate
 from elusion.evaluate.report import RunReport
 from elusion.review.providers import GENERATION_SETTINGS
@@ -50,6 +51,9 @@ def run_params(report: RunReport, provider: str, report_path: Path) -> dict[str,
         "review_jobs": str(report.review_jobs),
         "report_path": str(report_path),
     }
+    if provider == "ollama":
+        # The tag can move; the digest pins what actually produced these scores.
+        params["model_digest"] = settings.ollama_digest
     if report.grader_model is not None:
         params["grader_model"] = report.grader_model
     if report.grader_prompt_version is not None:
@@ -77,14 +81,15 @@ def run_metrics(report: RunReport) -> dict[str, float]:
     m["n_flagged"] = float(report.n_flagged)
     m["n_discard"] = float(report.n_discard)
     m["review_cost_usd"] = report.review_cost_usd
-    m["judge_cost_usd"] = report.judge_cost_usd
+    # Criterion-wide (every pair's judge runs), so it stays out of the per-pair total.
+    m["judge_cost_criterion_usd"] = report.judge_cost_criterion_usd
     if report.rationale_sound is not None:
         m.update(_estimate("rationale_sound", report.rationale_sound))
     if report.quote_verbatim is not None:
         m.update(_estimate("quote_verbatim", report.quote_verbatim))
     if report.rationale_sound is not None or report.quote_verbatim is not None:
         m["grade_cost_usd"] = report.grade_cost_usd
-    m["total_cost_usd"] = report.review_cost_usd + report.judge_cost_usd + report.grade_cost_usd
+    m["total_cost_usd"] = report.review_cost_usd + report.grade_cost_usd
     m["cost_per_1000_docs_usd"] = (
         report.review_cost_usd / report.population * 1000 if report.population else 0.0
     )

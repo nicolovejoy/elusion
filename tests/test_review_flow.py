@@ -458,6 +458,7 @@ def test_real_openai_provider_served_drift_stops_before_storing(env) -> None:
 def test_reviewer_resolves_manifest_and_refuses_overrides(env, monkeypatch) -> None:
     import elusion.review.registry as registry
     from elusion.flows.review import review
+    from elusion.review.registry import ReviewerError
 
     engine, version = env
     manifest = registry.Manifest(
@@ -493,9 +494,21 @@ def test_reviewer_resolves_manifest_and_refuses_overrides(env, monkeypatch) -> N
     assert get_job(engine, s.job_id)["model"] == "pinned-model"
 
     for override in ({"provider_name": "openai"}, {"model": "m"}, {"prompt_version": "v1"}):
-        with pytest.raises(ValueError, match="--reviewer cannot be combined"):
+        with pytest.raises(ReviewerError, match="--reviewer cannot be combined"):
             review(
                 "cloud-concentration", sample=1, reviewer="elusion-reviewer@champion", **override
             )
-    with pytest.raises(ValueError, match="built for criterion 'cloud-concentration'"):
+    with pytest.raises(ReviewerError, match="built for criterion 'cloud-concentration'"):
         review("other-criterion", sample=1, reviewer="elusion-reviewer@champion")
+
+
+def test_the_judge_model_cannot_be_a_reviewer(env) -> None:
+    from elusion.flows.review import review
+
+    with pytest.raises(ValueError, match="the judge model cannot be a reviewer"):
+        review(
+            "cloud-concentration",
+            sample=1,
+            provider=FakeProvider(model=settings.judge_model),
+            ids=ListIdSource(IDS),
+        )
