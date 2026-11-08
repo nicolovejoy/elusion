@@ -183,6 +183,25 @@ Prefect flow `grade` ──▶ LLM call (judge model + grade-v1: paragraph plus 
         └──▶ data/grades/<criterion>.grade-runs.jsonl  one line per grade run, per pair: counts, cost
 ```
 
+The registry (phase 4) turns one evaluated configuration into the one the review flow runs:
+
+```
+evaluate's MLflow run ──▶ logged model `reviewer` (pyfunc): reviewer.json manifest (provider,
+        │                 pinned model id, prompt version, criterion, threshold, generation
+        │                 settings) + the review prompt file; never gold or grades
+        ▼
+elusion promote --run <id> ──▶ registered model `elusion-reviewer`, new version N,
+                                alias `champion` moved to N
+        ▼
+elusion review --reviewer elusion-reviewer@champion
+        resolves the manifest from the registry, then runs the ordinary review flow with
+        that provider, model and prompt version: same (model, prompt version) key in
+        `scores`, same Kafka consumer group, so already-scored documents cost nothing
+```
+
+Promotion changes which configuration `--reviewer` resolves to. It does not change a
+score, the `scores` key, or the model behind a provider's id.
+
 ## Where each phase reads and writes
 
 | Phase | Reads | Writes |
@@ -190,7 +209,7 @@ Prefect flow `grade` ──▶ LLM call (judge model + grade-v1: paragraph plus 
 | 1 collect | HuggingFace JSONL | Parquet, `documents`, Kafka |
 | 2 review | Kafka, `documents`, `scores`, Parquet text | `scores`, job table |
 | 3 judge, label, evaluate | `scores`, `review_jobs`, `documents`, Parquet text, `data/gold/` | `data/gold/<criterion>.csv`, `.judge-runs.jsonl`, `docs/reports/` |
-| 4 leaderboard | report, scores, prompt file, `data/grades/` | MLflow run (params, metrics, report, prompt); `data/grades/<criterion>.csv`, `.grade-runs.jsonl` |
+| 4 leaderboard | report, scores, prompt file, `data/grades/`, MLflow registry | MLflow run (params, metrics, report, prompt, `reviewer` model); registry versions and alias; `data/grades/<criterion>.csv`, `.grade-runs.jsonl` |
 | 5 dedupe | Parquet | Delta table of clusters; `scores` for members |
 | 6 production | same as 2, on AKS | same as 2 |
 

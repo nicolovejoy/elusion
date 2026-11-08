@@ -71,6 +71,8 @@ uv run elusion review --criterion criteria/cloud-concentration.md --prompt-versi
 uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]
 uv run elusion grade --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]
 uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]   # report + one MLflow run
+uv run elusion promote --run <mlflow run id>   # register that run's reviewer, alias champion
+uv run elusion review --criterion criteria/cloud-concentration.md --reviewer elusion-reviewer@champion --sample 50
 ```
 
 Commands that call a paid model need the API keys from 1Password: prefix them with

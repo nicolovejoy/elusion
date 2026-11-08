@@ -12,8 +12,9 @@ documents inside the pile the system discarded, measured by sampling that pile.
 ## Status
 
 Phases 0 to 3 are done: collection, first-pass LLM review, validation. Phase 4 (MLflow
-leaderboard) is in progress: OpenAI and local Ollama providers, prompt v3 and rationale
-grading are built, and four of the five planned runs are in. See `docs/PHASES.md`.
+leaderboard) has its code and all five runs in: OpenAI and local Ollama providers, prompt
+v3, rationale grading, and a model registry whose `champion` alias the review flow can run
+from. The phase note is still to come. See `docs/PHASES.md`.
 
 ## First result
 
@@ -35,6 +36,12 @@ Clopper-Pearson 95% intervals:
 
 Full report: `docs/reports/cloud-concentration-claude-haiku-5-5-v2.md`. The reasoning,
 including where the judge and the owner disagreed: `docs/notes/phase-3.md`.
+
+Phase 4 ran the same 17,936 paragraphs through five review configurations (three Haiku
+prompt versions, gpt-6-luna, and qwen2.5:14b on the laptop). Every one had elusion 0 of
+200; precision ranged from 0.31 to 0.51 with overlapping intervals. One report per run in
+`docs/reports/`, side by side in the MLflow UI (http://localhost:5001), and the reading in
+`docs/notes/phase-4.md`.
 
 ## What the pipeline guarantees
 
