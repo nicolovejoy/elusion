@@ -67,7 +67,7 @@ Rationale soundness against the judge's label, over the flagged paragraphs:
 - review run: $0.8394 (sum over 6 review_jobs rows)
 - judge run: $2.4135 (whole criterion, every review pair: judge-runs ledger)
 - grade run: $0.1807 (this review pair: grade-runs ledger)
-- total: $3.4336
+- total for this pair (review + grade): $1.0201
 
 ## Wall-clock
 
