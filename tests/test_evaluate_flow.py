@@ -397,3 +397,13 @@ def test_logged_run_has_grade_metrics_only_when_graded(env, monkeypatch) -> None
     assert data.params["grader_prompt_version"] == "c/grade-v1"
     names = {a.path for a in client.list_artifacts(second)}
     assert not any(n.endswith(".csv") for n in names)
+
+
+def test_report_date_is_the_pacific_calendar_day() -> None:
+    """00:38 UTC on the 8th is still the 7th in California: the report shows the owner's day."""
+    from datetime import UTC, datetime
+
+    from elusion.flows.evaluate import report_date
+
+    assert report_date(datetime(2026, 11, 8, 0, 38, tzinfo=UTC)) == "2026-11-07"
+    assert report_date(datetime(2026, 11, 8, 9, 0, tzinfo=UTC)) == "2026-11-08"

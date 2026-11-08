@@ -32,6 +32,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
@@ -275,6 +276,15 @@ def report_path(reports_dir: Path, criterion: str, model: str, prompt_version: s
     return reports_dir / f"{criterion}-{model}-{prompt_version.replace('/', '-')}.md"
 
 
+def report_date(now: datetime) -> str:
+    """The calendar day printed on a report: the owner's day in California, not UTC's.
+
+    Timestamps are stored in UTC; a day shown to a person is America/Los_Angeles, or an
+    evening run would be dated tomorrow.
+    """
+    return now.astimezone(ZoneInfo("America/Los_Angeles")).date().isoformat()
+
+
 @flow(name="evaluate")
 def evaluate(
     criterion: str,
@@ -381,7 +391,7 @@ def evaluate(
         prompt_version=version,
         judge_model=judge_model,
         judge_prompt_version=", ".join(sorted({r.prompt_version for r in judged.values()})),
-        date=today or datetime.now(UTC).date().isoformat(),
+        date=today or report_date(datetime.now(UTC)),
         seed=seed,
         discard_n=discard_n,
         threshold=threshold,
