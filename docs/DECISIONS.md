@@ -1,6 +1,6 @@
 # Decisions
 
-One line each, newest first. Format: `YYYY-MM-DD — decision — why`.
+One line each, oldest first (append new lines at the bottom). Format: `YYYY-MM-DD — decision — why`.
 
 - 2026-11-03 — Schema is created with `create_all`, which never alters existing tables; a later column (e.g. job_id on scores) needs a migration step or a fresh database — found while weighing a sample tag for phase 3.
 - 2026-11-03 — A refused or truncated document is not retried under the same consumer group; its batch offsets still commit — one bad paragraph must not wedge a 1.6 M-document run; whether to re-ask (other model, longer limit) or send it to a human queue is a phase 3 question.
@@ -42,3 +42,4 @@ One line each, newest first. Format: `YYYY-MM-DD — decision — why`.
 - 2026-11-07 — Review time in reports and MLflow (`review_wall_clock_s`, `docs_per_minute`) is each review_jobs row's duration summed, not first start to last finish — failed 0-doc starts (gpt-6-luna) and a probe 1.5 h before the main run (qwen2.5:14b) put idle gaps into the span: 21:27:58 for a 1:24:57 run.
 - 2026-11-07 — Champion is gpt-6-luna with prompt v2 (`elusion-reviewer` version 1, from MLflow run bd1d61f365b94f8e818110d045e5f6a0) — by the spec's rule: every pair's elusion upper bound is 0.018, so the best precision wins (0.511 [0.358, 0.663]); cost was not needed as a tie-break. The precision intervals of all five runs overlap, so this is a choice, not a proven ranking.
 - 2026-11-07 — `elusion promote` registers the run's logged model by its id (`models:/<model id>`, found by source run), not `runs:/<run id>/reviewer` — MLflow 3 stores a logged model apart from the run's artifacts, and the `runs:/` form only works through a deprecated fallback.
+- 2026-11-07 — Report filenames map every character Windows rejects (`<>:"/\|?*`) to `-`, so `qwen2.5:14b` writes `cloud-concentration-qwen2.5-14b-v2.md` — a colon in a committed path makes a Windows clone of this public repo fail at checkout.

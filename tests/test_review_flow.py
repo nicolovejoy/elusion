@@ -7,7 +7,7 @@ from elusion.collect.db import make_engine
 from elusion.config import settings
 from elusion.review.db import ensure_schema, get_job, review_jobs, scores
 from elusion.review.prompt import Prompt
-from elusion.review.providers import Review, ReviewError
+from elusion.review.providers import ProviderConfigError, Review, ReviewError
 from tests.conftest import requires_service
 from tests.fakes import FakeProvider, ListIdSource
 
@@ -505,7 +505,7 @@ def test_reviewer_resolves_manifest_and_refuses_overrides(env, monkeypatch) -> N
 def test_the_judge_model_cannot_be_a_reviewer(env) -> None:
     from elusion.flows.review import review
 
-    with pytest.raises(ValueError, match="the judge model cannot be a reviewer"):
+    with pytest.raises(ProviderConfigError, match="the judge model cannot be a reviewer"):
         review(
             "cloud-concentration",
             sample=1,

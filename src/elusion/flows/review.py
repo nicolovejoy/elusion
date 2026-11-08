@@ -42,6 +42,7 @@ from elusion.review.providers import (
     Judge,
     Judgement,
     Provider,
+    ProviderConfigError,
     Review,
     ReviewError,
     make_provider,
@@ -218,7 +219,7 @@ def review(
     if provider.model == settings.judge_model:
         # The judge labels the gold set the reviewers are scored against; it must not also be
         # one of them.
-        raise ValueError(
+        raise ProviderConfigError(
             f"the judge model cannot be a reviewer: {provider.model!r} is ELUSION_JUDGE_MODEL"
         )
     engine = db.make_engine(settings.database_url)
