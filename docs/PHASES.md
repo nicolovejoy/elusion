@@ -42,12 +42,12 @@ Work in order. A phase is done when every box is ticked and `docs/notes/phase-N.
 
 ## Phase 4: Leaderboard (days 8–9)
 
-- [ ] Every review+evaluate run logged to MLflow: params, metrics, report as artifact
-- [ ] Second provider (OpenAI) and local model (Ollama) behind the same interface
-- [ ] At least five runs varying model, prompt version, temperature
-- [ ] Register the best as `elusion-reviewer` in the registry; promote one version
-- [ ] LLM-as-judge: a stronger model grades rationales against gold labels; agreement reported
-- [ ] Note: what the registry is for; what "promotion" means; where judge and human disagreed
+- [x] Every review+evaluate run logged to MLflow: params, metrics, report as artifact
+- [x] Second provider (OpenAI) and local model (Ollama) behind the same interface
+- [x] At least five runs varying model and prompt version (not temperature: DECISIONS 2026-11-05)
+- [x] Register the best as `elusion-reviewer` in the registry; promote one version
+- [x] LLM-as-judge: a stronger model grades rationales against gold labels; agreement reported
+- [x] Note: what the registry is for; what "promotion" means; where judge and human disagreed
 
 ## Phase 5: Dedupe with Spark (optional, days 10–11)
 

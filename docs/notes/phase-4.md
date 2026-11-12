@@ -1,43 +1,50 @@
 # Phase 4: Leaderboard
 
-<!-- Nico's draft. Four headings per docs/notes/README.md, half a page. Prompts in brackets are mine to overwrite. -->
+## What we built
 
-## What I built
-
-Five reviewers ran over the same 17,936 paragraphs: Haiku with three prompt versions,
-OpenAI's small model gpt-6-luna, and a free local model, qwen2.5:14b, on my Mac. Each was
-measured against the same second opinion (the Opus judge from phase 3), logged to MLflow as
-one run per evaluation, and the best one was put on the registry shelf as `champion`. A new
-check asked whether each reviewer's stated reason actually matched the paragraph it quoted.
+We ran five reviewers over the same roughly 18,000 paragraphs: Haiku with three different
+prompts, OpenAI's small model gpt-6-luna, and qwen2.5:14b, a free open model running on the
+dev Mac through Ollama (a program that runs models locally). Each was checked against the same
+second opinion, the Opus judge from phase 3. gpt-6-luna with prompt v2 had the highest
+precision, 0.51, and we labelled it `champion`. But the uncertainty ranges of all five
+overlap: with only 42 to 75 flagged paragraphs each, the samples are too small to prove it
+is better than the others. None of the five missed anything in a 200-paragraph sample of
+its discards. The local model misquoted the paragraph in 4 of its 56 flags.
 
 Demo: `uv run elusion review --criterion criteria/cloud-concentration.md --reviewer elusion-reviewer@champion --sample 50`
 then open http://localhost:5001 and compare the five runs side by side.
 
-Finding: all five precision intervals overlap, so the winner (gpt-6-luna v2, 0.51) is a
-choice, not a proof. The local model invented quotes in 4 of its 56 flags.
+## Why we built it
 
-## What the tool is actually for
+Phase 3 left us with one reviewer and one measured result. We wanted to know whether a
+different model or a different prompt would do better, and whether a free model running
+locally could compete with the paid ones. Answering that needs a way to keep attempts
+comparable, which is the job MLflow exists for, so this was the phase to learn it by using
+it. We also wanted to see what a model registry does when no model is being trained.
 
-[MLflow in one line, in my words. Working version: a lab notebook where every attempt is
-recorded with its settings and results, plus a shelf where one version gets the label "use
-this one" and the pipeline can be pointed at the label instead of the model.]
+## What we learned
 
-[Registry and "promotion": a registered model version is a reviewer configuration (provider,
-pinned model, prompt version) that can actually score; promotion is moving the `champion`
-alias to it. Nothing is retrained; it is a pointer move with an audit trail.]
+MLflow is a logbook for machine-learning experiments. Each time we try a version of a model,
+it records the settings we used and how well that version scored. Traditionally the attempts
+are training runs with different tuning. Here nothing is trained: each attempt is a different
+combination of vendor model and prompt, five in all, and MLflow holds each one's precision,
+recall and elusion side by side. It also lets us label one of them `champion`, so the
+pipeline asks for "the champion" rather than naming a model, and changing which reviewer is
+preferred means moving that label. The individual paragraph decisions are not in MLflow;
+those live in Postgres.
 
-## What a production e-discovery platform does differently, and why
+This is not the traditional use of MLflow. Normally the registered model is a trained weights
+file that can be reloaded exactly; ours is only a recipe (vendor, model snapshot, prompt
+version) that works as long as the vendor keeps serving that snapshot. Using it this way is
+deliberate: the project exists to get familiar with the tool.
 
-[Scale: five runs here; a platform compares reviewers per matter, per criterion, continuously.
-Isolation: our judge is one Opus call; a platform's "second opinion" is a human QC sample
-with its own defensibility record. Data Capabilities pillar: every model, prompt and
-promotion decision auditable per tenant, not in one MLflow instance on a laptop. Cite the
-posting (req 26-0360) or the aiR for Review validation docs if I find one.]
+## Results
 
-## The question I would ask their team
+We read the highest score as the best reviewer. With 42 to 75 flagged paragraphs per
+reviewer, each precision figure is uncertain by 11 to 15 points either way, and all five
+ranges overlap. gpt-6-luna against Haiku v3 or qwen is a tie on this evidence; against
+the two weakest it is borderline. Halving that uncertainty takes about four times as many
+flagged paragraphs.
 
-[Where judge and human disagreed: in phase 3 the judge and I disagreed on 4 of 20, all
-score-3 paragraphs with no stated reliance on one provider. Prompt v3 added rules for those.
-Question candidates: how do they pick the judge, and who audits the judge? Is "champion"
-a per-matter decision or a platform one? What do they do when five reviewers' intervals all
-overlap, as ours did?]
+Also: every number here uses the Opus judge as the truth, and in phase 3 the judge and a
+human reading disagreed on 4 of 20 paragraphs. The measuring stick has its own error.
