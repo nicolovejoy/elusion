@@ -59,11 +59,30 @@ def review(
         ),
     ],
     batch_size: Annotated[int, typer.Option(help="Ids per batch (and per offset commit).")] = 50,
-    concurrency: Annotated[int, typer.Option(help="Parallel LLM calls per batch.")] = 8,
-    prompt_version: Annotated[str, typer.Option(help="Prompt file version.")] = "v1",
+    concurrency: Annotated[
+        int,
+        typer.Option(help="Parallel LLM calls per batch; 2 is sensible for a local ollama model."),
+    ] = 8,
+    prompt_version: Annotated[
+        str | None, typer.Option(help="Prompt file version; default v1.")
+    ] = None,
     max_run_usd: Annotated[
         float | None,
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+    provider: Annotated[
+        str | None, typer.Option(help="Provider: anthropic (default), openai or ollama.")
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option(help="Pinned model id; default ELUSION_REVIEW_MODEL / ELUSION_OPENAI_MODEL."),
+    ] = None,
+    reviewer: Annotated[
+        str | None,
+        typer.Option(
+            help="Registered reviewer NAME@ALIAS, e.g. elusion-reviewer@champion; it sets "
+            "provider, model and prompt version, so those flags must not be given."
+        ),
     ] = None,
 ) -> None:
     """Score up to SAMPLE paragraphs from the topic against a CRITERION."""
@@ -72,15 +91,52 @@ def review(
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
 
-    summary = review_flow(
-        criterion.stem,
-        sample,
-        batch_size=batch_size,
-        concurrency=concurrency,
-        prompt_version=prompt_version,
-        max_run_usd=max_run_usd,
-    )
+    try:
+        summary = review_flow(
+            criterion.stem,
+            sample,
+            batch_size=batch_size,
+            concurrency=concurrency,
+            prompt_version=prompt_version,
+            max_run_usd=max_run_usd,
+            provider_name=provider,
+            model=model,
+            reviewer=reviewer,
+        )
+    except ValueError as exc:
+        # Only the owner's input problems get a one-line error: a bad NAME@ALIAS, missing alias,
+        # wrong criterion, flag clash (ReviewerError), a bad provider name or missing key
+        # (ProviderConfigError). Anything else, even another ValueError or a KeyError from the
+        # corpus, is a bug and keeps its traceback. Imported here, on the error path, so
+        # `elusion --help` stays fast (the registry imports mlflow).
+        from elusion.review.providers import ProviderConfigError
+        from elusion.review.registry import ReviewerError
+
+        if not isinstance(exc, ReviewerError | ProviderConfigError):
+            raise
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
     typer.echo(summary)
+
+
+@app.command()
+def promote(
+    run: Annotated[str, typer.Option(help="MLflow run id whose reviewer to register.")],
+    name: Annotated[str, typer.Option(help="Registered model name.")] = "elusion-reviewer",
+    alias: Annotated[str, typer.Option(help="Alias to point at the new version.")] = "champion",
+) -> None:
+    """Register a run's reviewer as a new model version and alias it (default: champion)."""
+    from elusion.config import settings
+    from elusion.review.registry import ReviewerError, registry_url
+    from elusion.review.registry import promote as promote_run
+
+    try:
+        version = promote_run(run, name, alias, settings.mlflow_tracking_uri)
+    except ReviewerError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"{name} version {version} aliased {alias}")
+    typer.echo(f"{registry_url(settings.mlflow_tracking_uri)}/{name}")
 
 
 # Mirrors evaluate.gold.DEFAULT_SEED; a literal so `elusion --help` does not import the
@@ -101,6 +157,10 @@ def judge(
         int, typer.Option(help="Paragraphs sampled at random from the discard pile.")
     ] = 200,
     seed: Annotated[int, typer.Option(help="Seed for the discard sample.")] = DEFAULT_SEED,
+    review_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
+    ] = None,
     max_run_usd: Annotated[
         float | None,
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
@@ -127,6 +187,7 @@ def judge(
             threshold=threshold,
             discard_n=discard_n,
             seed=seed,
+            review_model=review_model,
             max_run_usd=max_run_usd,
             force=force,
         )
@@ -134,6 +195,40 @@ def judge(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from None
     typer.echo(summary)
+
+
+@app.command()
+def grade(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
+    ],
+    prompt_version: Annotated[
+        str, typer.Option(help="Review prompt version whose flagged rationales are graded.")
+    ],
+    review_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
+    ] = None,
+    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
+    max_run_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+) -> None:
+    """Have the grader model judge whether each flagged rationale is a sound reading."""
+    from elusion.flows.grade import grade as grade_flow
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    typer.echo(
+        grade_flow(
+            criterion.stem,
+            prompt_version=prompt_version,
+            review_model=review_model,
+            threshold=threshold,
+            max_run_usd=max_run_usd,
+        )
+    )
 
 
 @app.command()
@@ -169,18 +264,30 @@ def evaluate(
     ],
     threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
     seed: Annotated[
-        int, typer.Option(help="Seed the gold set was drawn with; only echoed into the report.")
+        int, typer.Option(help="Seed the discard sample was drawn with.")
     ] = DEFAULT_SEED,
+    discard_n: Annotated[
+        int, typer.Option(help="Size of the discard sample, as given to `judge`.")
+    ] = 200,
+    review_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
+    ] = None,
 ) -> None:
     """Compute recall, precision, elusion and richness from the judge labels; write the report."""
-    from elusion.flows.evaluate import MissingLabels
+    from elusion.flows.evaluate import MissingLabels  # MissingDiscardLabels subclasses it
     from elusion.flows.evaluate import evaluate as evaluate_flow
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
     try:
-        path = evaluate_flow(
-            criterion.stem, prompt_version=prompt_version, threshold=threshold, seed=seed
+        result = evaluate_flow(
+            criterion.stem,
+            prompt_version=prompt_version,
+            threshold=threshold,
+            seed=seed,
+            discard_n=discard_n,
+            review_model=review_model,
         )
     except (MissingLabels, ValueError) as exc:
         # metrics raises ValueError("no labeled rows in the <pile> pile") for an empty
@@ -189,7 +296,12 @@ def evaluate(
             raise
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from None
-    typer.echo(path)
+    typer.echo(result.report_path)
+    if result.run_id:
+        from elusion.config import settings
+
+        typer.echo(f"mlflow run {result.run_id}")
+        typer.echo(f"{settings.mlflow_tracking_uri}/#/experiments")
 
 
 if __name__ == "__main__":

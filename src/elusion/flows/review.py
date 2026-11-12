@@ -39,12 +39,13 @@ from elusion.review.corpus import load_texts
 from elusion.review.pricing import cost_usd
 from elusion.review.prompt import load_prompt
 from elusion.review.providers import (
-    AnthropicProvider,
     Judge,
     Judgement,
     Provider,
+    ProviderConfigError,
     Review,
     ReviewError,
+    make_provider,
 )
 from elusion.review.sampler import IdSource, KafkaIdSource, group_id
 
@@ -160,7 +161,7 @@ def check_model_echo(
     if answer.model != provider.model:
         raise RuntimeError(
             f"API served model {answer.model!r} but the pinned model is {provider.model!r}; "
-            f"pin the served snapshot id ({env_var}) so idempotency holds"
+            f"pin the served snapshot id (--model or {env_var}) so idempotency holds"
         )
 
 
@@ -170,10 +171,13 @@ def review(
     sample: int,
     batch_size: int = 50,
     concurrency: int = 8,
-    prompt_version: str = "v1",
+    prompt_version: str | None = None,
     provider: Provider | None = None,
+    provider_name: str | None = None,
+    model: str | None = None,
     ids: IdSource | None = None,
     max_run_usd: float | None = None,
+    reviewer: str | None = None,
 ) -> ReviewSummary:
     """Score up to `sample` ids from the topic against `criterion` (a criterion name).
 
@@ -184,12 +188,40 @@ def review(
     a verdict the flow raises RuntimeError. When BudgetExceeded is raised the probe
     batch's offsets stay uncommitted, and its scores are already in Postgres, so a
     re-run skips them.
+
+    `reviewer` is `<name>@<alias>` of a registered reviewer: its provider, pinned model and
+    prompt replace `provider_name`, `model` and `prompt_version`, which must then be left
+    unset (None means "not passed"; the defaults, anthropic and v1, apply only without a
+    reviewer).
     """
     log = get_run_logger()
     if max_run_usd is None:
         max_run_usd = settings.max_run_usd
-    prompt = load_prompt(criterion, prompt_version)
-    provider = provider or AnthropicProvider(settings.review_model)
+    if reviewer is not None:
+        from elusion.review import registry
+        from elusion.review.registry import ReviewerError
+
+        if provider_name is not None or model is not None or prompt_version is not None:
+            raise ReviewerError(
+                "--reviewer cannot be combined with --provider, --model or --prompt-version"
+            )
+        manifest = registry.resolve(reviewer, settings.mlflow_tracking_uri)
+        if manifest.criterion != criterion:
+            raise ReviewerError(
+                f"reviewer {reviewer!r} was built for criterion {manifest.criterion!r}, "
+                f"not {criterion!r}"
+            )
+        # The manifest holds the full pair key "<criterion>/<v>"; load_prompt wants the "<v>".
+        provider_name, model = manifest.provider, manifest.model
+        prompt_version = manifest.prompt_version.removeprefix(f"{criterion}/")
+    prompt = load_prompt(criterion, prompt_version or "v1")
+    provider = provider or make_provider(provider_name or "anthropic", model)
+    if provider.model == settings.judge_model:
+        # The judge labels the gold set the reviewers are scored against; it must not also be
+        # one of them.
+        raise ProviderConfigError(
+            f"the judge model cannot be a reviewer: {provider.model!r} is ELUSION_JUDGE_MODEL"
+        )
     engine = db.make_engine(settings.database_url)
     db.ensure_schema(engine)
     job_id = db.start_job(

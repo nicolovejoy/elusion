@@ -1,18 +1,71 @@
 # elusion
 
-A small document-review pipeline over public SEC 10-K risk-factor paragraphs. It finds the
-paragraphs that match a written criterion and reports how much it found and how sure it is:
-recall, precision and elusion, each with a confidence interval. It was built to learn
-production ML tooling (Prefect, MLflow, Spark, AKS, Terraform/Pulumi) through one realistic
-job instead of a tour of the tools.
+Elusion is a project I cooked up with Claude to get up to speed for work I may be doing at
+Relativity with my friend Pierre. I want to understand the kind of systems being envisioned
+for what we might call "agentic discovery": review done by models, with the paperwork a
+court would ask for. We are doing it by building a miniature of those systems with the tools
+Relativity's engineering postings name: Parquet, Kafka, Spark, Delta Lake, Kubernetes and
+Azure, plus Postgres. Two stand-ins: Prefect for orchestration, where Relativity uses
+Temporal, and MLflow for the experiment record, which no posting names. The product posting
+whose vocabulary I use throughout is Director of Product Management, Data Intelligence
+Foundation, req 26-0360 (URL to come). Its five data primitives: Files/Natives,
+Knowledge/Metadata, Query Plane, Ontology/Relationship, Data Capabilities.
 
-**Elusion** is the e-discovery metric for what a review missed. It is the rate of relevant
-documents inside the pile the system discarded, measured by sampling that pile.
+Instead of a real matter, the corpus is public: the Risk Factors section (Item 1A) of every
+10-K annual filing for 2018, 2019 and 2020, from the EDGAR-CORPUS dataset on HuggingFace.
+That is about 20,000 filings and 1.6 million paragraphs. Each paragraph is treated as one
+"risk factor" document. The review so far covered the first 17,936 of them, in ingest order.
+The criterion for our first question is "does this company say it depends on one or a few
+cloud providers", which is the kind of yes/no question a review team gets handed.
+
+**Elusion**, the name, is the e-discovery metric for what a review missed: the rate of
+relevant documents inside the pile the system discarded, measured by sampling that pile.
+
+## The phases
+
+**Phase 1, collection.** The full text of each risk factor was stored once in Parquet,
+because it is columnar and compressed (347 MB against 5.4 GB of raw JSON) and Spark, DuckDB
+and pandas read it directly. One row per paragraph went into Postgres, with company, year
+and position, because that is what gets filtered, joined and later updated with scores.
+Every document id was published to a Kafka topic, so a reviewer written weeks later could
+consume the list and pick up where it stopped without re-reading the files. In the posting's
+terms, Parquet is Files/Natives, Postgres is Knowledge/Metadata, and Kafka is the ingestion
+side of the Query Plane.
+
+**Phase 2, first-pass review.** A cheap model, claude-haiku-5-5, read every paragraph and
+scored it 0 to 4 against the criterion, with a one-sentence rationale and a quote. Every
+score records which model snapshot and which prompt version produced it, and a re-run never
+pays for a document already scored under that pair. A run killed partway through resumes.
+
+**Phase 3, second opinion.** A stronger model, claude-opus-5-5, checked every flagged
+paragraph and a random 200 from the discard pile. I blind-labeled 20 of those myself to
+audit the checker (I am new to this task, so the audit is small). That gave the four
+numbers a court likely asks about: precision, recall, elusion and richness, each with a
+Clopper-Pearson 95% interval. This is the Data Capabilities pillar: the result comes with
+its own evidence.
+
+**Phase 4, comparison.** Five reviewers ran over the same paragraphs: Haiku with three
+prompt versions, OpenAI's small model gpt-6-luna, and a free local model, qwen2.5:14b, on my
+Mac. Each was measured against the same second opinion. Every evaluation was logged to
+MLflow, which here plays two roles: a lab notebook, where each attempt sits beside the
+others with its parameters, metrics and report, and a shelf, the model registry, where the
+best configuration is stored as `elusion-reviewer` with a movable label, `champion`, that a
+review run can be pointed at by name. A new check asked whether each reviewer's stated
+reason matched the paragraph it quoted. Finding: all five precision intervals overlap, so
+the winner (gpt-6-luna, 0.51) is a choice, not a proof, and the local model invented quotes
+in four of its 56 flags. Details in `docs/notes/phase-4.md` and `docs/reports/`.
+
+**Next.** Phase 5 clusters near-duplicate paragraphs with Spark (MinHash), so one review
+covers a whole cluster; risk-factor boilerplate repeats across companies and years, and
+dedupe before review is what every e-discovery platform does. It runs locally and costs
+nothing but time. In the posting's terms, it is the first Ontology relationship: "this
+paragraph is a near-copy of that one". Phase 6 is one real run on Azure Kubernetes, built
+and torn down the same day, roughly a dollar an hour, under 20 dollars. Both are optional.
 
 ## Status
 
-Phases 0 to 3 are done: collection, first-pass LLM review, validation. Phase 4 (MLflow
-leaderboard) is next. See `docs/PHASES.md`.
+Phases 0 to 3 are done. Phase 4 has its code, its five runs and its reports in; the phase
+note is still to come. See `docs/PHASES.md`.
 
 ## First result
 

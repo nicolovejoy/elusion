@@ -977,6 +977,7 @@ dependencies = [
     { name = "confluent-kafka" },
     { name = "datasets" },
     { name = "mlflow" },
+    { name = "openai" },
     { name = "pandas" },
     { name = "prefect" },
     { name = "psycopg", extra = ["binary"] },
@@ -989,9 +990,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-openai = [
-    { name = "openai" },
-]
 spark = [
     { name = "delta-spark" },
     { name = "pyspark" },
@@ -1010,7 +1008,7 @@ requires-dist = [
     { name = "datasets" },
     { name = "delta-spark", marker = "extra == 'spark'" },
     { name = "mlflow" },
-    { name = "openai", marker = "extra == 'openai'" },
+    { name = "openai", specifier = ">=3.43.0" },
     { name = "pandas" },
     { name = "prefect", specifier = ">=3" },
     { name = "psycopg", extras = ["binary"] },
@@ -1022,7 +1020,7 @@ requires-dist = [
     { name = "sqlalchemy" },
     { name = "typer" },
 ]
-provides-extras = ["spark", "openai"]
+provides-extras = ["spark"]
 
 [package.metadata.requires-dev]
 dev = [

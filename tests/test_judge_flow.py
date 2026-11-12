@@ -228,6 +228,10 @@ def test_each_run_that_calls_the_judge_is_recorded(env) -> None:
     assert recs[0]["cost_usd"] == pytest.approx(0.40)
     assert {r["model"] for r in recs} == {"claude-opus-5-5"}
     assert {r["prompt_version"] for r in recs} == {"c/judge-v1"}
+    # the review pair the run was for, so a per-pair judge cost is possible for new runs
+    assert {(r["review_model"], r["review_prompt_version"]) for r in recs} == {
+        ("claude-haiku-5-5", "c/v2")
+    }
     assert all(r["finished_at"] for r in recs)
     assert judge_cost_usd(judge_runs_path(path)) == pytest.approx(0.40)
 
@@ -277,3 +281,23 @@ def test_force_labels_despite_an_unfinished_review_job(env, running_review) -> N
     path, _ = env
     s = judge("c", provider=FakeJudge(), gold_csv=path, force=True)
     assert s.labeled == 5
+
+
+def test_review_model_option_selects_the_pair(env, monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+    from elusion.flows.evaluate import judge
+
+    seen = {}
+    monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(
+        mod, "select_gold", lambda engine, model, *a: seen.update(select=model) or gold_of(5)
+    )
+
+    def jobs(engine, model, version):
+        seen["jobs"] = model
+        return {"jobs": 1, "unfinished": False, "unfinished_ids": []}
+
+    monkeypatch.setattr(mod, "jobs_summary", jobs)
+    path, _ = env
+    judge("c", provider=FakeJudge(), gold_csv=path, review_model="other-model")
+    assert seen == {"jobs": "other-model", "select": "other-model"}

@@ -7,7 +7,7 @@ from elusion.collect.db import make_engine
 from elusion.config import settings
 from elusion.review.db import ensure_schema, get_job, review_jobs, scores
 from elusion.review.prompt import Prompt
-from elusion.review.providers import Review, ReviewError
+from elusion.review.providers import ProviderConfigError, Review, ReviewError
 from tests.conftest import requires_service
 from tests.fakes import FakeProvider, ListIdSource
 
@@ -404,3 +404,111 @@ def test_no_usable_verdict_in_probe_fails_job(env, monkeypatch) -> None:
             sa.select(review_jobs).where(review_jobs.c.prompt_version == version)
         ).one()
     assert job.status == "failed"
+
+
+def test_alias_model_echo_mismatch_stops_before_storing(env) -> None:
+    """An alias pin is served under a dated id; the echo check stops before any score row."""
+    from elusion.flows.review import review
+
+    engine, version = env
+    provider = FakeProvider(model="gpt-x-mini")
+
+    def served_dated(system, paragraph):
+        r = FakeProvider.review(provider, system, paragraph)
+        r.model = "gpt-x-mini-2026-01-01"
+        return r
+
+    provider.review = served_dated
+    with pytest.raises(RuntimeError, match="pin the served snapshot id"):
+        review(
+            "cloud-concentration", sample=5, batch_size=5, provider=provider, ids=ListIdSource(IDS)
+        )
+    with engine.connect() as conn:
+        n = conn.execute(sa.select(sa.func.count()).where(scores.c.prompt_version == version))
+        assert n.scalar_one() == 0
+
+
+def test_real_openai_provider_served_drift_stops_before_storing(env) -> None:
+    from types import SimpleNamespace as NS
+
+    from elusion.flows.review import review
+    from elusion.review.openai_provider import OpenAIProvider
+
+    engine, version = env
+    good = '{"score": 3, "rationale": "r", "quote": "q"}'
+    resp = NS(
+        status="completed",
+        incomplete_details=None,
+        model="gpt-6-luna-2026-12-01",
+        output=[NS(type="message", content=[NS(type="output_text", text=good)])],
+        output_text=good,
+        usage=NS(input_tokens=100, output_tokens=10, input_tokens_details=NS(cached_tokens=0)),
+    )
+    client = NS(responses=NS(create=lambda **kw: resp))
+    provider = OpenAIProvider("gpt-6-luna", client=client)
+    with pytest.raises(RuntimeError, match=r"pin the served snapshot id \(--model or"):
+        review(
+            "cloud-concentration", sample=5, batch_size=5, provider=provider, ids=ListIdSource(IDS)
+        )
+    with engine.connect() as conn:
+        n = conn.execute(sa.select(sa.func.count()).where(scores.c.prompt_version == version))
+        assert n.scalar_one() == 0
+
+
+def test_reviewer_resolves_manifest_and_refuses_overrides(env, monkeypatch) -> None:
+    import elusion.review.registry as registry
+    from elusion.flows.review import review
+    from elusion.review.registry import ReviewerError
+
+    engine, version = env
+    manifest = registry.Manifest(
+        "ollama", "pinned-model", "cloud-concentration/v2", "cloud-concentration", 2, {}
+    )
+    resolved_with = []
+    monkeypatch.setattr(
+        registry, "resolve", lambda reviewer, uri=None: resolved_with.append(uri) or manifest
+    )
+    seen = {}
+
+    def load(criterion, v="v1"):
+        seen["load"] = (criterion, v)
+        return Prompt("system text", version)
+
+    import elusion.flows.review as mod
+
+    monkeypatch.setattr(mod, "load_prompt", load)
+    monkeypatch.setattr(
+        mod,
+        "make_provider",
+        lambda name, model=None: seen.update(made=(name, model)) or FakeProvider(model=model),
+    )
+    s = review(
+        "cloud-concentration",
+        sample=2,
+        reviewer="elusion-reviewer@champion",
+        ids=ListIdSource(IDS),
+    )
+    assert resolved_with == [settings.mlflow_tracking_uri]
+    assert seen["load"] == ("cloud-concentration", "v2")
+    assert seen["made"] == ("ollama", "pinned-model")
+    assert get_job(engine, s.job_id)["model"] == "pinned-model"
+
+    for override in ({"provider_name": "openai"}, {"model": "m"}, {"prompt_version": "v1"}):
+        with pytest.raises(ReviewerError, match="--reviewer cannot be combined"):
+            review(
+                "cloud-concentration", sample=1, reviewer="elusion-reviewer@champion", **override
+            )
+    with pytest.raises(ReviewerError, match="built for criterion 'cloud-concentration'"):
+        review("other-criterion", sample=1, reviewer="elusion-reviewer@champion")
+
+
+def test_the_judge_model_cannot_be_a_reviewer(env) -> None:
+    from elusion.flows.review import review
+
+    with pytest.raises(ProviderConfigError, match="the judge model cannot be a reviewer"):
+        review(
+            "cloud-concentration",
+            sample=1,
+            provider=FakeProvider(model=settings.judge_model),
+            ids=ListIdSource(IDS),
+        )

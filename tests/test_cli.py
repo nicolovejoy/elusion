@@ -47,8 +47,11 @@ def test_review_command_passes_criterion_name(monkeypatch) -> None:
         "sample": 20,
         "batch_size": 10,
         "concurrency": 8,
-        "prompt_version": "v1",
+        "prompt_version": None,
         "max_run_usd": None,
+        "provider_name": None,
+        "model": None,
+        "reviewer": None,
     }
     assert "summary" in result.output
 
@@ -75,6 +78,7 @@ def test_judge_command_passes_criterion_name_and_defaults(monkeypatch) -> None:
         "threshold": 3,
         "discard_n": 200,
         "seed": DEFAULT_SEED,
+        "review_model": None,
         "max_run_usd": None,
         "force": False,
     }
@@ -93,12 +97,13 @@ def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> 
 
     import elusion.flows.evaluate as mod
     from elusion.evaluate.gold import DEFAULT_SEED
+    from elusion.flows.evaluate import EvalResult
 
     seen = {}
 
     def fake_flow(criterion, **kw):
         seen.update(criterion=criterion, **kw)
-        return Path("docs/reports/cloud-concentration-m-v2.md")
+        return EvalResult(Path("docs/reports/cloud-concentration-m-v2.md"), "a" * 32)
 
     monkeypatch.setattr(mod, "evaluate", fake_flow)
     result = CliRunner().invoke(
@@ -111,8 +116,12 @@ def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> 
         "prompt_version": "v2",
         "threshold": 3,
         "seed": DEFAULT_SEED,
+        "review_model": None,
+        "discard_n": 200,
     }
     assert "docs/reports/cloud-concentration-m-v2.md" in result.output
+    assert f"mlflow run {'a' * 32}" in result.output
+    assert "/#/experiments" in result.output
 
 
 def _crit(tmp_path):
@@ -186,3 +195,164 @@ def test_evaluate_other_value_errors_still_raise(monkeypatch, tmp_path) -> None:
         app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
     )
     assert isinstance(r.exception, ValueError)
+
+
+def test_review_model_and_discard_n_pass_through(monkeypatch, tmp_path) -> None:
+    from pathlib import Path
+
+    import elusion.flows.evaluate as mod
+    from elusion.flows.evaluate import EvalResult
+
+    seen_j, seen_e = {}, {}
+    monkeypatch.setattr(mod, "judge", lambda criterion, **kw: seen_j.update(kw) or "ok")
+    monkeypatch.setattr(
+        mod,
+        "evaluate",
+        lambda criterion, **kw: seen_e.update(kw) or EvalResult(Path("p.md"), None),
+    )
+    base = ["--criterion", _crit(tmp_path), "--prompt-version", "v2", "--review-model", "x"]
+    assert CliRunner().invoke(app, ["judge", *base]).exit_code == 0
+    assert CliRunner().invoke(app, ["evaluate", *base, "--discard-n", "50"]).exit_code == 0
+    assert seen_j["review_model"] == "x"
+    assert seen_e["review_model"] == "x" and seen_e["discard_n"] == 50
+
+
+def test_evaluate_missing_discard_labels_exits_1(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    def missing(criterion, **kw):
+        raise mod.MissingDiscardLabels("2 sampled discard paragraphs have no m label")
+
+    monkeypatch.setattr(mod, "evaluate", missing)
+    r = CliRunner().invoke(
+        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+    )
+    assert r.exit_code == 1 and "Traceback" not in r.output
+    assert "2 sampled discard paragraphs" in r.output
+
+
+def test_review_provider_and_model_pass_through(monkeypatch) -> None:
+    import elusion.flows.review as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "review", lambda criterion, sample, **kw: seen.update(kw) or "ok")
+    base = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
+    assert CliRunner().invoke(app, base).exit_code == 0
+    assert (seen["provider_name"], seen["model"]) == (None, None)
+    r = CliRunner().invoke(app, [*base, "--provider", "openai", "--model", "m"])
+    assert r.exit_code == 0, r.output
+    assert (seen["provider_name"], seen["model"]) == ("openai", "m")
+
+
+def test_review_reviewer_passes_through(monkeypatch) -> None:
+    import elusion.flows.review as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "review", lambda criterion, sample, **kw: seen.update(kw) or "ok")
+    args = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
+    r = CliRunner().invoke(app, [*args, "--reviewer", "elusion-reviewer@champion"])
+    assert r.exit_code == 0, r.output
+    assert seen["reviewer"] == "elusion-reviewer@champion"
+
+
+def test_review_user_errors_exit_1_without_traceback(monkeypatch) -> None:
+    import elusion.flows.review as mod
+    from elusion.review.providers import ProviderConfigError
+    from elusion.review.registry import ReviewerError
+
+    args = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
+    for exc in (
+        ReviewerError("no alias 'x' on registered model 'm'"),
+        ProviderConfigError("no key"),
+    ):
+
+        def fail(criterion, sample, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(mod, "review", fail)
+        r = CliRunner().invoke(app, [*args, "--reviewer", "m@x"])
+        assert r.exit_code == 1 and str(exc) in r.output
+        assert "Traceback" not in r.output
+
+
+def test_review_other_lookup_and_value_errors_still_raise(monkeypatch) -> None:
+    """A KeyError from the corpus is a bug, not a reviewer problem: keep its traceback."""
+    import elusion.flows.review as mod
+
+    args = ["review", "--criterion", "criteria/cloud-concentration.md", "--sample", "5"]
+    for exc in (KeyError("3 ids not in the Parquet corpus"), ValueError("a bug")):
+
+        def fail(criterion, sample, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(mod, "review", fail)
+        r = CliRunner().invoke(app, args)
+        assert r.exit_code == 1 and r.exception is exc
+
+
+def test_promote_command_prints_version_alias_and_registry_url(monkeypatch) -> None:
+    import elusion.review.registry as mod
+
+    seen = {}
+
+    def fake_promote(run_id, name, alias, tracking_uri):
+        seen.update(run_id=run_id, name=name, alias=alias)
+        return 3
+
+    monkeypatch.setattr(mod, "promote", fake_promote)
+    r = CliRunner().invoke(app, ["promote", "--run", "abc123"])
+    assert r.exit_code == 0, r.output
+    assert seen == {"run_id": "abc123", "name": "elusion-reviewer", "alias": "champion"}
+    assert "elusion-reviewer version 3 aliased champion" in r.output
+    assert "http://localhost:5001/#/models/elusion-reviewer" in r.output
+    r = CliRunner().invoke(
+        app, ["promote", "--run", "abc123", "--name", "other", "--alias", "challenger"]
+    )
+    assert (seen["name"], seen["alias"]) == ("other", "challenger")
+
+
+def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
+    import elusion.flows.grade as mod
+
+    seen = {}
+    monkeypatch.setattr(
+        mod, "grade", lambda criterion, **kw: seen.update(criterion=criterion, **kw) or "grade ok"
+    )
+    r = CliRunner().invoke(app, ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v2"])
+    assert r.exit_code == 0, r.output
+    assert seen == {
+        "criterion": "c",
+        "prompt_version": "v2",
+        "review_model": None,
+        "threshold": 3,
+        "max_run_usd": None,
+    }
+    assert "grade ok" in r.output
+    seen.clear()
+    args = ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v3"]
+    args += ["--review-model", "m", "--threshold", "4", "--max-run-usd", "2.5"]
+    r = CliRunner().invoke(app, args)
+    assert r.exit_code == 0, r.output
+    got = (seen["prompt_version"], seen["review_model"], seen["threshold"], seen["max_run_usd"])
+    assert got == ("v3", "m", 4, 2.5)
+
+
+def test_promote_prints_the_registry_under_the_configured_tracking_uri(monkeypatch) -> None:
+    import elusion.config as config
+    import elusion.review.registry as mod
+
+    monkeypatch.setattr(config, "settings", config.Settings(mlflow_tracking_uri="http://m:9"))
+    monkeypatch.setattr(mod, "promote", lambda *a: 4)
+    r = CliRunner().invoke(app, ["promote", "--run", "abc"])
+    assert "http://m:9/#/models/elusion-reviewer" in r.output
+
+
+def test_promote_reviewer_error_exits_1_without_traceback(monkeypatch) -> None:
+    import elusion.review.registry as mod
+
+    def bad(*a):
+        raise mod.ReviewerError("no run 'x'")
+
+    monkeypatch.setattr(mod, "promote", bad)
+    r = CliRunner().invoke(app, ["promote", "--run", "x"])
+    assert r.exit_code == 1 and "error: no run 'x'" in r.output

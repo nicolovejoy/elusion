@@ -6,7 +6,7 @@
 - judge model: claude-opus-5-5
 - judge prompt version: cloud-concentration/judge-v1
 - judge effort: low
-- date: 2026-11-04
+- date: 2026-11-07
 - seed: 20261104
 
 ## Population
@@ -17,7 +17,7 @@ Every paragraph scored under the review model and prompt version above.
 - flagged (score >= 3): 75
 - discard (score < 3): 17861
 - threshold: 3
-- discard sample labeled by the judge: 200
+- discard sample: 200 drawn with seed 20261104 from the pair's discard pile; 200 labeled by the judge
 
 ## Metrics
 
@@ -45,15 +45,33 @@ Fraction of the owner's blind labels the judge matched.
 
 - agreement: 0.800 [0.563, 0.943] (k/n = 16/20)
 
+## Rationale quality
+
+The grader (claude-opus-5-5) read each flagged paragraph with the reviewer's
+rationale and quote and said whether the rationale is a faithful reading. The
+quote check is mechanical: does the quote occur in the paragraph.
+
+- grader model: claude-opus-5-5
+- rationale sound: 0.787 [0.677, 0.873] (k/n = 59/75)
+- quote verbatim: 0.987 [0.928, 1.000] (k/n = 74/75)
+
+Rationale soundness against the judge's label, over the flagged paragraphs:
+
+- sound and relevant: 23
+- sound and not relevant: 36
+- unsound and relevant: 2
+- unsound and not relevant: 14
+
 ## Cost
 
 - review run: $1.3422 (sum over 1 review_jobs rows)
-- judge run: $0.7093 (sum over the judge-runs ledger)
-- total: $2.0514
+- judge run: $2.4135 (whole criterion, every review pair: judge-runs ledger)
+- grade run: $0.3134 (this review pair: grade-runs ledger)
+- total for this pair (review + grade): $1.6556
 
 ## Wall-clock
 
-- review run, first start to last finish across 1 review_jobs rows: 0:55:46
+- review run, summed over 1 review_jobs rows (each from its start to its finish): 0:55:46
 
 ## Companies found
 

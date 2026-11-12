@@ -13,6 +13,7 @@ def make_report(**kw) -> RunReport:
         judge_prompt_version="cloud-concentration/judge-v1",
         date="2026-11-04",
         seed=20261104,
+        discard_n=200,
         threshold=2,
         population=12906,
         n_flagged=117,
@@ -23,7 +24,7 @@ def make_report(**kw) -> RunReport:
         recall=Estimate(0.83, 0.41, 0.97, -1, 12906),
         agreement=Estimate(0.9, 0.683, 0.988, 18, 20),
         review_cost_usd=0.834,
-        judge_cost_usd=1.23,
+        judge_cost_criterion_usd=1.23,
         review_jobs=2,
         review_wall_clock=timedelta(minutes=45, seconds=12, microseconds=7),
         review_unfinished=False,
@@ -77,8 +78,12 @@ def test_render_says_population_not_corpus() -> None:
 
 def test_render_cost_wall_clock_and_companies() -> None:
     md = render(make_report())
-    assert "$0.8340" in md and "$1.2300" in md and "$2.0640" in md
-    assert "first start to last finish across 2 review_jobs rows: 0:45:12" in md
+    assert "$0.8340" in md and "$1.2300" in md and "$2.0640" not in md
+    assert "- total for this pair (review + grade): $0.8340" in md
+    assert md.index("judge run:") < md.index("total for this pair")
+    assert "summed over 2 review_jobs rows (each from its start to its finish): 0:45:12" in md
+    assert "judge run: $1.2300 (whole criterion, every review pair: judge-runs ledger)" in md
+    assert "(this review pair: grade-runs ledger)" in md
     assert "- Acme Corp: 5\n- Beta Inc: 2" in md
 
 
@@ -91,7 +96,7 @@ def test_render_without_human_labels_jobs_or_companies() -> None:
 
 def test_render_marks_an_unfinished_review() -> None:
     md = render(make_report(review_unfinished=True))
-    assert "to now" in md
+    assert "or to now for one still running" in md
 
 
 def test_render_states_judge_effort() -> None:
@@ -105,3 +110,46 @@ def test_render_states_derived_interval_coverage() -> None:
     md = " ".join(render(make_report()).split())
     assert "at least about 90% (0.95 × 0.95), not 95%" in md
     assert "monotone" in md and "independent" in md
+
+
+def test_render_discard_sample_line() -> None:
+    md = render(make_report())
+    assert (
+        "- discard sample: 200 drawn with seed 20261104 from the pair's discard pile; "
+        "200 labeled by the judge" in md
+    )
+
+
+GRADED = dict(
+    rationale_sound=Estimate(0.5, 0.0676, 0.9324, 2, 4),
+    quote_verbatim=Estimate(0.75, 0.1941, 0.9937, 3, 4),
+    sound_by_label={(1, 1): 2, (1, 0): 0, (0, 1): 1, (0, 0): 1},
+    grader_model="claude-opus-5-5",
+    grade_cost_usd=0.25,
+)
+
+
+def test_render_rationale_quality_section() -> None:
+    md = render(make_report(**GRADED))
+    assert "## Rationale quality" in md
+    assert "- rationale sound: 0.500 [0.068, 0.932] (k/n = 2/4)" in md
+    assert "- quote verbatim: 0.750 [0.194, 0.994] (k/n = 3/4)" in md
+    assert "- sound and relevant: 2" in md
+    assert "- sound and not relevant: 0" in md
+    assert "- unsound and relevant: 1" in md
+    assert "- unsound and not relevant: 1" in md
+    assert "- grader model: claude-opus-5-5" in md
+    assert "No grades yet" not in md
+
+
+def test_render_without_grades_says_so() -> None:
+    md = render(make_report())
+    assert "## Rationale quality" in md
+    assert "No grades yet; run `elusion grade` to add them." in md
+    assert "rationale sound" not in md
+
+
+def test_render_cost_includes_the_grade_run() -> None:
+    md = render(make_report(**GRADED))
+    assert "- grade run: $0.2500" in md
+    assert f"- total for this pair (review + grade): ${0.834 + 0.25:.4f}" in md

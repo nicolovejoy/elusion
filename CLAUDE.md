@@ -20,7 +20,7 @@ the stores and why each store exists. `docs/plans/phase-N-*.md` is the spec for 
 3. **Local first.** Everything runs from `compose.yaml` until phase 6. Never create Azure
    resources before phase 6, and never without the owner running `terraform apply` themselves.
 4. **Phase notes are part of done.** A phase is finished when `docs/notes/phase-N.md` exists
-   with the four headings in `docs/notes/README.md`.
+   with the headings in `docs/notes/README.md`.
 5. **Decisions go in `docs/DECISIONS.md`**, one dated line each, as they are made.
 
 ## Hard rules
@@ -67,8 +67,17 @@ uv sync                       # install
 uv run pytest                 # tests
 uv run elusion collect --year 2019
 uv run elusion review --criterion criteria/cloud-concentration.md --sample 20000
-uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2   # the --run <mlflow run id> form is phase 4
+uv run elusion review --criterion criteria/cloud-concentration.md --prompt-version v2 --sample 20000 --provider openai --model gpt-6-luna
+uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]
+uv run elusion grade --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]
+uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]   # report + one MLflow run
+uv run elusion promote --run <mlflow run id>   # register that run's reviewer, alias champion
+uv run elusion review --criterion criteria/cloud-concentration.md --reviewer elusion-reviewer@champion --sample 50
 ```
+
+Commands that call a paid model need the API keys from 1Password: prefix them with
+`op run --env-file=.env.tpl --`. Run judge, grade and evaluate for one criterion one at a
+time: the gold and grades CSVs are appended without a cross-process lock.
 
 ## Metrics vocabulary (use these words exactly)
 
@@ -78,7 +87,7 @@ uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-ver
 - **richness**: fraction of the whole corpus that is relevant.
 - All four are reported with Clopper-Pearson 95% intervals and the sample sizes behind them.
 
-<!-- SHARED-CONVENTIONS:BEGIN v=3308b16045f0 — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
+<!-- SHARED-CONVENTIONS:BEGIN v=c254cba18982 — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
 ## Shared conventions
 
 <!-- These are Nico's cross-repo output rules. They're materialized into each repo's
@@ -104,4 +113,6 @@ truth: prompt-lab/workflow/claude-md-shared.md — edit there and re-sync, never
 - **A review another agent must act on goes on the PR.** A review that another agent must act on, or that must outlive the session, is posted as a PR comment (`gh pr comment`), where the next session or agent finds it. Live, in-session reviews between Nico and the agent stay in chat. There is no devlog.md: the history DB is the one session record.
 
 - **Browser testing runs headless.** A headed browser takes focus on Nico's Mac. Run Playwright headless, with Edge (`channel: 'msedge'`) for desktop runs wherever a config picks a browser. Never use `headless: false`, `--headed`, `--debug`, `--ui` or `PWDEBUG` unless Nico asks for it in this session. For a visual check, take a screenshot or record a trace (`trace: 'on-first-retry'` or `'on'`) instead of opening a window. The Claude-in-Chrome extension is the one thing that drives Nico's real Chrome, on purpose.
+
+- **WebKit test runs record no frames on a Mac.** While the display is asleep, macOS WindowServer keeps every captured window buffer until a display wakes, and at 65,536 it aborts and ends the login session (2026-11-09; https://github.com/microsoft/playwright/issues/43066). Playwright's WebKit trace screenshots and video capture 25 times a second. In any config with a WebKit project, set `screenshots: false` on the trace for local runs (`trace: { mode: 'retain-on-failure', screenshots: false }`, any mode) and leave video off; CI on Linux may keep them. With that set, `--trace on` stays safe. Plain `page.screenshot` is fine, and Edge and Chromium are unaffected. Do not use `caffeinate -d` for this: it cannot wake a sleeping display and has no time limit around a command. Healthy reading: `ioclasscount IOSurface` between 400 and 900.
 <!-- SHARED-CONVENTIONS:END -->

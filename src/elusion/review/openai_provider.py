@@ -1,0 +1,229 @@
+"""The OpenAI implementation of the review/judge Provider protocol.
+
+It uses OpenAI's Responses API (`client.responses.create`), the current way to call their
+models. Like the Anthropic provider, it asks for structured output: we send a JSON schema
+built from the pydantic model with `strict: True`, and the API constrains the reply to it.
+The schema needs `additionalProperties: false` on every object; pydantic emits that for
+models declared with `extra="forbid"`, which `Verdict` and `Label` are.
+
+Prompt caching is automatic here: no marker is sent. OpenAI caches the longest repeated
+prompt prefix by itself (our system prompt is identical for every paragraph) and reports how
+many input tokens were served from cache in `usage.input_tokens_details.cached_tokens`.
+Their `input_tokens` INCLUDES those cached tokens, so we subtract them to get the same
+non-overlapping buckets as pricing.py expects: `input_tokens` is the uncached part,
+`cache_read_input_tokens` the cached part, and cache creation is always 0 (nothing to pay
+extra for writing).
+
+An answer is only usable when `status == "completed"`. A cut-off (`incomplete`, with the
+reason in `incomplete_details`), a refusal (a content part of type "refusal" inside the
+message item) or text that is not valid JSON for the output model becomes a `ReviewError`
+carrying the usage, exactly as for Anthropic, so a bad answer is a counted, billed failure.
+
+`temperature` is not sent unless the caller sets it: some models reject it, and the default
+is the vendor's. When set, it is recorded in `generation_settings`.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TypeVar
+
+import openai
+from pydantic import BaseModel, ValidationError
+
+from elusion.review.pricing import cost_usd, register_free
+from elusion.review.providers import (
+    MAX_RETRIES,
+    MAX_TOKENS,
+    REQUEST_TIMEOUT_S,
+    Judgement,
+    Label,
+    Review,
+    ReviewError,
+    Verdict,
+)
+
+_Out = TypeVar("_Out", bound=BaseModel)
+
+
+class OpenAIProvider:
+    name = "openai"
+
+    def __init__(
+        self,
+        model: str,
+        client: openai.OpenAI | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        temperature: float | None = None,
+    ) -> None:
+        self.model = model
+        self.temperature = temperature
+        self.generation_settings: dict = {} if temperature is None else {"temperature": temperature}
+        self.client = client or openai.OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            max_retries=MAX_RETRIES,
+            timeout=REQUEST_TIMEOUT_S,
+        )
+
+    def review(self, system: str, paragraph: str) -> Review:
+        verdict, model, usage = self._call(system, paragraph, Verdict, "verdict")
+        return Review(verdict, model, **usage)
+
+    def label(self, system: str, paragraph: str) -> Judgement:
+        label, model, usage = self._call(system, paragraph, Label, "label")
+        return Judgement(label, model, **usage)
+
+    def _call(
+        self, system: str, paragraph: str, out: type[_Out], name: str
+    ) -> tuple[_Out, str, dict]:
+        """One structured-output call. Returns (parsed answer, served model, usage fields)."""
+        kwargs: dict = {}
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        resp = self.client.responses.create(
+            model=self.model,
+            instructions=system,
+            input=paragraph,
+            max_output_tokens=MAX_TOKENS,
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": name,
+                    "schema": out.model_json_schema(),
+                    "strict": True,
+                }
+            },
+            **kwargs,
+        )
+        u = resp.usage  # Optional in the SDK: a failed or cancelled response may carry none
+        if u is None:
+            cached = uncached = out_tokens = 0
+        else:
+            cached = u.input_tokens_details.cached_tokens or 0
+            uncached = u.input_tokens - cached
+            out_tokens = u.output_tokens
+
+        def fail(stop_reason: str) -> ReviewError:
+            return ReviewError(stop_reason, resp.model, uncached, out_tokens, 0, cached)
+
+        if resp.status != "completed":
+            details = resp.incomplete_details
+            raise fail(str((details.reason if details else None) or resp.status))
+        if u is None:
+            raise fail("missing_usage")
+        if any(
+            c.type == "refusal"
+            for item in resp.output
+            if item.type == "message"
+            for c in item.content
+        ):
+            raise fail("refusal")
+        try:
+            parsed = out.model_validate(json.loads(resp.output_text))
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise fail("invalid_json") from exc
+        usage = {
+            "input_tokens": uncached,
+            "output_tokens": out_tokens,
+            # Priced by the pinned id, not the served one: if the API served a different
+            # model, the flow's check_model_echo must be the one to stop the run.
+            "cost_usd": cost_usd(self.model, uncached, out_tokens, 0, cached),
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": cached,
+        }
+        return parsed, resp.model, usage
+
+
+class OllamaProvider(OpenAIProvider):
+    """A local model served by Ollama, called through its OpenAI-compatible endpoint.
+
+    Ollama is a local server that runs open-weight models; its `/v1` endpoint speaks the
+    OpenAI wire format, so the same `openai` SDK works with `base_url=f"{host}/v1"` and a
+    dummy api key. Ollama documents both `/v1/chat/completions` (with `response_format`,
+    `temperature`, `max_tokens`) and a non-stateful `/v1/responses`; we use chat completions
+    with a strict JSON-schema `response_format`, the better-trodden path:
+    https://docs.ollama.com/api/openai-compatibility and
+    https://docs.ollama.com/capabilities/structured-outputs
+
+    Live probe passed: a 50-doc probe and the full 17,936-doc run (2026-11-06/07) went
+    through chat completions with `json_schema` and 0 failures, so the native `/api/chat`
+    fallback (spec decision 5) was not needed. A model that ignores
+    the schema and answers in prose is a counted ReviewError("invalid_json"), not a crash.
+
+    Cost is zero (the price is wall-clock and your Mac); Ollama has no prompt-cache buckets
+    we can see, so both cache counts are 0 unless the endpoint reports cached tokens.
+    """
+
+    name = "ollama"
+
+    def __init__(
+        self,
+        model: str,
+        host: str | None = None,
+        client: openai.OpenAI | None = None,
+        temperature: float = 0.0,
+    ) -> None:
+        from elusion.config import settings
+
+        register_free(model)
+        host = host or settings.ollama_host
+        # Ollama's own server accepts OLLAMA_HOST=127.0.0.1:11434 with no scheme; httpx does not.
+        if "://" not in host:
+            host = f"http://{host}"
+        super().__init__(
+            model,
+            client=client,
+            api_key="ollama",  # required by the SDK, ignored by Ollama
+            base_url=f"{host.rstrip('/')}/v1",
+            temperature=temperature,
+        )
+
+    def _call(
+        self, system: str, paragraph: str, out: type[_Out], name: str
+    ) -> tuple[_Out, str, dict]:
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": paragraph},
+            ],
+            max_tokens=MAX_TOKENS,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": name, "schema": out.model_json_schema(), "strict": True},
+            },
+            temperature=self.temperature,
+        )
+        u = resp.usage  # Optional in the SDK
+        if u is None:
+            cached = uncached = out_tokens = 0
+        else:
+            details = u.prompt_tokens_details
+            cached = (details.cached_tokens if details else None) or 0
+            uncached = u.prompt_tokens - cached
+            out_tokens = u.completion_tokens
+
+        def fail(stop_reason: str) -> ReviewError:
+            return ReviewError(stop_reason, resp.model, uncached, out_tokens, 0, cached)
+
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise fail("length")
+        if choice.message.refusal:
+            raise fail("refusal")
+        if u is None:
+            raise fail("missing_usage")
+        try:
+            parsed = out.model_validate(json.loads(choice.message.content or ""))
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise fail("invalid_json") from exc
+        usage = {
+            "input_tokens": uncached,
+            "output_tokens": out_tokens,
+            "cost_usd": cost_usd(self.model, uncached, out_tokens, 0, cached),
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": cached,
+        }
+        return parsed, resp.model, usage

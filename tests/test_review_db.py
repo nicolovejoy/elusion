@@ -9,12 +9,14 @@ from elusion.review.db import (
     finish_job,
     get_job,
     insert_scores,
+    provider_for,
     review_jobs,
     score_row,
     scores,
     start_job,
     unscored_ids,
     update_job,
+    verdicts_for,
 )
 from elusion.review.providers import Review, Verdict
 from tests.conftest import requires_service
@@ -100,6 +102,7 @@ def test_jobs_summary_sums_cost_and_spans_all_jobs() -> None:
             "finished_at": None,
             "unfinished": False,
             "unfinished_ids": [],
+            "busy_s": 0.0,
         }
         a = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
         b = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
@@ -117,6 +120,82 @@ def test_jobs_summary_sums_cost_and_spans_all_jobs() -> None:
         assert s["unfinished"] is False and s["unfinished_ids"] == []
         assert s["finished_at"] == get_job(engine, b)["finished_at"]
         assert s["started_at"] == get_job(engine, a)["started_at"]
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))
+
+
+def test_provider_for_returns_the_pairs_provider_or_none() -> None:
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    assert provider_for(engine, model, "v1") is None
+    row = {**score_row("p" + uuid.uuid4().hex[:15], "v1", "anthropic", _review()), "model": model}
+    try:
+        insert_scores(engine, [row])
+        assert provider_for(engine, model, "v1") == "anthropic"
+        assert provider_for(engine, model, "v2") is None
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.model == model))
+
+
+def test_verdicts_for_returns_rows_at_or_above_min_score_as_verdicts() -> None:
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    ids = {s: "v" + uuid.uuid4().hex[:15] for s in (1, 2, 4)}
+    rows = []
+    for s, i in ids.items():
+        r = score_row(i, "v1", "anthropic", _review())
+        rows.append({**r, "model": model, "score": s, "rationale": f"r{s}", "quote": f"q{s}"})
+    # qualifying scores without a usable rationale are skipped, not graded
+    for rationale in (None, ""):
+        r = score_row("v" + uuid.uuid4().hex[:15], "v1", "anthropic", _review())
+        rows.append({**r, "model": model, "score": 4, "rationale": rationale, "quote": "q"})
+    try:
+        insert_scores(engine, rows)
+        got = verdicts_for(engine, model, "v1", min_score=2)
+        assert got == {
+            ids[2]: Verdict(score=2, rationale="r2", quote="q2"),
+            ids[4]: Verdict(score=4, rationale="r4", quote="q4"),
+        }
+        assert verdicts_for(engine, model, "v2", min_score=0) == {}
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.model == model))
+
+
+def test_jobs_summary_busy_time_sums_each_job_not_the_span() -> None:
+    """A 10-minute job, a 2-second failed start an hour later: 602 s busy, not ~70 min."""
+    from datetime import UTC, datetime, timedelta
+
+    from elusion.review.db import jobs_summary
+
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    t0 = datetime(2026, 11, 6, 15, 0, tzinfo=UTC)
+
+    def place(job_id: str, start: datetime, end: datetime | None) -> None:
+        with engine.begin() as conn:
+            conn.execute(
+                sa.update(review_jobs)
+                .where(review_jobs.c.job_id == job_id)
+                .values(started_at=start, finished_at=end)
+            )
+
+    try:
+        a = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
+        b = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
+        place(a, t0, t0 + timedelta(minutes=10))
+        place(b, t0 + timedelta(hours=1), t0 + timedelta(hours=1, seconds=2))
+        assert jobs_summary(engine, model, "c/v2")["busy_s"] == 602.0
+
+        c = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
+        place(c, datetime.now(UTC) - timedelta(seconds=60), None)
+        busy = jobs_summary(engine, model, "c/v2")["busy_s"]
+        assert 662.0 <= busy < 662.0 + 30  # the running job counts up to now
     finally:
         with engine.begin() as conn:
             conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))

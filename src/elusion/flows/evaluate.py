@@ -20,17 +20,20 @@ starts. Idempotency is by (doc_id, labeler): ids the judge model already labeled
 skipped, and a failed call (refusal, truncation, invalid JSON) writes no row, so a plain
 re-run retries exactly those ids. There is no Kafka here: the gold ids are a fixed list.
 
-`evaluate`: scores + judge labels -> metrics -> docs/reports/<criterion>-<model>-<v>.md.
-It makes no LLM call. The two piles are recomputed from the current scores, not taken
-from the CSV `pile` column, so the report always describes the scores as they stand.
+`evaluate`: scores + judge labels (+ rationale grades, if any) -> metrics ->
+docs/reports/<criterion>-<model>-<v>.md. It makes no LLM call. The two piles are
+recomputed from the current scores, not taken from the CSV `pile` column, so the report
+always describes the scores as they stand.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
@@ -52,8 +55,11 @@ from elusion.evaluate.gold import (
     judge_runs_path,
     labeled_ids,
     select_gold,
+    split_piles,
 )
+from elusion.evaluate.grades import grade_cost_usd, grade_runs_path, grades_path, rows_for
 from elusion.evaluate.report import RunReport, render
+from elusion.evaluate.tracking import log_run
 from elusion.flows.review import (
     PROBE_DOCS,
     BatchResult,
@@ -64,8 +70,8 @@ from elusion.flows.review import (
 )
 from elusion.review import db
 from elusion.review.corpus import load_texts
-from elusion.review.db import jobs_summary, scores_for
-from elusion.review.prompt import load_prompt
+from elusion.review.db import jobs_summary, provider_for, scores_for
+from elusion.review.prompt import PROMPTS_DIR, load_prompt
 from elusion.review.providers import AnthropicProvider, Judge
 
 JUDGE_PROMPT_VERSION = "judge-v1"  # prompts/<criterion>/judge-v1.md
@@ -107,6 +113,7 @@ def judge(
     threshold: int = 3,
     discard_n: int = 200,
     seed: int = DEFAULT_SEED,
+    review_model: str | None = None,
     max_run_usd: float | None = None,
     batch_size: int = 50,
     concurrency: int = 8,
@@ -115,7 +122,7 @@ def judge(
     gold_csv: Path | None = None,
     force: bool = False,
 ) -> JudgeSummary:
-    """Label the gold set of the review run (settings.review_model, `prompt_version`).
+    """Label the gold set of the review run (`review_model`, `prompt_version`).
 
     `prompt_version` names the review prompt whose scores define the piles; the judge's
     own prompt is always JUDGE_PROMPT_VERSION. `gold` and `gold_csv` default to
@@ -132,6 +139,7 @@ def judge(
     spend, and a probe without a single usable label raises RuntimeError.
     """
     log = get_run_logger()
+    review_model = review_model or settings.review_model
     if max_run_usd is None:
         max_run_usd = settings.max_run_usd
     prompt = load_prompt(criterion, JUDGE_PROMPT_VERSION)
@@ -140,19 +148,17 @@ def judge(
     if gold is None:
         review_version = f"{criterion}/{prompt_version}"
         engine = db.make_engine(settings.database_url)
-        jobs = jobs_summary(engine, settings.review_model, review_version)
+        jobs = jobs_summary(engine, review_model, review_version)
         if jobs["unfinished"]:
-            msg = _unfinished_msg(jobs, settings.review_model, review_version)
+            msg = _unfinished_msg(jobs, review_model, review_version)
             if not force:
                 raise ReviewStillRunning(
                     f"{msg}; wait for it to finish, or pass --force if it was killed"
                 )
             log.warning("%s; continuing because force=True", msg)
-        gold = select_gold(
-            engine, settings.review_model, review_version, threshold, discard_n, seed
-        )
+        gold = select_gold(engine, review_model, review_version, threshold, discard_n, seed)
         if not gold:
-            raise RuntimeError(f"no scores for ({settings.review_model}, {review_version})")
+            raise RuntimeError(f"no scores for ({review_model}, {review_version})")
     pile = dict(gold)
     done = labeled_ids(path, provider.model)
     todo = [d for d in pile if d not in done]
@@ -241,6 +247,9 @@ def judge(
             "cost_usd": summary.cost_usd,
             "model": provider.model,
             "prompt_version": prompt.version,
+            # The review pair this run was for. Older records lack these two fields.
+            "review_model": review_model,
+            "review_prompt_version": f"{criterion}/{prompt_version}",
             "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         try:
@@ -255,8 +264,31 @@ class MissingLabels(RuntimeError):
     """Some flagged paragraph has no judge label, so precision cannot be computed."""
 
 
+class MissingDiscardLabels(MissingLabels):
+    """Some doc in the pair's seeded discard draw has no judge label, so elusion is biased."""
+
+
+@dataclass
+class EvalResult:
+    """What `evaluate` returns: the report file and the MLflow run id (None if not logged)."""
+
+    report_path: Path
+    run_id: str | None
+
+
 def report_path(reports_dir: Path, criterion: str, model: str, prompt_version: str) -> Path:
-    return reports_dir / f"{criterion}-{model}-{prompt_version.replace('/', '-')}.md"
+    # Windows rejects < > : " / \ | ? * in a filename; an Ollama tag like qwen2.5:14b has a colon.
+    name = re.sub(r'[<>:"/\\|?*]', "-", f"{criterion}-{model}-{prompt_version}")
+    return reports_dir / f"{name}.md"
+
+
+def report_date(now: datetime) -> str:
+    """The calendar day printed on a report: the owner's day in California, not UTC's.
+
+    Timestamps are stored in UTC; a day shown to a person is America/Los_Angeles, or an
+    evening run would be dated tomorrow.
+    """
+    return now.astimezone(ZoneInfo("America/Los_Angeles")).date().isoformat()
 
 
 @flow(name="evaluate")
@@ -269,20 +301,27 @@ def evaluate(
     data_dir: Path | None = None,
     reports_dir: Path = Path("docs/reports"),
     review_model: str | None = None,
+    discard_n: int = 200,
     judge_model: str | None = None,
     today: str | None = None,
-) -> Path:
+    log_mlflow: bool = True,
+) -> EvalResult:
     """Compute the metrics of the review run (review_model, `prompt_version`) from the
-    judge's labels, write the Markdown report and return its path.
+    judge's labels, write the Markdown report and log one MLflow run for it.
 
     Flagged = every doc scoring >= `threshold` under the pair; each must carry a label by
     `judge_model`, otherwise MissingLabels (re-running `elusion judge` fills them). The
-    discard sample = this judge's labeled docs that currently score below the threshold.
-    `seed` is not used to sample anything here; it is written into the report as the
-    seed the gold set was drawn with. Tests pass a fake `engine` and their own paths.
+    discard sample = the seeded draw of `discard_n` from this pair's own discard pile
+    (`split_piles`, the same draw `elusion judge` made); each drawn doc must carry a label
+    by `judge_model`, otherwise MissingDiscardLabels. Labels for docs outside the draw
+    (e.g. flagged by another review run) are never counted, so elusion stays a uniform
+    sample. Tests pass a fake `engine` and their own paths.
 
     An unfinished review job for the pair only warns (on stderr): the report is still
     written, and its wall-clock line says a job has not finished.
+
+    The report is written before MLflow is touched. If logging fails (server down) the
+    report stays on disk and the RuntimeError names its path. `log_mlflow=False` skips it.
     """
     log = get_run_logger()
     review_model = review_model or settings.review_model
@@ -310,7 +349,14 @@ def evaluate(
             f"e.g. {min(missing)}; re-run `elusion judge` to fill them"
         )
     flagged_rows = [judged[d] for d in sorted(flagged)]
-    discard_rows = [r for d, r in sorted(judged.items()) if d in scores and d not in flagged]
+    draw = {d for d, pile in split_piles(scores, threshold, discard_n, seed) if pile == "discard"}
+    missing_d = draw - judged.keys()
+    if missing_d:
+        raise MissingDiscardLabels(
+            f"{len(missing_d)} sampled discard paragraphs have no {judge_model} label in {csv}; "
+            "re-run `elusion judge` with the same seed"
+        )
+    discard_rows = [judged[d] for d in sorted(draw)]
     n_flagged, n_discard = len(flagged), len(scores) - len(flagged)
 
     precision = metrics.precision(flagged_rows)
@@ -319,11 +365,31 @@ def evaluate(
     shared = [h for h in humans if h.doc_id in judged]
     agreement = metrics.agreement(shared, list(judged.values())) if shared else None
 
-    wall_clock = None
-    if jobs["jobs"]:
-        end = datetime.now(UTC) if jobs["unfinished"] else jobs["finished_at"]
-        wall_clock = end - jobs["started_at"]
+    wall_clock = timedelta(seconds=jobs["busy_s"]) if jobs["jobs"] else None
     relevant = [r.doc_id for r in flagged_rows if r.label == 1]
+
+    # Rationale grades for the pair's flagged docs by the same model that judged. They
+    # join the judge's labels here, in memory; neither file feeds the other.
+    grades_csv = grades_path(criterion, data_dir or settings.data_dir)
+    grades = {g.doc_id: g for g in rows_for(grades_csv, review_model, version, judge_model)}
+    grades = {d: g for d, g in grades.items() if d in flagged}
+    graded: dict = {}
+    if grades:
+        sound_by_label = {(s, lab): 0 for s in (0, 1) for lab in (0, 1)}
+        for d, g in grades.items():
+            sound_by_label[(g.sound, judged[d].label)] += 1
+        graded = dict(
+            rationale_sound=metrics.proportion(sum(g.sound for g in grades.values()), len(grades)),
+            quote_verbatim=metrics.proportion(
+                sum(g.quote_verbatim for g in grades.values()), len(grades)
+            ),
+            sound_by_label=sound_by_label,
+            grader_model=judge_model,
+            grader_prompt_version=", ".join(
+                sorted({g.grader_prompt_version for g in grades.values()})
+            ),
+            grade_cost_usd=grade_cost_usd(grade_runs_path(grades_csv), review_model, version),
+        )
 
     report = RunReport(
         criterion=criterion,
@@ -331,8 +397,9 @@ def evaluate(
         prompt_version=version,
         judge_model=judge_model,
         judge_prompt_version=", ".join(sorted({r.prompt_version for r in judged.values()})),
-        date=today or datetime.now(UTC).date().isoformat(),
+        date=today or report_date(datetime.now(UTC)),
         seed=seed,
+        discard_n=discard_n,
         threshold=threshold,
         population=len(scores),
         n_flagged=n_flagged,
@@ -343,14 +410,36 @@ def evaluate(
         recall=metrics.recall(precision, elusion, n_flagged, n_discard),
         agreement=agreement,
         review_cost_usd=jobs["cost_usd"],
-        judge_cost_usd=judge_cost_usd(judge_runs_path(csv)),
+        judge_cost_criterion_usd=judge_cost_usd(judge_runs_path(csv)),
         review_jobs=jobs["jobs"],
         review_wall_clock=wall_clock,
         review_unfinished=jobs["unfinished"],
         companies=company_counts(engine, relevant),
+        **graded,
     )
     path = report_path(reports_dir, criterion, review_model, prompt_version)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render(report), encoding="utf-8")
     log.info("report written to %s", path)
-    return path
+    if not log_mlflow:
+        return EvalResult(path, None)
+    provider = provider_for(engine, review_model, version) or "unknown"
+    prompt_path = PROMPTS_DIR / criterion / f"{prompt_version}.md"
+    artifacts = [
+        path,
+        prompt_path,
+        Path("criteria") / f"{criterion}.md",
+    ]
+    try:
+        run_id = log_run(
+            report,
+            provider,
+            [a for a in artifacts if a.is_file()],
+            settings.mlflow_tracking_uri,
+            path,
+            prompt_path=prompt_path if prompt_path.is_file() else None,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"report written to {path}, but MLflow logging failed: {exc}") from exc
+    log.info("MLflow run %s", run_id)
+    return EvalResult(path, run_id)

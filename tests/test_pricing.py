@@ -39,3 +39,23 @@ def test_opus_prices_are_pinned():
 def test_opus_cost_sums_all_four_buckets():
     c = cost_usd("claude-opus-5-5", 1_000_000, 1_000_000, 1_000_000, 1_000_000)
     assert c == pytest.approx(29.20)
+
+
+def test_openai_row_exists_and_cost_works_with_cache_write_zero():
+    from elusion.config import settings
+
+    assert settings.openai_model in PRICES
+    # 1M uncached in + 1M cached in + 1M out at the pinned row, no cache-write tokens
+    p = PRICES[settings.openai_model]
+    assert cost_usd(settings.openai_model, 1_000_000, 1_000_000, 0, 1_000_000) == pytest.approx(
+        p["input"] + p["output"] + p["cache_read"]
+    )
+
+
+def test_register_free_adds_zero_row():
+    from elusion.review.pricing import register_free
+
+    with pytest.raises(KeyError):
+        cost_usd("local:1b", 10, 10)
+    register_free("local:1b")
+    assert cost_usd("local:1b", 10, 10, 5, 5) == 0.0

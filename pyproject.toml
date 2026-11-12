@@ -17,11 +17,11 @@ dependencies = [
   "pydantic",
   "typer",
   "python-dotenv",
+  "openai>=3.43.0",
 ]
 
 [project.optional-dependencies]
 spark = ["pyspark", "delta-spark"]
-openai = ["openai"]
 
 [dependency-groups]
 dev = ["pytest", "ruff"]
@@ -39,6 +39,9 @@ packages = ["src/elusion"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.format]
+exclude = ["*.md"]  # ruff 0.17 formats fenced code in markdown; the docs keep their hand layout
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

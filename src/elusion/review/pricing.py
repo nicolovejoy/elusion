@@ -15,6 +15,8 @@ from __future__ import annotations
 PRICES: dict[str, dict[str, float]] = {
     "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_write": 0.125, "cache_read": 0.01},
     "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cache_write": 5.00, "cache_read": 0.20},
+    # OpenAI caches prompt prefixes automatically and has no cache-write charge: cache_write is 0.
+    "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_write": 0.0, "cache_read": 0.01},
 }
 
 
@@ -35,3 +37,8 @@ def cost_usd(
         + cache_creation_input_tokens * p["cache_write"]
         + cache_read_input_tokens * p["cache_read"]
     ) / 1_000_000
+
+
+def register_free(model: str) -> None:
+    """Add an all-zero price row (a local model): cost_usd returns 0.0 instead of raising."""
+    PRICES.setdefault(model, {"input": 0.0, "output": 0.0, "cache_write": 0.0, "cache_read": 0.0})

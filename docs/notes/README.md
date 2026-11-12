@@ -1,15 +1,17 @@
 # Phase notes
 
-One file per phase, `phase-N.md`, half a page, these four headings and nothing else:
+One file per phase, `phase-N.md`, about half a page
 
-## What I built
-Two sentences and the command that demos it.
+## What we built
 
-## What the tool is actually for
-The one-line definition you would give a colleague, now that you have used it.
+## Why we built it
 
-## What a production e-discovery platform does differently, and why
-Scale, isolation, defensibility. Cite a doc or posting if you know one.
+what we thought we might learn
 
-## The question I would ask their team
-The thing you could not figure out from outside.
+## What we learned
+
+new insights
+
+## Results
+
+the numbers, and how far they can be trusted

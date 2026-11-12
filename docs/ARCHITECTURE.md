@@ -160,10 +160,47 @@ Prefect flow `evaluate`: piles recomputed from `scores`, joined to the judge row
   human rows ⋈ judge rows               ──▶ judge agreement with the owner
   review_jobs, judge-runs ledger        ──▶ cost, wall-clock
   `documents`, flagged judged relevant  ──▶ companies found
+  grades for the pair (if any)          ──▶ rationale sound, quote verbatim, sound x label
         Clopper-Pearson 95% intervals and the k/n behind them
         ▼
-docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow artifact (phase 4)
+docs/reports/<criterion>-<model>-<version>.md (committed)
+        ▼
+MLflow run in experiment elusion/<criterion>, named <review model>/<prompt version>:
+  params, metrics (point/low/high/k/n per metric, costs), artifacts (report, review
+  prompt, criterion file); never a gold row, a grade row or a label
 ```
+
+Rationale grading (phase 4) sits beside the judge and feeds evaluate:
+
+```
+Postgres `scores`, the pair's flagged docs that have a rationale
+        ▼
+Prefect flow `grade` ──▶ LLM call (judge model + grade-v1: paragraph plus the reviewer's
+        │                score, rationale and quote; never a label); spend guard as in review
+        ├──▶ data/grades/<criterion>.csv               one row per (doc, review model,
+        │                                              prompt version, grader); quote_verbatim
+        │                                              checked in Python, not by the model
+        └──▶ data/grades/<criterion>.grade-runs.jsonl  one line per grade run, per pair: counts, cost
+```
+
+The registry (phase 4) turns one evaluated configuration into the one the review flow runs:
+
+```
+evaluate's MLflow run ──▶ logged model `reviewer` (pyfunc): reviewer.json manifest (provider,
+        │                 pinned model id, prompt version, criterion, threshold, generation
+        │                 settings) + the review prompt file; never gold or grades
+        ▼
+elusion promote --run <id> ──▶ registered model `elusion-reviewer`, new version N,
+                                alias `champion` moved to N
+        ▼
+elusion review --reviewer elusion-reviewer@champion
+        resolves the manifest from the registry, then runs the ordinary review flow with
+        that provider, model and prompt version: same (model, prompt version) key in
+        `scores`, same Kafka consumer group, so already-scored documents cost nothing
+```
+
+Promotion changes which configuration `--reviewer` resolves to. It does not change a
+score, the `scores` key, or the model behind a provider's id.
 
 ## Where each phase reads and writes
 
@@ -172,7 +209,7 @@ docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow art
 | 1 collect | HuggingFace JSONL | Parquet, `documents`, Kafka |
 | 2 review | Kafka, `documents`, `scores`, Parquet text | `scores`, job table |
 | 3 judge, label, evaluate | `scores`, `review_jobs`, `documents`, Parquet text, `data/gold/` | `data/gold/<criterion>.csv`, `.judge-runs.jsonl`, `docs/reports/` |
-| 4 leaderboard | report, `scores` | MLflow runs and registry |
+| 4 leaderboard | report, scores, prompt file, `data/grades/`, MLflow registry | MLflow run (params, metrics, report, prompt, `reviewer` model); registry versions and alias; `data/grades/<criterion>.csv`, `.grade-runs.jsonl` |
 | 5 dedupe | Parquet | Delta table of clusters; `scores` for members |
 | 6 production | same as 2, on AKS | same as 2 |
 
@@ -184,5 +221,6 @@ docs/reports/<criterion>-<model>-<version>.md (committed)  ──▶  MLflow art
 | Redpanda (Kafka) | 9092 | 9092 external, 29092 internal | collect (produce), review (consume) |
 | MLflow 3.17 | 5001 | 5000 | leaderboard |
 | Prefect 3.9 | 4200 | 4200 | every flow |
+| Ollama 0.40 (Homebrew service, not compose) | 11434 | — | review with a local model (phase 4) |
 
 Host ports 5432 and 5000 are taken on the dev Mac by Homebrew Postgres and AirPlay.
