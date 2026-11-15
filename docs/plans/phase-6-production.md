@@ -1,7 +1,7 @@
 # Phase 6 spec: production in Azure
 
-Status: designed 2026-11-15 and checked once by a fresh reader; not started, awaiting the
-owner's approval. Read
+Status: designed 2026-11-15 and checked once by a fresh reader; the owner confirmed the
+controller's calls the same day, with the amendments marked below. Build not started. Read
 `docs/ARCHITECTURE.md`, the Phase 6 checklist in `docs/PHASES.md` and `compose.yaml` first.
 Hard rules in `CLAUDE.md` apply to every line below, in particular: no Azure resource is
 created except by the owner running `terraform apply` themselves. The phase 4 spec
@@ -61,25 +61,36 @@ Owner decisions, 2026-11-15 (`docs/DECISIONS.md`):
   mirroring `compose.yaml`. The Parquet text goes in the blob container. No managed Azure
   database, no Event Hubs.
 - The Terraform module includes a $10 resource-group budget with an email alert; the
-  address is a variable supplied at apply time and never committed.
+  address is a variable supplied at apply time and never committed. Amended the same day:
+  a second $10 budget covers the cluster's *node resource group*. AKS creates that group
+  itself (named `MC_...` by default) and puts the node machines, their disks and the
+  networking in it, so a budget on the main group alone would see only the registry and
+  the storage account and would stay silent about a forgotten cluster.
 - The region is West US 2.
 - The cluster's scores are evaluated as their own population, by filing year, not merged
   into the champion's existing report. The owner left this to the controller's
   recommendation. The year filter gets a design addendum before task 9.
 
-Controller's calls, 2026-11-15, for the owner to confirm or overturn. Each confirmed call
-becomes a `DECISIONS.md` line.
+Controller's calls, 2026-11-15. The owner confirmed all fourteen the same day: nine as
+written, four with an addition (1, 2, 8, 10) and one with its recovery procedure changed
+(14). Each is a `DECISIONS.md` line.
 
 1. **The cluster run scores a filing year that has no local scores.** Task 1 finds which
    of 2018, 2019 and 2020 has no row in the local `scores` table for any model. The
    cluster collects that year and reviews its first 20,000 ids with the champion
    configuration. Nothing is paid for twice, and no scores need to be copied into the
-   cluster before the run. Task 1 was run on 2026-11-15 and the year is 2020.
+   cluster before the run. Task 1 was run on 2026-11-15 and the year is 2020. Addition:
+   the report states its population as the first 20,000 paragraphs of 2020 in ingestion
+   order. That is not a random draw from the year, and the metrics describe that
+   population only.
 2. **The champion is named by its parts, not resolved from the registry.** The run passes
    provider `openai`, model `gpt-6-luna` and prompt version `v2`, the values in
    `elusion-reviewer@champion` (DECISIONS 2026-11-07). `--reviewer` would need the MLflow
    registry, which lives in the local MLflow and is not deployed to the cluster. MLflow
-   stays local; the review flow does not touch it otherwise.
+   stays local; the review flow does not touch it otherwise. Addition: on the Azure day,
+   before the review is started, `elusion-reviewer@champion` is resolved locally and
+   compared with the three values about to be passed, so the cluster cannot run a
+   configuration the registry no longer calls champion.
 3. **Scores come home.** Before the destroy, `scores` and `review_jobs` are dumped from
    the cluster's Postgres to `data/exports/` (gitignored) and loaded into the local
    Postgres, so the local ledger knows every document that has been paid for. How those
@@ -111,13 +122,17 @@ becomes a `DECISIONS.md` line.
    `kubectl`, the key fed from 1Password through `op run --env-file=.env.tpl`, the
    password generated on the spot. No secret value appears in the chart, a values file,
    a `.tfvars` file, shell history or this conversation. Only `OPENAI_API_KEY` goes to the
-   cluster; the Anthropic key is not needed there.
+   cluster; the Anthropic key is not needed there. Addition: it is a key made for this
+   run, with its own 1Password item, and the owner revokes it after the destroy.
 9. **Terraform state is local and gitignored** (`.gitignore` already covers
    `infra/terraform/*.tfstate*`). The subscription id comes from the environment
    (`ARM_SUBSCRIPTION_ID`), not from a committed file. `.terraform.lock.hcl` is committed.
 10. **Nodes are two `Standard_D2s_v5`** (2 vCPU, 8 GB each, x86-64), control plane on the
     free tier, region West US 2. The dev Mac is arm64, so the image is built for both
     `linux/arm64` (rehearsal) and `linux/amd64` (AKS) and the AKS values pin it by digest.
+    Addition: task 0 checks that the subscription is not restricted from this size in
+    West US 2, and the node size is a Terraform variable, so that a capacity refusal on
+    the day is a one-line change.
 11. **The corpus volume is a mount, not new code.** `load_texts` and `write_parquet` read
     and write a directory. On AKS that directory is the blob container mounted through the
     cluster's Blob CSI driver; on the laptop cluster it is an ordinary volume. No storage
@@ -133,8 +148,12 @@ becomes a `DECISIONS.md` line.
 14. **A flow-run Job never retries on its own.** `sample` counts ids pulled from the
     consumer group's committed offset, so a second run with `sample=20000` scores 20,000
     further documents, not the remainder, and at about $2 the spend guard would not stop
-    it. The Job's retry count is zero. After a failure the next run is started by hand
-    with the remainder: 20,000 minus the group's committed offset.
+    it. The Job's retry count is zero. Recovery, changed on confirmation: after a failure
+    the consumer group is reset to the start of the topic with `rpk` and the same
+    `sample=20000` run is started again by hand. It pulls the same 20,000 ids, skips every
+    one that has a score and pays only for the rest, so there is no remainder to work out
+    on paid time. A document that was refused or truncated the first time has no score and
+    is attempted once more.
 
 The three questions that were the owner's are at the end, with the answers.
 
@@ -189,9 +208,10 @@ over the exact command and waits. No test makes a live call.
 
 - Approve and run `brew install helm` (a new tool on the dev Mac).
 - Turn on Kubernetes in OrbStack.
-- `az login`, then confirm three things with read-only `az` commands the controller
+- `az login`, then confirm four things with read-only `az` commands the controller
   gives: which subscription is the default; that it has a vCPU quota of at least 4 for
-  the Dsv5 family in West US 2; and that the signed-in account holds Owner or User Access
+  the Dsv5 family in West US 2; that `Standard_D2s_v5` carries no restriction for it
+  there; and that the signed-in account holds Owner or User Access
   Administrator on it. Terraform's role assignments (registry pull, blob access by
   identity) need that role. With Contributor only, stop and bring it to the owner; do not
   fall back to registry admin credentials or storage account keys.
@@ -290,8 +310,9 @@ Install the chart on OrbStack's Kubernetes with `values.yaml`. Then:
   same review again: `0 to score, 50 skipped`. Without the reset the run would pull the
   next 50 ids and score them.
 - Start a run with `sample=300` and delete its pod part-way. The Job does not restart.
-  Read the group's committed offset, start a run for the remainder, and confirm that the
-  two runs together scored each of the 300 documents exactly once.
+  Reset the group to the start of the topic and start the same `sample=300` run again
+  (call 14). Confirm that the second run skipped what the first had scored, that `scores`
+  holds 300 rows, and that the two job rows' `docs_scored` add up to 300.
 - Practise the export of task 8 against this cluster and load it into a scratch database.
 - `helm uninstall` and delete the volumes.
 
@@ -303,9 +324,9 @@ The rehearsal passes when all of the above hold. Its scores are discarded (call 
   `Standard_D2s_v5`, system-assigned identity, Blob CSI driver enabled); container
   registry (Basic) with pull permission for the cluster's kubelet identity; storage
   account and one private blob container with access for the cluster through identity,
-  not an account key; a resource-group budget of $10 with an email alert (approved by the
-  owner 2026-11-15).
-- Variables for region, names and node count, with defaults; outputs for the cluster
+  not an account key; two budgets of $10 with an email alert, one on the resource group
+  and one on the cluster's node resource group (approved by the owner 2026-11-15).
+- Variables for region, names, node count and node size, with defaults; outputs for the cluster
   name, registry login server and storage names that the Helm values need.
 - The builder reads the current `azurerm` provider documentation for every argument and
   does not recall them; the provider version is pinned.
@@ -324,14 +345,17 @@ Done in one sitting, commands from `infra/README.md`, the controller alongside:
 5. `helm install` with `values-aks.yaml`; every pod is ready.
 6. Run `collect` for the year from task 1 with `limit=5` (the mount smoke test of call
    13), then for the whole year. The Parquet file is in the blob container.
-7. Run `review` with `sample=20000` and the champion's parts (call 2). The spend guard's
-   projection is printed before the bulk spend; expected about $2.20. If the run fails
-   part-way, the next run takes the remainder (call 14), never 20,000 again.
+7. Resolve `elusion-reviewer@champion` locally and check it against the parts (call 2).
+   Run `review` with `sample=20000` and those parts. The spend guard's projection is
+   printed before the bulk spend; expected about $2.20. If the run fails part-way, reset
+   the consumer group and start the same run again (call 14); never start it again
+   without the reset.
 8. Export `scores` and `review_jobs` to `data/exports/`; the exported row counts equal
    the counts in the cluster's Postgres; record the file's SHA-256 in the phase note.
 9. Record for the note: node count and size, wall-clock of collect and review, documents
    per minute, the image digest, the cluster name.
-10. `terraform destroy`; `az group show` reports the group as not found.
+10. `terraform destroy`; `az group show` reports the group as not found, and so does the
+    node resource group. Revoke the run's OpenAI key (call 8).
 11. Next day: read the cost for the resource group in the Azure portal and record it.
 
 If anything blocks for more than an hour, export what exists and destroy; the run is
