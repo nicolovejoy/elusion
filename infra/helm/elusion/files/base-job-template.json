@@ -1,0 +1,95 @@
+{
+  "job_configuration": {
+    "command": "{{ command }}",
+    "env": "{{ env }}",
+    "labels": "{{ labels }}",
+    "name": "{{ name }}",
+    "annotations": "{{ annotations }}",
+    "namespace": "{{ namespace }}",
+    "job_manifest": {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "annotations": "{{ annotations }}",
+        "generateName": "{{ name }}-",
+        "labels": "{{ labels }}",
+        "namespace": "{{ namespace }}"
+      },
+      "spec": {
+        "backoffLimit": 0,
+        "completions": 1,
+        "parallelism": 1,
+        "template": {
+          "spec": {
+            "restartPolicy": "Never",
+            "automountServiceAccountToken": false,
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "runAsGroup": 10001,
+              "fsGroup": 10001
+            },
+            "containers": [
+              {
+                "name": "prefect-job",
+                "image": "{{ image }}",
+                "imagePullPolicy": "{{ image_pull_policy }}",
+                "command": ["env"],
+                "args": "{{ command }}",
+                "envFrom": [{"configMapRef": {"name": "elusion-settings"}}],
+                "env": [
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {"secretKeyRef": {"name": "@POSTGRES_SECRET@", "key": "POSTGRES_PASSWORD"}}
+                  },
+                  {
+                    "name": "DATABASE_URL",
+                    "value": "postgresql://elusion:$(POSTGRES_PASSWORD)@postgres:5432/elusion"
+                  },
+                  {
+                    "name": "OPENAI_API_KEY",
+                    "valueFrom": {"secretKeyRef": {"name": "@OPENAI_SECRET@", "key": "OPENAI_API_KEY", "optional": true}}
+                  }
+                ],
+                "volumeMounts": [{"name": "corpus", "mountPath": "/data"}],
+                "resources": {
+                  "limits": {"cpu": "{{ cpu_limit }}", "memory": "{{ memory_limit }}"},
+                  "requests": {"cpu": "{{ cpu_request }}", "memory": "{{ memory_request }}"}
+                }
+              }
+            ],
+            "volumes": [{"name": "corpus", "persistentVolumeClaim": {"claimName": "corpus"}}]
+          }
+        },
+        "ttlSecondsAfterFinished": "{{ finished_job_ttl }}"
+      }
+    },
+    "cluster_config": "{{ cluster_config }}",
+    "job_watch_timeout_seconds": "{{ job_watch_timeout_seconds }}",
+    "pod_watch_timeout_seconds": "{{ pod_watch_timeout_seconds }}",
+    "stream_output": "{{ stream_output }}"
+  },
+  "variables": {
+    "description": "elusion flow runs as Kubernetes Jobs (phase 6). Based on prefect-kubernetes 0.8.0's default template; see the comment in templates/prefect-register.yaml for what changed.",
+    "type": "object",
+    "properties": {
+      "name": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Name", "description": "Name given to infrastructure created by a worker."},
+      "env": {"additionalProperties": {"anyOf": [{"type": "string"}, {"type": "null"}]}, "title": "Environment Variables", "type": "object", "description": "Environment variables to set when starting a flow run."},
+      "labels": {"additionalProperties": {"type": "string"}, "title": "Labels", "type": "object", "description": "Labels applied to infrastructure created by a worker."},
+      "command": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Command", "description": "Leave blank: the worker fills in `prefect flow-run execute`."},
+      "annotations": {"additionalProperties": {"type": "string"}, "title": "Annotations", "type": "object", "description": "Annotations applied to Kubernetes jobs and pods created by the worker."},
+      "namespace": {"default": "@NAMESPACE@", "title": "Namespace", "type": "string", "description": "The Kubernetes namespace to create jobs within."},
+      "image": {"default": "@IMAGE@", "title": "Image", "type": "string", "description": "The elusion image, set by the chart."},
+      "image_pull_policy": {"default": "@PULL_POLICY@", "enum": ["IfNotPresent", "Always", "Never"], "title": "Image Pull Policy", "type": "string", "description": "The Kubernetes image pull policy."},
+      "finished_job_ttl": {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": null, "title": "Finished Job TTL", "description": "Seconds before a finished Job is deleted; null keeps it for inspection."},
+      "job_watch_timeout_seconds": {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": null, "title": "Job Watch Timeout Seconds", "description": "Seconds to watch for job creation before timing out; null waits forever."},
+      "pod_watch_timeout_seconds": {"default": 300, "title": "Pod Watch Timeout Seconds", "type": "integer", "description": "Seconds to watch for pod creation before timing out (an image pull on a new node takes a while)."},
+      "stream_output": {"default": true, "title": "Stream Output", "type": "boolean", "description": "Stream the flow run's output to the worker's log."},
+      "cluster_config": {"anyOf": [{"type": "object"}, {"type": "null"}], "default": null, "title": "Cluster Config", "description": "Null: the worker uses its in-cluster credentials."},
+      "cpu_request": {"default": "250m", "title": "CPU Request", "type": "string", "description": "CPU request for the flow-run container."},
+      "cpu_limit": {"default": "1", "title": "CPU Limit", "type": "string", "description": "CPU limit for the flow-run container."},
+      "memory_request": {"default": "1Gi", "title": "Memory Request", "type": "string", "description": "Memory request for the flow-run container."},
+      "memory_limit": {"default": "2Gi", "title": "Memory Limit", "type": "string", "description": "Memory limit for the flow-run container."}
+    }
+  }
+}

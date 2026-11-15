@@ -24,8 +24,17 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   written into `values-aks.yaml`, which keeps Azure ids out of git (open item 5) and amends
   step 4 of task 8; `helm install` runs without `--wait`, because the laptop's storage
   class binds the corpus claim only when a flow-run Job first mounts it.
+- Task 5 done: `files/base-job-template.json` and `files/prefect.yaml` in the chart,
+  registered by a Helm hook Job on every install and upgrade; `infra/check_job_template.py`
+  and a step of `infra/check-chart.sh` check the template, and Prefect's own code builds a
+  Job from it that the API schema accepts. In a scratch namespace on OrbStack the hook
+  registered the pool and both deployments, and a `review` run with `sample=1` on an empty
+  topic became a Job (`backoffLimit` 0, uid 10001, no API token), reached Postgres, Kafka
+  and the Prefect server, wrote a `review_jobs` row with `run_env` `orbstack`, and
+  completed at $0. No wrapper flow was needed: Prefect builds a parameter schema for
+  `review` as it is (`provider` and `ids` become "any, default null").
 - Next, in order, none needing the owner:
-  task 5 (Prefect deployments), task 6 (rehearsal on OrbStack's Kubernetes), task 7
+  task 6 (rehearsal on OrbStack's Kubernetes), task 7
   (Terraform module, up to `terraform validate`).
 - Then the owner: `terraform plan` (end of task 7), the Azure day (task 8), `judge`,
   `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
@@ -42,13 +51,13 @@ Open items, each with the task that must close it:
    Dasv7 series needs an NVMe-capable OS image, and Azure lists Ubuntu 22.04, Ubuntu 24.04
    and Azure Linux 3.0 as such (not Ubuntu 26.04, which AKS makes the `Ubuntu` default from
    Kubernetes 1.38); Dasv7 has no ephemeral OS disk, so the OS disk is managed; 2 vCPU and
-   8 GB meets the system-pool minimum. Recommended to the owner 2026-11-15, awaiting
-   confirmation: since no document settles it, the `apply` itself is the test; Terraform pins the node OS image to
+   8 GB meets the system-pool minimum. Confirmed by the owner 2026-11-15: since no document
+   settles it, the `apply` itself is the test; Terraform pins the node OS image to
    `Ubuntu2404` and the OS disk to managed, and a refusal falls back to the quota request.
    The `standardDASv5Family` quota is also 0 in West US 2, so the AMD v5 size is no
-   fallback.
-2. **Year filter for `judge`, `grade` and `evaluate`.** A short design addendum to this
-   spec, approved by the owner, before task 9 builds it.
+   fallback. Closed for planning; the `apply` closes it in fact.
+2. **Year filter for `judge`, `grade` and `evaluate`.** Approved by the owner 2026-11-15;
+   the design is the addendum under task 9.
 3. **A dedicated OpenAI key for the cluster run** (call 8). It needs its own 1Password
    item and `op://` reference; hand the owner an `op item create` command with it, and
    the revoke step is in task 8.
@@ -457,6 +466,25 @@ resumable on a later day because the export is loaded back first.
   not exist today, accepting one or more years, so that the existing reports stay
   reproducible as years 2018 and 2019. It gets a short design addendum to this spec,
   approved by the owner, before it is built.
+- **Addendum: the year filter** (approved by the owner 2026-11-15).
+  - `--year` on `judge`, `grade` and `evaluate`, repeatable, **required**. Every step reads
+    only the pair's scores for paragraphs filed in those years (a join on
+    `documents.year`): the flagged pile, the seeded discard draw and the metrics. The
+    draw depends on the whole score set, so without the filter the 2020 import would
+    change the existing reports' discard sample and `judge` would pay for a new one; with
+    `--year 2018 --year 2019` the old set, draw and report are reproduced exactly.
+    Required, not optional, so no run can mix years by accident.
+  - The report file name carries the years (`cloud-concentration-gpt-6-luna-v2-2020.md`).
+    The five committed reports are renamed to `...-2018-2019.md` in the same commit, with
+    their contents unchanged.
+  - The report computes its population line, e.g. "17,936 of N paragraphs filed in
+    2018-2019, in ingestion order, not a random draw" (call 1's addition, for every
+    report).
+  - Review cost for a population is the sum of its scores' own `cost_usd`. Review jobs
+    carry no year, so the jobs, wall-clock and `run_env` lines list the jobs that scored at
+    least one paragraph of the population. Billed calls that left no score are in a job's
+    total but not in this sum; the report says so.
+  - MLflow logs a `years` param.
 - **Owner**: `judge`, `grade` and `evaluate` for the 2020 population, one at a time. The
   judge labels a few hundred paragraphs for about $1. The resulting report names the
   cluster.

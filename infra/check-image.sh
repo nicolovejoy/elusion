@@ -52,4 +52,13 @@ find / -xdev \( -path /proc -o -path /sys \) -prune -o \( \
 [[ -z "$leaks" ]] || fail "files that must not be in the image: $leaks"
 echo "ok   no .env, gold, grades or Parquet files"
 
+# 7. The two deployment entrypoints (infra/helm/elusion/files/prefect.yaml) load as flows,
+#    the way Prefect loads them inside a flow-run Job.
+in_image python -c '
+from prefect.flows import load_flow_from_entrypoint
+for ep in ("elusion.flows.collect.collect", "elusion.flows.review.review"):
+    f = load_flow_from_entrypoint(ep, use_placeholder_flow=False)
+    print(f"ok   entrypoint {ep} loads flow {f.name!r}")
+' || fail "a deployment entrypoint does not load"
+
 echo "PASS $image${PLATFORM:+ ($PLATFORM)}"

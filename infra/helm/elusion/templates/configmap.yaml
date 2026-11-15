@@ -19,7 +19,3 @@ data:
   {{- with .Values.settings.ollamaHost }}
   OLLAMA_HOST: {{ . | quote }}
   {{- end }}
-  # For task 5's job template; recorded here so the names live in one place.
-  ELUSION_IMAGE: {{ include "elusion.image" . | quote }}
-  ELUSION_POSTGRES_SECRET: {{ include "elusion.secret.postgres" . | quote }}
-  ELUSION_OPENAI_SECRET: {{ include "elusion.secret.openai" . | quote }}

@@ -38,15 +38,45 @@ for env in local aks; do
 done
 echo "ok   kubectl apply --dry-run=client, laptop and aks"
 
-# 3. The AKS render pins the image by digest and mounts the blob container; the laptop
-#    render does neither.
-# (The elusion image reaches the flow-run Jobs through the ConfigMap, task 5.)
-grep -q 'ELUSION_IMAGE: "example.azurecr.io/elusion@sha256:' <<<"$aks_yaml" \
-  || fail "aks image not by digest"
-grep -q 'ELUSION_IMAGE: "elusion:dev"' <<<"$local_yaml" || fail "laptop image is not elusion:dev"
+# 3. The work pool's job template and the deployments (task 5), for each environment.
+#    The AKS flow runs use the registry image by digest; the laptop's use elusion:dev.
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+printf '%s\n' "$local_yaml" >"$tmp/local.yaml"
+printf '%s\n' "$aks_yaml" >"$tmp/aks.yaml"
+uv run --quiet python infra/check_job_template.py "$tmp/local.yaml" elusion:dev \
+  | sed 's/^ok   /ok   laptop: /' || fail "job template (laptop)"
+uv run --quiet python infra/check_job_template.py "$tmp/aks.yaml" \
+  "example.azurecr.io/elusion@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
+  | sed 's/^ok   /ok   aks: /' || fail "job template (aks)"
+
+# 3b. Prefect itself turns the template into a Job manifest, which the API schema accepts.
+#     Uses the worker image, the code that will do it on the cluster.
+for env in local aks; do
+  uv run --quiet python -c '
+import json, sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "prefect-config")
+print(cm["data"]["base-job-template.json"])' "$tmp/$env.yaml" >"$tmp/$env-template.json"
+  # Prefect starts a throwaway local server for this; its chatter goes to a log file.
+  docker run --rm -i -e PREFECT_SERVER_ANALYTICS_ENABLED=false --entrypoint python "$(helm show values "$chart" | awk '/workerImage:/ {print $2}')" -c '
+import asyncio, json, sys
+from prefect_kubernetes.worker import KubernetesWorkerJobConfiguration
+tpl = json.load(sys.stdin)
+cfg = asyncio.run(KubernetesWorkerJobConfiguration.from_template_and_values(
+    tpl, {"memory_request": "3Gi", "memory_limit": "4Gi"}))
+m = cfg.job_manifest
+m["metadata"]["name"] = "check"
+m["spec"]["template"]["spec"]["containers"][0]["args"] = ["prefect", "flow-run", "execute"]
+print(json.dumps(m))' <"$tmp/$env-template.json" >"$tmp/$env-job.json" 2>"$tmp/$env-prefect.log" \
+    || { cat "$tmp/$env-prefect.log" >&2; fail "Prefect could not build a Job from the $env template"; }
+  kubectl apply --dry-run=client --validate=strict -f "$tmp/$env-job.json" >/dev/null \
+    || fail "the Job Prefect builds from the $env template is rejected by the API schema"
+done
+echo "ok   Prefect builds a valid Job from both templates (kubectl strict dry-run)"
+
 grep -q 'blob.csi.azure.com' <<<"$aks_yaml" || fail "aks corpus is not the blob mount"
 ! grep -q 'blob.csi.azure.com' <<<"$local_yaml" || fail "laptop render uses the blob mount"
-echo "ok   aks: image by digest, blob corpus; laptop: neither"
+echo "ok   aks corpus is the blob mount; the laptop's is not"
 
 # 4. Without the AKS identifiers the AKS render refuses, naming what is missing.
 if out=$(render -f "$chart/values-aks.yaml" 2>&1); then fail "aks render without ids succeeded"; fi

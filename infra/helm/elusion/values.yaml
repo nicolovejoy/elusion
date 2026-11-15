@@ -55,7 +55,6 @@ redpanda:
 prefect:
   image: prefecthq/prefect:3.9.1-python3.12            # the server, as in compose.yaml
   workerImage: prefecthq/prefect:3.9.1-python3.12-kubernetes  # adds prefect-kubernetes
-  workPool: elusion
   storage: 1Gi
   resources:
     requests: {cpu: 250m, memory: 512Mi}

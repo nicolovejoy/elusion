@@ -58,7 +58,7 @@ spec:
       containers:
         - name: worker
           image: {{ .Values.prefect.workerImage }}
-          command: [prefect, worker, start, --pool, {{ .Values.prefect.workPool }}, --type, kubernetes]
+          command: [prefect, worker, start, --pool, elusion, --type, kubernetes]
           env:
             - {name: PREFECT_API_URL, value: "http://prefect-server:4200/api"}
             - {name: PREFECT_INTEGRATIONS_KUBERNETES_CLUSTER_UID, value: {{ .Values.runEnv | quote }}}

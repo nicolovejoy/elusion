@@ -1,0 +1,78 @@
+# The work pool's job template and the two deployments, registered with the Prefect
+# server by a hook Job that Helm runs after every install and upgrade (task 5).
+#
+# A work pool is the server-side queue the worker polls; its base job template is the
+# Kubernetes Job every flow run on the pool becomes. files/base-job-template.json is
+# prefect-kubernetes 0.8.0's default with these changes:
+#   - backoffLimit is a literal 0 and no longer a variable, so no deployment can turn
+#     retries back on (call 14); completions/parallelism moved to the Job spec.
+#   - command ["env"] replaces the image's `elusion` entrypoint, so the worker's
+#     `prefect flow-run execute` arguments run as given.
+#   - envFrom the elusion-settings ConfigMap; the Postgres password and the OpenAI key
+#     from their Secrets by name; DATABASE_URL built from the password ($(VAR) expansion).
+#     The OpenAI key is optional, so a laptop run on Ollama works with an empty Secret.
+#   - the corpus claim mounted at /data; non-root (uid 10001); no API token in the pod.
+#   - requests and limits have defaults; image and namespace default to the chart's.
+# The file is read with .Files.Get, which Helm does not template, so Prefect's own
+# double-brace placeholders pass through untouched; only the @NAMES@ below are filled in.
+# (Helm templates comments too, which is why that sentence cannot show the braces.)
+{{- $tpl := .Files.Get "files/base-job-template.json"
+  | replace "@IMAGE@" (include "elusion.image" .)
+  | replace "@PULL_POLICY@" .Values.image.pullPolicy
+  | replace "@NAMESPACE@" .Release.Namespace
+  | replace "@POSTGRES_SECRET@" (include "elusion.secret.postgres" .)
+  | replace "@OPENAI_SECRET@" (include "elusion.secret.openai" .) }}
+{{- $prefectFile := .Files.Get "files/prefect.yaml" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prefect-config
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+data:
+  base-job-template.json: {{ $tpl | quote }}
+  prefect.yaml: {{ $prefectFile | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prefect-register
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    # Re-run when either file changes.
+    checksum/prefect-config: {{ printf "%s%s" $tpl $prefectFile | sha256sum }}
+spec:
+  backoffLimit: 2   # registration is idempotent, so retrying it is safe (unlike a flow run)
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prefect-register
+        {{- include "elusion.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: register
+          image: {{ include "elusion.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [sh, -ec]
+          args:
+            - |
+              echo "waiting for the Prefect server"
+              until python -c "import urllib.request as u; u.urlopen('$PREFECT_API_URL/health', timeout=3)" 2>/dev/null; do sleep 3; done
+              prefect work-pool create elusion --type kubernetes --base-job-template /config/base-job-template.json --overwrite
+              cd /app
+              prefect --no-prompt deploy --all --prefect-file /config/prefect.yaml
+              prefect deployment ls
+          env:
+            - {name: PREFECT_API_URL, value: "http://prefect-server:4200/api"}
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: config, mountPath: /config, readOnly: true}
+      volumes:
+        - name: config
+          configMap:
+            name: prefect-config
