@@ -71,6 +71,16 @@ Owner decisions, 2026-11-15 (`docs/DECISIONS.md`):
   into the champion's existing report. The owner left this to the controller's
   recommendation. The year filter gets a design addendum before task 9.
 
+- Infrastructure as code throughout (the owner's steer during task 0). Everything that
+  exists in Azure or in the cluster is declared in a committed file: Terraform for the
+  Azure resources and the resource-provider registrations, the Helm chart for the
+  manifests, a committed file for the work pool's job template and the two Prefect
+  deployments. What is typed by hand is an action on those files (`apply`, `install`,
+  image push, `deployment run`, the export, `destroy`), each one written in
+  `infra/README.md`. The one deliberate exception is the two Secrets of call 8: their
+  values must not be in any file, so they are created by a command in the runbook. This
+  boundary is the controller's reading of the steer.
+
 Controller's calls, 2026-11-15. The owner confirmed all fourteen the same day: nine as
 written, four with an addition (1, 2, 8, 10) and one with its recovery procedure changed
 (14). Each is a `DECISIONS.md` line.
@@ -215,6 +225,19 @@ over the exact command and waits. No test makes a live call.
   Administrator on it. Terraform's role assignments (registry pull, blob access by
   identity) need that role. With Contributor only, stop and bring it to the owner; do not
   fall back to registry admin credentials or storage account keys.
+
+Run 2026-11-15, on a new pay-as-you-go subscription:
+
+- `helm` 4.3.2 is installed; OrbStack's Kubernetes is on (one node, v1.36.5).
+- The signed-in account holds Owner on the default subscription.
+- The five resource providers the phase uses (Compute, ContainerService,
+  ContainerRegistry, Storage, Network) were not registered on the new subscription and
+  were registered by hand so that quota could be read. Terraform declares them too.
+- Quota in West US 2: 10 regional vCPUs, but **0 for the DSv5 family**, and
+  `Standard_D2s_v5` is restricted in all three availability zones. The size of call 10
+  cannot be used without a quota request. Open with the owner: switch to
+  `Standard_D2as_v7` (2 vCPU, 8 GB, x86-64, family quota 10, no restriction, $0.0908 an
+  hour against $0.096).
 
 ### 1. Find the year to run
 
@@ -403,7 +426,9 @@ the others. `CLAUDE.md` commands block and `README.md` status line updated.
 - Whether Postgres, Redpanda and Prefect are Deployments or StatefulSets.
 - The Dockerfile's exact stages, and whether the amd64 image is built locally with
   `docker buildx` or in the registry with `az acr build`.
-- How the work pool's job template is installed (a chart hook, or a documented command).
+- How the work pool's job template and the two Prefect deployments are applied, as long
+  as each is a committed file and not typed by hand (a chart hook, `prefect.yaml`, or one
+  documented command that reads the file).
 - How the Ollama server on the Mac is reached from the laptop cluster.
 - Whether the export is `pg_dump --data-only` or two `COPY ... TO` files, as long as the
   row counts are verified and the file is hashed.
