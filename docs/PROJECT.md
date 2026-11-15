@@ -44,6 +44,11 @@ report that says how much was found and how sure we are.
 6. **Production**: Terraform stands up a small AKS cluster; a Helm chart deploys the
    review service and a Prefect worker; one real run happens there; everything is torn
    down the same day. Optional Pulumi rewrite of the Terraform module.
+7. **The literature matter**: a second corpus about the project's own subject, recent
+   research on AI agents making decisions that must be auditable. Abstracts are harvested
+   broadly from open sources, screened by the same review, judge and evaluate flows
+   against a new criterion, and the screened-in set can then be asked questions, with
+   answers built from quoted passages and every step logged.
 
 ## Done means
 
@@ -58,7 +63,9 @@ report that says how much was found and how sure we are.
 - A product, a UI, or multi-tenancy.
 - Fine-tuning any model.
 - Covering every filing year; three is enough to feel scale.
-- Spending more than about $40 in total.
+- Spending more than about $40 in total. Phase 7 screening is expected to add a few
+  dollars; that is an estimate from the Haiku rate in `docs/DECISIONS.md`, not a
+  measurement.
 
 ## Cuts, in order, if time runs short
 
