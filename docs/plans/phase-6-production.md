@@ -34,8 +34,8 @@ Open items, each with the task that must close it:
    Dasv7 series needs an NVMe-capable OS image, and Azure lists Ubuntu 22.04, Ubuntu 24.04
    and Azure Linux 3.0 as such (not Ubuntu 26.04, which AKS makes the `Ubuntu` default from
    Kubernetes 1.38); Dasv7 has no ephemeral OS disk, so the OS disk is managed; 2 vCPU and
-   8 GB meets the system-pool minimum. The owner accepted (2026-11-15) that the documented
-   answer is missing and the `apply` itself is the test: Terraform pins the node OS image to
+   8 GB meets the system-pool minimum. Recommended to the owner 2026-11-15, awaiting
+   confirmation: since no document settles it, the `apply` itself is the test; Terraform pins the node OS image to
    `Ubuntu2404` and the OS disk to managed, and a refusal falls back to the quota request.
    The `standardDASv5Family` quota is also 0 in West US 2, so the AMD v5 size is no
    fallback.
