@@ -72,7 +72,8 @@ A second corpus, about the project's own subject: recent research on AI agents m
 decisions that must be auditable. Added 2026-11-15 (see `docs/DECISIONS.md`). This list is
 a sketch; it is refined when the phase 7 spec is written, after phase 6 closes.
 
-- [ ] Collector for OpenAlex abstracts from a recorded list of broad search terms; the query, date and count of each harvest stored with it (the chain-of-custody record)
+- [ ] Collector for OpenAlex abstracts from a recorded list of broad search terms; each abstract stored with its OpenAlex work id, the harvest query, the harvest date and a content hash (the chain-of-custody record)
+- [ ] Harvest recall estimated on its own: a list of known on-topic papers checked against what was harvested. Elusion measures the screen, not the harvest; a paper the query never returned is not in the null set
 - [ ] A screening criterion and prompt v1; review, judge and evaluate run unchanged
 - [ ] Report: the four metrics with intervals, plus a PRISMA-style count of records found, screened, excluded and kept
 - [ ] `ask` command: answers built only from quoted passages with their document ids; question, retrieved passages, model and prompt version logged

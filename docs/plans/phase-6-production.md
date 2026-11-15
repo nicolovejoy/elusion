@@ -60,6 +60,12 @@ Owner decisions, 2026-11-15 (`docs/DECISIONS.md`):
 - Postgres, Redpanda and the Prefect server run as pods in the cluster, from the chart,
   mirroring `compose.yaml`. The Parquet text goes in the blob container. No managed Azure
   database, no Event Hubs.
+- The Terraform module includes a $10 resource-group budget with an email alert; the
+  address is a variable supplied at apply time and never committed.
+- The region is West US 2.
+- The cluster's scores are evaluated as their own population, by filing year, not merged
+  into the champion's existing report. The owner left this to the controller's
+  recommendation. The year filter gets a design addendum before task 9.
 
 Controller's calls, 2026-11-15, for the owner to confirm or overturn. Each confirmed call
 becomes a `DECISIONS.md` line.
@@ -68,7 +74,7 @@ becomes a `DECISIONS.md` line.
    of 2018, 2019 and 2020 has no row in the local `scores` table for any model. The
    cluster collects that year and reviews its first 20,000 ids with the champion
    configuration. Nothing is paid for twice, and no scores need to be copied into the
-   cluster before the run.
+   cluster before the run. Task 1 was run on 2026-11-15 and the year is 2020.
 2. **The champion is named by its parts, not resolved from the registry.** The run passes
    provider `openai`, model `gpt-6-luna` and prompt version `v2`, the values in
    `elusion-reviewer@champion` (DECISIONS 2026-11-07). `--reviewer` would need the MLflow
@@ -77,8 +83,7 @@ becomes a `DECISIONS.md` line.
 3. **Scores come home.** Before the destroy, `scores` and `review_jobs` are dumped from
    the cluster's Postgres to `data/exports/` (gitignored) and loaded into the local
    Postgres, so the local ledger knows every document that has been paid for. How those
-   scores are then evaluated is the owner's question 3 below; it is needed before task 9
-   and not before tasks 0 to 8.
+   scores are then evaluated was the owner's question 3, answered above: by filing year.
 4. **Where a review ran is recorded.** `review_jobs` gains a nullable `run_env` column,
    set from a new `ELUSION_RUN_ENV` variable (default `local`; on the cluster, the AKS
    cluster name). The report's cost section lists the job count per environment. This is
@@ -131,7 +136,7 @@ becomes a `DECISIONS.md` line.
     it. The Job's retry count is zero. After a failure the next run is started by hand
     with the remainder: 20,000 minus the group's committed offset.
 
-Questions only the owner can answer are at the end, under "For the owner".
+The three questions that were the owner's are at the end, with the answers.
 
 ## Goal
 
@@ -143,7 +148,7 @@ terraform -chdir=infra/terraform apply
 az aks get-credentials ...
 kubectl create secret ...                      # twice, values from 1Password / generated
 helm install elusion infra/helm/elusion -f infra/helm/elusion/values-aks.yaml
-prefect deployment run collect/collect --param year=<Y>
+prefect deployment run collect/collect --param year=2020
 prefect deployment run review/review --param criterion=cloud-concentration --param sample=20000 --param provider_name=openai --param model=gpt-6-luna --param prompt_version=v2
 # export scores and review_jobs, verify the row count
 terraform -chdir=infra/terraform destroy
@@ -193,9 +198,12 @@ over the exact command and waits. No test makes a live call.
 
 ### 1. Find the year to run
 
-With the compose stack up, count `scores` rows joined to `documents` by model, prompt
-version and year (read-only). Pick a year with no scores for any model. If every year has
-scores, stop and bring the counts to the owner. Record the year in `DECISIONS.md`.
+Done 2026-11-15. With the local Postgres up, `scores` rows were counted by model, prompt
+version and filing year (read-only). Every pair under prompts v2 and v3 has 15,875
+documents from 2018 and 2,061 from 2019; (claude-haiku-5-5, v1) has 10,845 and 2,061. No
+model has a score for any 2020 document (599,703 documents). The cluster run uses 2020.
+The local populations therefore span two years already, so the year filter of task 9
+must accept more than one year.
 
 ### 2. Record where a review ran
 
@@ -295,8 +303,8 @@ The rehearsal passes when all of the above hold. Its scores are discarded (call 
   `Standard_D2s_v5`, system-assigned identity, Blob CSI driver enabled); container
   registry (Basic) with pull permission for the cluster's kubelet identity; storage
   account and one private blob container with access for the cluster through identity,
-  not an account key. If the owner approves it (see "For the owner"), a resource-group
-  budget of $10 with an email alert.
+  not an account key; a resource-group budget of $10 with an email alert (approved by the
+  owner 2026-11-15).
 - Variables for region, names and node count, with defaults; outputs for the cluster
   name, registry login server and storage names that the Helm values need.
 - The builder reads the current `azurerm` provider documentation for every argument and
@@ -333,12 +341,14 @@ resumable on a later day because the export is loaded back first.
 
 - Load the export into the local Postgres (a new filing year, so no key collides; the
   loader refuses if any does).
-- Evaluate the new scores as the owner chose in question 3. Under either answer the
-  owner runs `judge`, `grade` and `evaluate` one at a time, the judge labels a few
-  hundred paragraphs for about $1, and the resulting report names the cluster.
-- If the answer is a separate population by filing year, that needs a year filter on
-  `judge`, `grade` and `evaluate` that does not exist today. It gets a short design
-  addendum to this spec, approved by the owner, before it is built.
+- The new scores are evaluated as their own population: (gpt-6-luna, v2) restricted to
+  filing year 2020. That needs a year filter on `judge`, `grade` and `evaluate` that does
+  not exist today, accepting one or more years, so that the existing reports stay
+  reproducible as years 2018 and 2019. It gets a short design addendum to this spec,
+  approved by the owner, before it is built.
+- **Owner**: `judge`, `grade` and `evaluate` for the 2020 population, one at a time. The
+  judge labels a few hundred paragraphs for about $1. The resulting report names the
+  cluster.
 
 ### 10. Owner: phase note, ticks, decisions, docs
 
@@ -397,14 +407,18 @@ Models: review about $2.20 (20,000 documents at the local gpt-6-luna rate of $1.
 
 Total about $5.50, inside the $10 cloud ceiling and the $40 project ceiling.
 
-## For the owner
+## For the owner (answered 2026-11-15)
 
 1. Budget alert: add a $10 resource-group budget with an email alert to the Terraform
    module? It is one resource beyond the checklist, and the email address would be a
-   variable supplied at apply time, never committed. Recommended: yes.
+   variable supplied at apply time, never committed. **Answer: yes.**
 2. Region: West US 2 is assumed because the prices were read for it. Is another region
-   preferred?
-3. How should the cluster's scores be evaluated once they are home? Needed before task 9.
+   preferred? **Answer: West US 2.**
+3. How should the cluster's scores be evaluated once they are home? **Answer: B, on the
+   controller's recommendation.** After the import, the champion's pair holds scores the
+   judge has not labeled, so today's `evaluate` would refuse to run for it until they are
+   judged, and would then overwrite the report the promotion rests on. A year filter is
+   what keeps that report reproducible.
    - **A. Merged into the champion's pair.** No new code. The champion's report then
      covers about 37,936 documents across two filing years, while the other four pairs
      still cover the original population, so the leaderboard is no longer like for like.
