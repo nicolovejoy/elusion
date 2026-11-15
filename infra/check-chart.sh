@@ -81,6 +81,7 @@ done
 echo "ok   Prefect builds a valid Job from both templates (kubectl strict dry-run), SIGTERM crash"
 
 grep -q 'blob.csi.azure.com' <<<"$aks_yaml" || fail "aks corpus is not the blob mount"
+grep -q 'protocol: fuse2' <<<"$aks_yaml" || fail "aks blob mount is not blobfuse2 (protocol fuse2)"
 ! grep -q 'blob.csi.azure.com' <<<"$local_yaml" || fail "laptop render uses the blob mount"
 echo "ok   aks corpus is the blob mount; the laptop's is not"
 

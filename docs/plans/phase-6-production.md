@@ -2,7 +2,7 @@
 
 Status: designed 2026-11-15 and checked once by a fresh reader; the owner confirmed the
 controller's calls the same day, with the amendments marked below. Build in progress:
-tasks 0 to 6 are done, task 7 (the Terraform module) is next. See "Progress and open
+tasks 0 to 6 are done and task 7 is built up to `terraform validate`; the owner's `terraform plan` is next. See "Progress and open
 items" directly below. Read
 `docs/ARCHITECTURE.md`, the Phase 6 checklist in `docs/PHASES.md` and `compose.yaml` first.
 Hard rules in `CLAUDE.md` apply to every line below, in particular: no Azure resource is
@@ -57,8 +57,8 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
     test needs; the rehearsal deleted the topic and ran `collect` with `limit=10`
     (869 paragraphs). `collect` publishes every paragraph it reads, also those already in
     Postgres, so a second collect duplicates the first one's messages in the topic.
-    Proposed for the Azure day, awaiting the owner: delete the topic between the
-    `limit=5` smoke test and the full-year collect (task 8 step 6).
+    Approved by the owner for the Azure day: the topic is deleted between the `limit=5`
+    smoke test and the full-year collect (task 8 step 6).
   - `helm uninstall` leaves the flow-run Jobs (the worker made them, not Helm), and their
     finished pods keep the corpus claim from being deleted; the teardown deletes the Jobs
     first.
@@ -68,7 +68,35 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
     tables' schema with `header match`: 300 and 2 rows. Then dropped.
   - Ollama on the Mac is reached at `http://host.orb.internal:11434`; `qwen2.5:14b` at
     concurrency 2 scored about 50 documents in 1 minute 50 seconds.
-- Next, needing no owner: task 7 (Terraform module, up to `terraform validate`).
+- Task 7 built, up to `terraform validate` (`infra/terraform`, `infra/check-terraform.sh`).
+  azurerm is 5.14.0, a major version past the drafting; every argument was read from the
+  v5.14.0 docs and checked against `terraform providers schema`. Builder's choices and
+  findings:
+  - Kubernetes `1.36` (AKS picks the patch): West US 2 offers 1.34 to 1.37 on 2026-11-15,
+    and 1.36 is what the rehearsal ran on. `node_os_upgrade_channel = "None"`, no
+    automatic upgrade. `node_provisioning_profile` is a required block in 5.x; `Manual`.
+    Azure CNI overlay networking, stated explicitly (an omitted block means kubenet).
+  - The blob mount switches to `protocol: fuse2` (blobfuse2). `fuse` is blobfuse v1, whose
+    support ended in September 2026. The driver and blobfuse2 sources show the
+    managed-identity path: no account-key lookup with `AzureStorageAuthType: MSI`, `MSI`
+    parsed case-insensitively, `-o allow_other`, `uid=`, `gid=` accepted.
+    `check-chart.sh` asserts `fuse2`.
+  - The kubelet identity gets `AcrPull` on the registry and Storage Blob Data
+    Contributor on the container. The account key stays enabled but unused: disabling it
+    would move Terraform's own storage calls to Entra ID sign-in, untested and on paid
+    time. Added beyond the list: Storage Blob Data Contributor on the container for the
+    signed-in owner, so step 6 of task 8 and the fallback of call 13 use
+    `az storage blob ... --auth-mode login`, not the key.
+  - Registry and storage account names carry six characters of the subscription id's
+    SHA-1 (globally unique names, no id in git). Microsoft.ManagedIdentity was not
+    registered; the provider registers it with the five of task 0 and Consumption. That
+    registration happens when the provider starts, so `terraform plan` performs it.
+  - The budget email is `TF_VAR_budget_email`, marked sensitive, in no file. Budget start
+    is the first of the current month, ignored after creation.
+  - Expected plan: 10 to add (resource group, cluster, registry, storage account,
+    container, three role assignments, two budgets).
+- Next: the owner's `terraform plan` (end of task 7); then `infra/README.md`, the runbook
+  for the Azure day.
 - Then the owner: `terraform plan` (end of task 7), the Azure day (task 8), `judge`,
   `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
 
@@ -473,7 +501,10 @@ Done in one sitting, commands from `infra/README.md`, the controller alongside:
 4. Push the image to the registry; put its digest in `values-aks.yaml`.
 5. `helm install` with `values-aks.yaml`; every pod is ready.
 6. Run `collect` for the year from task 1 with `limit=5` (the mount smoke test of call
-   13), then for the whole year. The Parquet file is in the blob container.
+   13), then for the whole year. The Parquet file is in the blob container. Between the
+   two, delete the topic with `rpk topic delete documents.ingested` (amended 2026-11-15
+   after the rehearsal, approved by the owner): `collect` publishes every paragraph it
+   reads, so without it the smoke test's paragraphs would be in the topic twice.
 7. Resolve `elusion-reviewer@champion` locally and check it against the parts (call 2).
    Run `review` with `sample=20000` and those parts. The spend guard's projection is
    printed before the bulk spend; expected about $2.20. If the run fails part-way, reset

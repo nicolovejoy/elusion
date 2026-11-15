@@ -27,9 +27,13 @@ corpus:
     resourceGroup: ""
     storageAccount: ""
     identityClientId: ""
-    # `fuse` is the protocol of the driver's managed-identity example; whether `fuse2`
-    # takes managed identity is undocumented. Proven by the limit=5 smoke test (call 13).
-    protocol: fuse
+    # fuse2 = blobfuse2. `fuse` (the driver's default) is blobfuse v1, whose support
+    # ended in September 2026. Read in the sources 2026-11-15: the driver hands the same
+    # AZURE_STORAGE_AUTH_TYPE / AZURE_STORAGE_IDENTITY_CLIENT_ID to either binary and,
+    # with MSI, never fetches the account key; blobfuse2 parses `MSI` case-insensitively
+    # and accepts the -o allow_other, uid= and gid= options below. Proven in fact by the
+    # limit=5 smoke test (call 13).
+    protocol: fuse2
     mountOptions:
       - -o allow_other
       - -o uid=10001       # the elusion image's user, so flow runs can write
