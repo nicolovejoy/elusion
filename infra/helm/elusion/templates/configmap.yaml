@@ -1,0 +1,25 @@
+# Non-secret settings for the flow-run Jobs, read as environment (task 5's job template
+# loads it with envFrom). DATABASE_URL is not here: it contains the Postgres password, so
+# each Job builds it from the Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elusion-settings
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+data:
+  KAFKA_BOOTSTRAP: redpanda:9092
+  PREFECT_API_URL: http://prefect-server:4200/api
+  ELUSION_DATA_DIR: /data
+  ELUSION_RUN_ENV: {{ .Values.runEnv | quote }}
+  ELUSION_MAX_RUN_USD: {{ .Values.settings.maxRunUsd | quote }}
+  ELUSION_REVIEW_MODEL: {{ .Values.settings.reviewModel | quote }}
+  ELUSION_OPENAI_MODEL: {{ .Values.settings.openaiModel | quote }}
+  ELUSION_JUDGE_MODEL: {{ .Values.settings.judgeModel | quote }}
+  ELUSION_OLLAMA_MODEL: {{ .Values.settings.ollamaModel | quote }}
+  {{- with .Values.settings.ollamaHost }}
+  OLLAMA_HOST: {{ . | quote }}
+  {{- end }}
+  # For task 5's job template; recorded here so the names live in one place.
+  ELUSION_IMAGE: {{ include "elusion.image" . | quote }}
+  ELUSION_POSTGRES_SECRET: {{ include "elusion.secret.postgres" . | quote }}
+  ELUSION_OPENAI_SECRET: {{ include "elusion.secret.openai" . | quote }}

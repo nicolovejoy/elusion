@@ -1,0 +1,66 @@
+# The Prefect worker: polls the work pool and starts each flow run as a Kubernetes Job
+# (call 6). It runs as its own ServiceAccount, whose Role lets it manage Jobs and read
+# pods in this namespace only. Two settings keep it from needing cluster-wide rights:
+# a fixed cluster id (otherwise it reads the kube-system namespace to get one) and a
+# watch limited to this namespace (otherwise it watches pods cluster-wide).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prefect-worker
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prefect-worker
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods, pods/log, pods/status]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prefect-worker
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prefect-worker
+subjects:
+  - kind: ServiceAccount
+    name: prefect-worker
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prefect-worker
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: prefect-worker}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prefect-worker
+        {{- include "elusion.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: prefect-worker
+      containers:
+        - name: worker
+          image: {{ .Values.prefect.workerImage }}
+          command: [prefect, worker, start, --pool, {{ .Values.prefect.workPool }}, --type, kubernetes]
+          env:
+            - {name: PREFECT_API_URL, value: "http://prefect-server:4200/api"}
+            - {name: PREFECT_INTEGRATIONS_KUBERNETES_CLUSTER_UID, value: {{ .Values.runEnv | quote }}}
+            - {name: PREFECT_INTEGRATIONS_KUBERNETES_OBSERVER_NAMESPACES, value: {{ .Release.Namespace | quote }}}
+          resources: {{- toYaml .Values.prefect.workerResources | nindent 12 }}

@@ -1,0 +1,37 @@
+# Overrides for AKS, layered on values.yaml: helm install ... -f values-aks.yaml
+#
+# Static choices live here. Identifiers that exist only once Terraform has run (registry
+# login server, image digest, resource group, storage account, kubelet identity client id)
+# are not committed: the install command in infra/README.md passes them with --set from
+# `terraform output`, and the chart refuses to render without them.
+
+runEnv: aks-elusion    # the AKS cluster's name; Terraform's default for it
+
+image:
+  registry: ""         # --set image.registry=$(terraform output -raw acr_login_server)
+  repository: elusion
+  digest: ""           # --set image.digest=sha256:... from the push; required on AKS
+  requireDigest: true
+  pullPolicy: IfNotPresent
+
+settings:
+  ollamaHost: ""       # no Ollama on the cluster
+
+corpus:
+  mode: blob
+  size: 10Gi           # not enforced by the blob driver; matches PV to PVC only
+  blob:
+    containerName: corpus
+    # Blob CSI, static provisioning, signed in with the kubelet's managed identity; no
+    # account key anywhere. The values come from `terraform output` (see above).
+    resourceGroup: ""
+    storageAccount: ""
+    identityClientId: ""
+    # `fuse` is the protocol of the driver's managed-identity example; whether `fuse2`
+    # takes managed identity is undocumented. Proven by the limit=5 smoke test (call 13).
+    protocol: fuse
+    mountOptions:
+      - -o allow_other
+      - -o uid=10001       # the elusion image's user, so flow runs can write
+      - -o gid=10001
+      - --file-cache-timeout-in-seconds=120

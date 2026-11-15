@@ -1,0 +1,52 @@
+# The Prefect server: the API and UI that record flow runs, as the compose `prefect`
+# service. Its SQLite database is on a volume. Reach the UI with
+#   kubectl -n elusion port-forward svc/prefect-server 4200:4200
+# then http://localhost:4200 (the UI's API address below assumes that forward).
+apiVersion: v1
+kind: Service
+metadata:
+  name: prefect-server
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+spec:
+  selector: {app.kubernetes.io/name: prefect-server}
+  ports:
+    - {name: http, port: 4200, targetPort: 4200}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prefect-server
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+spec:
+  serviceName: prefect-server
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: prefect-server}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prefect-server
+        {{- include "elusion.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: prefect-server
+          image: {{ .Values.prefect.image }}
+          command: [prefect, server, start, --host, 0.0.0.0]
+          env:
+            - {name: PREFECT_UI_API_URL, value: "http://localhost:4200/api"}
+          ports:
+            - {name: http, containerPort: 4200}
+          readinessProbe:
+            httpGet: {path: /api/health, port: 4200}
+            periodSeconds: 5
+          resources: {{- toYaml .Values.prefect.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /root/.prefect}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.prefect.storage }}

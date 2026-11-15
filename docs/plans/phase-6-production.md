@@ -15,8 +15,16 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
 
 - Done: task 0 (prerequisites; results under the task), task 1 (the year is 2020), task 2
   (`run_env`, commit `2ac889e`, 254 tests pass), task 3 (`Dockerfile`, `.dockerignore`,
-  `infra/check-image.sh`; both architectures pass, 1.64 GB).
-- Next, in order, none needing the owner: task 4 (Helm chart),
+  `infra/check-image.sh`; both architectures pass, 1.64 GB), task 4 (`infra/helm/elusion`,
+  `infra/check-chart.sh`; also installed once on OrbStack's cluster in a scratch namespace:
+  Postgres, Redpanda, the Prefect server and the worker all ready, then removed). Builder's
+  choices in task 4: Postgres, Redpanda and Prefect are StatefulSets; the AKS identifiers
+  (registry, image digest, resource group, storage account, kubelet identity client id)
+  are passed to `helm install` with `--set` from `terraform output` and the push, not
+  written into `values-aks.yaml`, which keeps Azure ids out of git (open item 5) and amends
+  step 4 of task 8; `helm install` runs without `--wait`, because the laptop's storage
+  class binds the corpus claim only when a flow-run Job first mounts it.
+- Next, in order, none needing the owner:
   task 5 (Prefect deployments), task 6 (rehearsal on OrbStack's Kubernetes), task 7
   (Terraform module, up to `terraform validate`).
 - Then the owner: `terraform plan` (end of task 7), the Azure day (task 8), `judge`,

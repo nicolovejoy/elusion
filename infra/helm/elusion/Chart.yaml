@@ -1,0 +1,9 @@
+apiVersion: v2
+name: elusion
+description: >-
+  The elusion review pipeline on Kubernetes (phase 6): Postgres, Redpanda and the Prefect
+  server as in compose.yaml, a Prefect worker that starts each flow run as a Job, and the
+  corpus volume. Written by hand, no chart dependencies.
+type: application
+version: 0.1.0
+appVersion: "0.0.1"

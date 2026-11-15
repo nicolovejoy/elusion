@@ -1,0 +1,65 @@
+# Values for the laptop cluster (OrbStack's Kubernetes), the rehearsal of task 6.
+# values-aks.yaml overrides what differs on AKS. No secret value goes in either file.
+
+# Where a review ran, stored on its review_jobs row (ELUSION_RUN_ENV).
+runEnv: orbstack
+
+# The elusion image the flow-run Jobs use (task 5 wires it into the work pool's job
+# template). Locally it is the image built with `docker buildx ... -t elusion:dev --load`,
+# which OrbStack's cluster sees without a registry.
+image:
+  registry: ""        # empty = a local image
+  repository: elusion
+  tag: dev
+  digest: ""          # set on AKS; when set it wins over the tag
+  pullPolicy: IfNotPresent
+
+# The two Secrets the owner creates with kubectl before `helm install` (call 8). The chart
+# references them by name and never creates them. Each holds one key, named below.
+secrets:
+  postgresPassword: elusion-postgres   # key POSTGRES_PASSWORD, hexadecimal
+  openaiApiKey: elusion-openai         # key OPENAI_API_KEY
+
+# Non-secret settings for the flow runs, the cluster's counterpart of .env.
+settings:
+  maxRunUsd: "10"
+  reviewModel: claude-haiku-5-5
+  openaiModel: gpt-6-luna
+  judgeModel: claude-opus-5-5
+  ollamaModel: qwen2.5:14b
+  # OrbStack resolves this name to the Mac, so pods reach the local Ollama server.
+  ollamaHost: http://host.orb.internal:11434
+
+# The corpus volume (ELUSION_DATA_DIR) the flow-run Jobs mount at /data.
+corpus:
+  mode: pvc           # pvc: an ordinary volume; blob: the Azure Blob container (AKS)
+  size: 5Gi
+  storageClass: ""    # empty = the cluster's default
+  blob: {}
+
+postgres:
+  image: postgres:16.15
+  storage: 5Gi
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+redpanda:
+  image: redpandadata/redpanda:v26.2.6
+  storage: 5Gi
+  memory: 1G          # Redpanda's own allocation (--memory); the limit leaves headroom
+  resources:
+    requests: {cpu: 250m, memory: 1536Mi}
+    limits: {cpu: "1", memory: 2Gi}
+
+prefect:
+  image: prefecthq/prefect:3.9.1-python3.12            # the server, as in compose.yaml
+  workerImage: prefecthq/prefect:3.9.1-python3.12-kubernetes  # adds prefect-kubernetes
+  workPool: elusion
+  storage: 1Gi
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  workerResources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}
