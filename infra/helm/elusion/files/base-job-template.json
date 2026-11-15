@@ -74,7 +74,7 @@
     "type": "object",
     "properties": {
       "name": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Name", "description": "Name given to infrastructure created by a worker."},
-      "env": {"additionalProperties": {"anyOf": [{"type": "string"}, {"type": "null"}]}, "title": "Environment Variables", "type": "object", "description": "Environment variables to set when starting a flow run."},
+      "env": {"additionalProperties": {"anyOf": [{"type": "string"}, {"type": "null"}]}, "default": {"PREFECT_FLOW_RUN_EXECUTE_SIGTERM_BEHAVIOR": "crash"}, "title": "Environment Variables", "type": "object", "description": "Environment variables to set when starting a flow run. Keeps the SIGTERM behaviour at crash: with backoffLimit 0 the worker would otherwise set reschedule, and a killed run would start again by itself (call 14)."},
       "labels": {"additionalProperties": {"type": "string"}, "title": "Labels", "type": "object", "description": "Labels applied to infrastructure created by a worker."},
       "command": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Command", "description": "Leave blank: the worker fills in `prefect flow-run execute`."},
       "annotations": {"additionalProperties": {"type": "string"}, "title": "Annotations", "type": "object", "description": "Annotations applied to Kubernetes jobs and pods created by the worker."},

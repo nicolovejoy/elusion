@@ -6,6 +6,12 @@
 # prefect-kubernetes 0.8.0's default with these changes:
 #   - backoffLimit is a literal 0 and no longer a variable, so no deployment can turn
 #     retries back on (call 14); completions/parallelism moved to the Job spec.
+#   - the env variable defaults to PREFECT_FLOW_RUN_EXECUTE_SIGTERM_BEHAVIOR=crash. When
+#     backoffLimit is 0 and that setting is unset, prefect-kubernetes sets it to
+#     reschedule, so a pod killed part-way puts its flow run back in the queue and the
+#     worker starts it again from the group's committed offset: Prefect's own retry,
+#     found in the task 6 rehearsal. It must be in the env variable, not the container's
+#     env list, because the worker's values replace same-named entries in that list.
 #   - command ["env"] replaces the image's `elusion` entrypoint, so the worker's
 #     `prefect flow-run execute` arguments run as given.
 #   - envFrom the elusion-settings ConfigMap; the Postgres password and the OpenAI key

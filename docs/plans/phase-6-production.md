@@ -2,7 +2,7 @@
 
 Status: designed 2026-11-15 and checked once by a fresh reader; the owner confirmed the
 controller's calls the same day, with the amendments marked below. Build in progress:
-tasks 0, 1 and 2 are done, task 3 (the container image) is next. See "Progress and open
+tasks 0 to 6 are done, task 7 (the Terraform module) is next. See "Progress and open
 items" directly below. Read
 `docs/ARCHITECTURE.md`, the Phase 6 checklist in `docs/PHASES.md` and `compose.yaml` first.
 Hard rules in `CLAUDE.md` apply to every line below, in particular: no Azure resource is
@@ -33,9 +33,42 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   and the Prefect server, wrote a `review_jobs` row with `run_env` `orbstack`, and
   completed at $0. No wrapper flow was needed: Prefect builds a parameter schema for
   `review` as it is (`provider` and `ids` become "any, default null").
-- Next, in order, none needing the owner:
-  task 6 (rehearsal on OrbStack's Kubernetes), task 7
-  (Terraform module, up to `terraform validate`).
+- Task 6 done, the rehearsal on OrbStack's Kubernetes (namespace `elusion`, released and
+  deleted after). Everything in the task held, with these findings:
+  - **Prefect would have retried a killed run by itself.** With `backoffLimit` 0,
+    prefect-kubernetes sets `PREFECT_FLOW_RUN_EXECUTE_SIGTERM_BEHAVIOR=reschedule` in the
+    flow-run pod unless the work pool's `env` variable already names it. The first kill
+    test showed it: the run went to `AwaitingRetry` and the worker started a second Job,
+    which pulled from the committed offset onward and scored 20 new documents before it
+    was cancelled. On AKS that is the unattended second spend call 14 forbids. Fixed: the
+    template's `env` variable defaults to `crash`; `check_job_template.py` checks the
+    default and that no deployment overrides `env`, and `check-chart.sh` runs the worker's
+    `prepare_for_flow_run` and asserts the prepared Job carries `crash` once (a copy
+    without the default fails with `['reschedule']`). Rerun after `helm upgrade`: the
+    killed Job stayed `Failed`, no new Job, the flow run `Crashed`.
+  - A killed run's `review_jobs` row stays `running` with the count it reached, because
+    the process ends on SIGTERM before the flow can close the row. The counts are right
+    (`docs_scored` is added batch by batch), so the check held: 100 + 200 = 300 rows in
+    `scores`. The report's cost comes from `scores.cost_usd` (task 9 addendum), so a stale
+    `running` row does not change it.
+  - `rpk group seek` needs the group to be empty: after a kill, the dead consumer stays a
+    member until its session times out, about 45 seconds.
+  - `collect` with `limit=5` gives 264 paragraphs for 2020, fewer than the 300 the kill
+    test needs; the rehearsal deleted the topic and ran `collect` with `limit=10`
+    (869 paragraphs). `collect` publishes every paragraph it reads, also those already in
+    Postgres, so a second collect duplicates the first one's messages in the topic.
+    Proposed for the Azure day, awaiting the owner: delete the topic between the
+    `limit=5` smoke test and the full-year collect (task 8 step 6).
+  - `helm uninstall` leaves the flow-run Jobs (the worker made them, not Helm), and their
+    finished pods keep the corpus claim from being deleted; the teardown deletes the Jobs
+    first.
+  - The export is `infra/export.sh`: `COPY ... TO STDOUT` CSV files for `scores` and
+    `review_jobs` in `data/exports/STAMP/`, row counts read before and after and compared
+    with the parsed files, `SHA256SUMS`. Loaded into a scratch database given the local
+    tables' schema with `header match`: 300 and 2 rows. Then dropped.
+  - Ollama on the Mac is reached at `http://host.orb.internal:11434`; `qwen2.5:14b` at
+    concurrency 2 scored about 50 documents in 1 minute 50 seconds.
+- Next, needing no owner: task 7 (Terraform module, up to `terraform validate`).
 - Then the owner: `terraform plan` (end of task 7), the Azure day (task 8), `judge`,
   `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
 

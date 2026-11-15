@@ -42,7 +42,11 @@ def main(render_path: str, image: str) -> None:
     check(job["spec"]["backoffLimit"] == 0, "backoffLimit is not a literal 0")
     check("backoff_limit" not in variables, "backoff_limit is still a job variable")
     check(pod["restartPolicy"] == "Never", "restartPolicy is not Never")
+    # Nor does Prefect: without this the worker sets `reschedule` and a killed run requeues.
+    sigterm = variables["env"].get("default", {}).get("PREFECT_FLOW_RUN_EXECUTE_SIGTERM_BEHAVIOR")
+    check(sigterm == "crash", f"env default SIGTERM behaviour is {sigterm!r}, not 'crash'")
     print("ok   Job never retries: backoffLimit 0, not overridable; restartPolicy Never")
+    print("ok   Prefect does not requeue a killed run: SIGTERM behaviour crash by default")
 
     # The image's entrypoint is `elusion`; `env` replaces it so the worker's args
     # (`prefect flow-run execute`) run as given.
@@ -84,7 +88,8 @@ def main(render_path: str, image: str) -> None:
     for d in deps.values():
         check(d["work_pool"]["name"] == "elusion", f"{d['name']} work pool")
         jv = d["work_pool"].get("job_variables", {})
-        check("backoff_limit" not in jv and "image" not in jv, f"{d['name']} overrides {jv}")
+        # An `env` override would replace the default dict, dropping the SIGTERM setting.
+        check(not {"backoff_limit", "image", "env"} & set(jv), f"{d['name']} overrides {jv}")
     print("ok   deployments collect and review on pool elusion, module entrypoints")
 
 

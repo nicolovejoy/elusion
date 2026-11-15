@@ -50,7 +50,8 @@ uv run --quiet python infra/check_job_template.py "$tmp/aks.yaml" \
   | sed 's/^ok   /ok   aks: /' || fail "job template (aks)"
 
 # 3b. Prefect itself turns the template into a Job manifest, which the API schema accepts.
-#     Uses the worker image, the code that will do it on the cluster.
+#     Uses the worker image, the code that will do it on the cluster, and its per-run
+#     preparation step, which is where it would add SIGTERM `reschedule` (call 14).
 for env in local aks; do
   uv run --quiet python -c '
 import json, sys, yaml
@@ -59,20 +60,25 @@ cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] 
 print(cm["data"]["base-job-template.json"])' "$tmp/$env.yaml" >"$tmp/$env-template.json"
   # Prefect starts a throwaway local server for this; its chatter goes to a log file.
   docker run --rm -i -e PREFECT_SERVER_ANALYTICS_ENABLED=false --entrypoint python "$(helm show values "$chart" | awk '/workerImage:/ {print $2}')" -c '
-import asyncio, json, sys
+import asyncio, json, sys, uuid
+from prefect.client.schemas.objects import FlowRun
 from prefect_kubernetes.worker import KubernetesWorkerJobConfiguration
 tpl = json.load(sys.stdin)
 cfg = asyncio.run(KubernetesWorkerJobConfiguration.from_template_and_values(
     tpl, {"memory_request": "3Gi", "memory_limit": "4Gi"}))
+cfg.prepare_for_flow_run(FlowRun(id=uuid.uuid4(), name="check", flow_id=uuid.uuid4()))
 m = cfg.job_manifest
 m["metadata"]["name"] = "check"
-m["spec"]["template"]["spec"]["containers"][0]["args"] = ["prefect", "flow-run", "execute"]
+m["metadata"].pop("generateName", None)
+env = m["spec"]["template"]["spec"]["containers"][0]["env"]
+sig = [e.get("value") for e in env if e["name"] == "PREFECT_FLOW_RUN_EXECUTE_SIGTERM_BEHAVIOR"]
+assert sig == ["crash"], f"SIGTERM behaviour in the prepared Job is {sig}, not [crash]"
 print(json.dumps(m))' <"$tmp/$env-template.json" >"$tmp/$env-job.json" 2>"$tmp/$env-prefect.log" \
     || { cat "$tmp/$env-prefect.log" >&2; fail "Prefect could not build a Job from the $env template"; }
   kubectl apply --dry-run=client --validate=strict -f "$tmp/$env-job.json" >/dev/null \
     || fail "the Job Prefect builds from the $env template is rejected by the API schema"
 done
-echo "ok   Prefect builds a valid Job from both templates (kubectl strict dry-run)"
+echo "ok   Prefect builds a valid Job from both templates (kubectl strict dry-run), SIGTERM crash"
 
 grep -q 'blob.csi.azure.com' <<<"$aks_yaml" || fail "aks corpus is not the blob mount"
 ! grep -q 'blob.csi.azure.com' <<<"$local_yaml" || fail "laptop render uses the blob mount"
