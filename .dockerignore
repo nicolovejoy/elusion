@@ -1,0 +1,21 @@
+# The build context sent to docker. Only pyproject.toml, uv.lock, src/ and criteria/ are
+# copied by the Dockerfile; excluding the rest keeps the context small and makes sure no
+# data (corpus, gold set, grades, labels) or secret can reach a layer by accident.
+data/
+.env
+.env.*
+.git
+.gitignore
+docs/
+tests/
+infra/
+.venv/
+.claude/
+.superpowers/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+mlruns/
+mlartifacts/
+*.parquet

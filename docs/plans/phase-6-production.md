@@ -14,8 +14,9 @@ created except by the owner running `terraform apply` themselves. The phase 4 sp
 As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
 
 - Done: task 0 (prerequisites; results under the task), task 1 (the year is 2020), task 2
-  (`run_env`, commit `2ac889e`, 254 tests pass).
-- Next, in order, none needing the owner: task 3 (container image), task 4 (Helm chart),
+  (`run_env`, commit `2ac889e`, 254 tests pass), task 3 (`Dockerfile`, `.dockerignore`,
+  `infra/check-image.sh`; both architectures pass, 1.64 GB).
+- Next, in order, none needing the owner: task 4 (Helm chart),
   task 5 (Prefect deployments), task 6 (rehearsal on OrbStack's Kubernetes), task 7
   (Terraform module, up to `terraform validate`).
 - Then the owner: `terraform plan` (end of task 7), the Azure day (task 8), `judge`,
@@ -26,7 +27,18 @@ Open items, each with the task that must close it:
 1. **Does an AKS node pool accept `Standard_D2as_v7`?** The size attaches disks through
    NVMe only. The AKS limits page, the size's own page and the AKS FAQ, read 2026-11-15,
    do not say. Close it from the AKS documentation or release notes before task 7 is
-   closed; the fallback is a quota request for 4 DSv5 vCPUs.
+   closed; the fallback is a quota request for 4 DSv5 vCPUs. Read again 2026-11-15 (AKS VM
+   sizes page, AKS Generation 2 page, the Dasv7 page, Azure's NVMe page, AKS release notes
+   April to October 2026): no page names the size or NVMe-only sizes for AKS. What they do
+   say: AKS gives a Generation-2-only size the Generation 2 Linux node image by default; the
+   Dasv7 series needs an NVMe-capable OS image, and Azure lists Ubuntu 22.04, Ubuntu 24.04
+   and Azure Linux 3.0 as such (not Ubuntu 26.04, which AKS makes the `Ubuntu` default from
+   Kubernetes 1.38); Dasv7 has no ephemeral OS disk, so the OS disk is managed; 2 vCPU and
+   8 GB meets the system-pool minimum. The owner accepted (2026-11-15) that the documented
+   answer is missing and the `apply` itself is the test: Terraform pins the node OS image to
+   `Ubuntu2404` and the OS disk to managed, and a refusal falls back to the quota request.
+   The `standardDASv5Family` quota is also 0 in West US 2, so the AMD v5 size is no
+   fallback.
 2. **Year filter for `judge`, `grade` and `evaluate`.** A short design addendum to this
    spec, approved by the owner, before task 9 builds it.
 3. **A dedicated OpenAI key for the cluster run** (call 8). It needs its own 1Password
