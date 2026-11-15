@@ -137,7 +137,9 @@ written, four with an addition (1, 2, 8, 10) and one with its recovery procedure
 9. **Terraform state is local and gitignored** (`.gitignore` already covers
    `infra/terraform/*.tfstate*`). The subscription id comes from the environment
    (`ARM_SUBSCRIPTION_ID`), not from a committed file. `.terraform.lock.hcl` is committed.
-10. **Nodes are two `Standard_D2s_v5`** (2 vCPU, 8 GB each, x86-64), control plane on the
+10. **Nodes are two `Standard_D2as_v7`** (2 vCPU, 8 GB each, x86-64; first drafted as
+    `Standard_D2s_v5`, changed after task 0 found the new subscription has no quota for
+    that family), control plane on the
     free tier, region West US 2. The dev Mac is arm64, so the image is built for both
     `linux/arm64` (rehearsal) and `linux/amd64` (AKS) and the AKS values pin it by digest.
     Addition: task 0 checks that the subscription is not restricted from this size in
@@ -235,9 +237,11 @@ Run 2026-11-15, on a new pay-as-you-go subscription:
   were registered by hand so that quota could be read. Terraform declares them too.
 - Quota in West US 2: 10 regional vCPUs, but **0 for the DSv5 family**, and
   `Standard_D2s_v5` is restricted in all three availability zones. The size of call 10
-  cannot be used without a quota request. Open with the owner: switch to
+  cannot be used without a quota request. The owner approved the switch to
   `Standard_D2as_v7` (2 vCPU, 8 GB, x86-64, family quota 10, no restriction, $0.0908 an
-  hour against $0.096).
+  hour against $0.096). The v7 sizes attach disks through NVMe only; the builder confirms
+  in the AKS documentation that a node pool accepts the size before task 7 is closed. If
+  it does not, the fallback is a quota request for 4 DSv5 vCPUs.
 
 ### 1. Find the year to run
 
@@ -344,7 +348,8 @@ The rehearsal passes when all of the above hold. Its scores are discarded (call 
 ### 7. Terraform module `infra/terraform`
 
 - Resources: resource group; AKS cluster (free tier control plane, one node pool of two
-  `Standard_D2s_v5`, system-assigned identity, Blob CSI driver enabled); container
+  `Standard_D2as_v7`, no availability zones requested, system-assigned identity, Blob CSI
+  driver enabled); container
   registry (Basic) with pull permission for the cluster's kubelet identity; storage
   account and one private blob container with access for the cluster through identity,
   not an account key; two budgets of $10 with an email alert, one on the resource group
@@ -439,7 +444,7 @@ the others. `CLAUDE.md` commands block and `README.md` status line updated.
 Azure, at West US 2 list prices read from https://prices.azure.com/api/retail/prices on
 2026-11-15, for an 8-hour day:
 
-- nodes: 2 x `Standard_D2s_v5` at $0.096 an hour = $1.54
+- nodes: 2 x `Standard_D2as_v7` at $0.0908 an hour = $1.45
 - AKS control plane, free tier: $0
 - container registry, Basic: $0.17 a day
 - outbound public IP: $0.005 an hour = $0.04
@@ -447,7 +452,7 @@ Azure, at West US 2 list prices read from https://prices.azure.com/api/retail/pr
   API on 2026-11-15, to be confirmed by the builder)
 - disks and blob storage: cents
 
-About $2 a day. A cluster left running costs about $5.50 a day, about $165 a month, which
+About $2 a day. A cluster left running costs about $5.25 a day, about $158 a month, which
 is what the same-day destroy and the proposed budget alert guard against.
 
 Models: review about $2.20 (20,000 documents at the local gpt-6-luna rate of $1.9587 for
