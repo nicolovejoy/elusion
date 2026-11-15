@@ -1,11 +1,47 @@
 # Phase 6 spec: production in Azure
 
 Status: designed 2026-11-15 and checked once by a fresh reader; the owner confirmed the
-controller's calls the same day, with the amendments marked below. Build not started. Read
+controller's calls the same day, with the amendments marked below. Build in progress:
+tasks 0, 1 and 2 are done, task 3 (the container image) is next. See "Progress and open
+items" directly below. Read
 `docs/ARCHITECTURE.md`, the Phase 6 checklist in `docs/PHASES.md` and `compose.yaml` first.
 Hard rules in `CLAUDE.md` apply to every line below, in particular: no Azure resource is
 created except by the owner running `terraform apply` themselves. The phase 4 spec
 (`docs/plans/phase-4-leaderboard.md`) is the pattern this one follows.
+
+## Progress and open items
+
+As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
+
+- Done: task 0 (prerequisites; results under the task), task 1 (the year is 2020), task 2
+  (`run_env`, commit `2ac889e`, 254 tests pass).
+- Next, in order, none needing the owner: task 3 (container image), task 4 (Helm chart),
+  task 5 (Prefect deployments), task 6 (rehearsal on OrbStack's Kubernetes), task 7
+  (Terraform module, up to `terraform validate`).
+- Then the owner: `terraform plan` (end of task 7), the Azure day (task 8), `judge`,
+  `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
+
+Open items, each with the task that must close it:
+
+1. **Does an AKS node pool accept `Standard_D2as_v7`?** The size attaches disks through
+   NVMe only. The AKS limits page, the size's own page and the AKS FAQ, read 2026-11-15,
+   do not say. Close it from the AKS documentation or release notes before task 7 is
+   closed; the fallback is a quota request for 4 DSv5 vCPUs.
+2. **Year filter for `judge`, `grade` and `evaluate`.** A short design addendum to this
+   spec, approved by the owner, before task 9 builds it.
+3. **A dedicated OpenAI key for the cluster run** (call 8). It needs its own 1Password
+   item and `op://` reference; hand the owner an `op item create` command with it, and
+   the revoke step is in task 8.
+4. **`kubectl` 1.33.9 against OrbStack's Kubernetes 1.36.5.** Three minor versions apart,
+   outside the supported gap of one. It has answered correctly so far; if it misbehaves
+   in tasks 4 to 6, bring the owner a `brew upgrade` command to approve.
+5. **Nothing that identifies the Azure subscription goes into git** (its name, its id,
+   the directory id). Terraform reads the id from `ARM_SUBSCRIPTION_ID`. To sign in, plain
+   `az login` fails on the multi-factor check; `az login --tenant` with the directory id
+   works.
+6. Outside this phase: the merged remote branch `origin/phase-4-leaderboard` can be
+   deleted on the owner's word; whether to adopt "responsive" and "null set" repo-wide is
+   undecided and belongs to the phase 7 spec.
 
 ## Intent
 
@@ -253,6 +289,9 @@ The local populations therefore span two years already, so the year filter of ta
 must accept more than one year.
 
 ### 2. Record where a review ran
+
+Done 2026-11-15, commit `2ac889e`. The local `review_jobs` table has the column; its 15
+earlier rows hold no value and are reported as `local`.
 
 - `config.py`: `run_env` from `ELUSION_RUN_ENV`, default `local`. `.env.example` and
   `.env.tpl` gain the variable with a comment.
