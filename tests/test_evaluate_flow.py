@@ -67,6 +67,7 @@ def env(monkeypatch, tmp_path):
             "unfinished": False,
             "unfinished_ids": [],
             "busy_s": 3600.0,  # less than the 1:02:03 span: a gap between the two jobs
+            "run_envs": {"local": 1, "aks-x": 1},
         }
 
     def fake_company_counts(engine, doc_ids):
@@ -133,6 +134,7 @@ def test_writes_the_report_and_returns_its_path(env) -> None:
     assert "- judge prompt version: c/judge-v1" in md
     assert "- seed: 20261104" in md and "- date: 2026-11-04" in md
     assert "$0.7500 (sum over 2 review_jobs rows)" in md
+    assert "- review jobs by environment: 1 local, 1 on aks-x" in md
     assert "- judge run: $0.7500" in md
     assert "summed over 2 review_jobs rows (each from its start to its finish): 1:00:00" in md
     assert "- Acme Corp: 3" in md
@@ -202,6 +204,7 @@ def test_warns_but_writes_the_report_while_a_review_job_is_unfinished(
             "unfinished": True,
             "unfinished_ids": ["job-abc"],
             "busy_s": 60.0,
+            "run_envs": {"local": 1},
         },
     )
     path = run(tmp_path)
@@ -282,6 +285,7 @@ def test_evaluate_logs_one_run_and_returns_its_id(env, monkeypatch) -> None:
     assert run.data.params["provider"] == "anthropic"
     assert run.data.params["report_path"] == str(result.report_path)
     assert run.data.params["review_jobs"] == "2"
+    assert run.data.params["run_envs"] == "aks-x,local"
     names = {a.path for a in client.list_artifacts(result.run_id)}
     assert "c-rev-model-v2.md" in names
     assert {"v2.md", "c.md"} <= names  # the prompt file and the criterion file

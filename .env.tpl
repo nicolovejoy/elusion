@@ -14,6 +14,9 @@ ELUSION_JUDGE_MODEL=claude-opus-5-5
 # Spend guard
 ELUSION_MAX_RUN_USD=10
 
+# Where reviews run (the cluster's name on a cluster, phase 6)
+ELUSION_RUN_ENV=local
+
 # Collection
 ELUSION_DATA_DIR=data
 ELUSION_SEC_USER_AGENT=

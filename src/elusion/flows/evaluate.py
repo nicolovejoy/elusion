@@ -414,6 +414,7 @@ def evaluate(
         review_jobs=jobs["jobs"],
         review_wall_clock=wall_clock,
         review_unfinished=jobs["unfinished"],
+        review_envs=jobs["run_envs"],
         companies=company_counts(engine, relevant),
         **graded,
     )

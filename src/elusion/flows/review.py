@@ -230,6 +230,7 @@ def review(
         model=provider.model,
         prompt_version=prompt.version,
         sample_size=sample,
+        run_env=settings.run_env,
     )
     summary = ReviewSummary(job_id=job_id)
     log.info("job %s: model=%s prompt=%s sample=%s", job_id, provider.model, prompt.version, sample)

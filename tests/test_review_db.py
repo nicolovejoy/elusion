@@ -103,6 +103,7 @@ def test_jobs_summary_sums_cost_and_spans_all_jobs() -> None:
             "unfinished": False,
             "unfinished_ids": [],
             "busy_s": 0.0,
+            "run_envs": {},
         }
         a = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
         b = start_job(engine, criterion="c", model=model, prompt_version="c/v2", sample_size=5)
@@ -196,6 +197,95 @@ def test_jobs_summary_busy_time_sums_each_job_not_the_span() -> None:
         place(c, datetime.now(UTC) - timedelta(seconds=60), None)
         busy = jobs_summary(engine, model, "c/v2")["busy_s"]
         assert 662.0 <= busy < 662.0 + 30  # the running job counts up to now
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))
+
+
+# review_jobs as it was before the run_env column: what an existing database holds.
+_OLD_REVIEW_JOBS = """
+CREATE TABLE "{schema}".review_jobs (
+    job_id uuid PRIMARY KEY,
+    criterion text NOT NULL,
+    model text NOT NULL,
+    prompt_version text NOT NULL,
+    sample_size integer,
+    started_at timestamptz DEFAULT now(),
+    finished_at timestamptz,
+    status text NOT NULL DEFAULT 'running',
+    docs_scored integer NOT NULL DEFAULT 0,
+    cost_usd numeric(10, 6) NOT NULL DEFAULT 0
+)
+"""
+
+
+def test_ensure_schema_adds_run_env_to_a_table_created_without_it() -> None:
+    """In a scratch Postgres schema, so the real review_jobs table is not the fixture."""
+    schema = "t_" + uuid.uuid4().hex[:8]
+    admin = make_engine(settings.database_url)
+    url = settings.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    engine = sa.create_engine(url, connect_args={"options": f"-csearch_path={schema}"})
+
+    def columns() -> set[str]:
+        stmt = sa.text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = :s AND table_name = 'review_jobs'"
+        )
+        with admin.connect() as conn:
+            return {r[0] for r in conn.execute(stmt, {"s": schema})}
+
+    try:
+        with admin.begin() as conn:
+            conn.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+            conn.execute(sa.text(_OLD_REVIEW_JOBS.format(schema=schema)))
+        assert "run_env" not in columns()
+        ensure_schema(engine)
+        assert "run_env" in columns()
+        ensure_schema(engine)  # a second call changes nothing and does not fail
+        assert "run_env" in columns()
+    finally:
+        engine.dispose()
+        with admin.begin() as conn:
+            conn.execute(sa.text(f'DROP SCHEMA "{schema}" CASCADE'))
+
+
+def test_start_job_stores_run_env_and_defaults_to_local() -> None:
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    try:
+        a = start_job(engine, criterion="c", model=model, prompt_version="v1", sample_size=1)
+        b = start_job(
+            engine,
+            criterion="c",
+            model=model,
+            prompt_version="v1",
+            sample_size=1,
+            run_env="aks-elusion",
+        )
+        assert get_job(engine, a)["run_env"] == "local"
+        assert get_job(engine, b)["run_env"] == "aks-elusion"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))
+
+
+def test_jobs_summary_counts_jobs_per_run_env_and_reads_null_as_local() -> None:
+    from elusion.review.db import jobs_summary
+
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    job = dict(criterion="c", model=model, prompt_version="c/v2", sample_size=1)
+    try:
+        start_job(engine, **job)
+        start_job(engine, **job, run_env="aks-elusion")
+        old = start_job(engine, **job)
+        with engine.begin() as conn:  # a row from before the column existed
+            conn.execute(
+                sa.update(review_jobs).where(review_jobs.c.job_id == old).values(run_env=None)
+            )
+        assert jobs_summary(engine, model, "c/v2")["run_envs"] == {"local": 2, "aks-elusion": 1}
     finally:
         with engine.begin() as conn:
             conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))

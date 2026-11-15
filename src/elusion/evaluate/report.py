@@ -12,7 +12,7 @@ say so instead of printing a k/n.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 
 from elusion.evaluate.metrics import Estimate
@@ -51,6 +51,8 @@ class RunReport:
     grader_model: str | None = None
     grader_prompt_version: str | None = None
     grade_cost_usd: float = 0.0
+    # review_jobs rows per environment they ran in ("local", or a cluster's name).
+    review_envs: dict[str, int] = field(default_factory=dict)
 
 
 def _interval(e: Estimate) -> str:
@@ -65,6 +67,13 @@ def metric_line(name: str, e: Estimate) -> str:
 
 def _duration(d: timedelta) -> str:
     return str(d - timedelta(microseconds=d.microseconds))
+
+
+def _envs(envs: dict[str, int]) -> str:
+    """'5 local, 1 on aks-elusion': local first, then the clusters by name."""
+    parts = [f"{envs['local']} local"] if "local" in envs else []
+    parts += [f"{n} on {env}" for env, n in sorted(envs.items()) if env != "local"]
+    return ", ".join(parts)
 
 
 def render(r: RunReport) -> str:
@@ -149,6 +158,10 @@ def render(r: RunReport) -> str:
         "## Cost",
         "",
         f"- review run: ${r.review_cost_usd:.4f} (sum over {r.review_jobs} review_jobs rows)",
+    ]
+    if r.review_envs:
+        lines.append(f"- review jobs by environment: {_envs(r.review_envs)}")
+    lines += [
         f"- judge run: ${r.judge_cost_criterion_usd:.4f} "
         "(whole criterion, every review pair: judge-runs ledger)",
         f"- grade run: ${r.grade_cost_usd:.4f} (this review pair: grade-runs ledger)",

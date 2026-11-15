@@ -51,6 +51,8 @@ def run_params(report: RunReport, provider: str, report_path: Path) -> dict[str,
         "review_jobs": str(report.review_jobs),
         "report_path": str(report_path),
     }
+    if report.review_envs:
+        params["run_envs"] = ",".join(sorted(report.review_envs))
     if provider == "ollama":
         # The tag can move; the digest pins what actually produced these scores.
         params["model_digest"] = settings.ollama_digest

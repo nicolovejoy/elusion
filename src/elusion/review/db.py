@@ -11,8 +11,11 @@ double-insert either.
 `review_jobs` is the job table: one row per run, created by `start_job`, bumped as
 batches finish (`update_job` adds to the counters rather than overwriting them), and
 closed by `finish_job` with status 'finished' or 'failed'. It records what was asked
-(criterion, model, prompt version, sample size) and what happened (documents scored,
-dollars spent), so a crashed run can be inspected and re-started.
+(criterion, model, prompt version, sample size), what happened (documents scored,
+dollars spent) and where it ran (`run_env`: `local`, or a cluster's name), so a crashed
+run can be inspected and re-started. `run_env` was added after the first databases
+existed; `create_all` never alters a table, so `ensure_schema` adds the column itself,
+and rows older than the column hold NULL, which is read as `local`.
 
 There is deliberately no foreign key from `scores.doc_id` to `documents.doc_id`: it keeps
 this module independent of the collect module (own MetaData, own `ensure_schema`).
@@ -65,6 +68,7 @@ review_jobs = sa.Table(
     sa.Column("status", sa.Text, nullable=False, server_default="running"),
     sa.Column("docs_scored", sa.Integer, nullable=False, server_default="0"),
     sa.Column("cost_usd", sa.Numeric(10, 6), nullable=False, server_default="0"),
+    sa.Column("run_env", sa.Text),
 )
 
 
@@ -85,6 +89,8 @@ class ScoreRow(TypedDict):
 
 def ensure_schema(engine: Engine) -> None:
     metadata.create_all(engine)
+    with engine.begin() as conn:  # for a review_jobs table created before run_env existed
+        conn.execute(sa.text("ALTER TABLE review_jobs ADD COLUMN IF NOT EXISTS run_env text"))
 
 
 def score_row(doc_id: str, prompt_version: str, provider_name: str, review: Review) -> ScoreRow:
@@ -192,7 +198,13 @@ def insert_scores(engine: Engine, rows: Iterable[ScoreRow]) -> int:
 
 
 def start_job(
-    engine: Engine, *, criterion: str, model: str, prompt_version: str, sample_size: int
+    engine: Engine,
+    *,
+    criterion: str,
+    model: str,
+    prompt_version: str,
+    sample_size: int,
+    run_env: str = "local",
 ) -> str:
     job_id = str(uuid.uuid4())
     with engine.begin() as conn:
@@ -204,6 +216,7 @@ def start_job(
                 prompt_version=prompt_version,
                 sample_size=sample_size,
                 status="running",
+                run_env=run_env,
             )
         )
     return job_id
@@ -239,7 +252,8 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
     Returns jobs (row count), cost_usd (sum), started_at (earliest start), finished_at
     (latest finish, None if none finished), unfinished (some row has no finished_at)
     and unfinished_ids (those rows' job ids, sorted: a running job, or a killed one),
-    and busy_s: each row's own duration summed, a row with no finish counted up to now.
+    busy_s: each row's own duration summed, a row with no finish counted up to now,
+    and run_envs: the row count per environment the jobs ran in (NULL counts as `local`).
     A crashed and resumed review is several rows, so cost and busy time cover them all.
     Busy time, not the first-start-to-last-finish span: a failed start or a probe hours
     before the main run would otherwise count the idle gap between rows as review time.
@@ -268,6 +282,14 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
             .order_by(j.job_id)
         ).scalars()
         open_ids = [str(i) for i in open_ids]
+        env = sa.func.coalesce(j.run_env, "local")
+        run_envs = dict(
+            conn.execute(
+                sa.select(env, sa.func.count())
+                .where(j.model == model, j.prompt_version == prompt_version)
+                .group_by(env)
+            ).all()
+        )
     return {
         "jobs": jobs,
         "cost_usd": float(cost),
@@ -276,6 +298,7 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
         "unfinished": unfinished > 0,
         "unfinished_ids": open_ids,
         "busy_s": float(busy),
+        "run_envs": run_envs,
     }
 
 

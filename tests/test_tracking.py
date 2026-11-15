@@ -143,3 +143,9 @@ def test_log_run_without_prompt_path_logs_no_model(report, tmp_path):
     client = mlflow.MlflowClient(tracking_uri=uri)
     experiment_id = client.get_run(run_id).info.experiment_id
     assert not client.search_logged_models(experiment_ids=[experiment_id])
+
+
+def test_run_params_lists_run_envs_sorted_and_only_when_known(report):
+    p = run_params(make_report(review_envs={"local": 5, "aks-elusion": 1}), "openai", Path("r.md"))
+    assert p["run_envs"] == "aks-elusion,local"
+    assert "run_envs" not in run_params(report, "anthropic", Path("r.md"))

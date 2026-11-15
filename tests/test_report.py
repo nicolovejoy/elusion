@@ -153,3 +153,19 @@ def test_render_cost_includes_the_grade_run() -> None:
     md = render(make_report(**GRADED))
     assert "- grade run: $0.2500" in md
     assert f"- total for this pair (review + grade): ${0.834 + 0.25:.4f}" in md
+
+
+def test_render_lists_review_jobs_per_environment() -> None:
+    md = render(make_report(review_jobs=6, review_envs={"aks-elusion": 1, "local": 5}))
+    assert "- review jobs by environment: 5 local, 1 on aks-elusion" in md
+    assert md.index("review run:") < md.index("review jobs by environment") < md.index("judge run:")
+
+
+def test_render_one_environment() -> None:
+    md = render(make_report(review_envs={"local": 2}))
+    assert "- review jobs by environment: 2 local\n" in md
+
+
+def test_render_without_jobs_has_no_environment_line() -> None:
+    md = render(make_report(review_jobs=0, review_wall_clock=None))
+    assert "by environment" not in md
