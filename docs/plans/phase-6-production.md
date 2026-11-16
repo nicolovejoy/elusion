@@ -214,12 +214,17 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   the probe projected $1.03, a third above the real cost. `grade`: 66 graded, 0 failed,
   $0.272924, projected $0.29. Both ledgers recorded `years: [2020]`, and the judge
   logged `0 already labeled`, so no 2018-2019 label was touched or redrawn.
-- Next, the owner: start OrbStack and `docker compose up -d` (stopped after `grade`;
-  `evaluate` reads Postgres and logs to MLflow), then `uv run elusion evaluate
-  --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2020
-  --review-model gpt-6-luna`. It makes no model call and writes
-  `docs/reports/cloud-concentration-gpt-6-luna-v2-2020.md`, to be committed. Then
-  runbook step 15 (the bill, by resource group) and the phase note (task 10).
+- Task 9, the owner's `evaluate` for 2020, done 2026-11-16:
+  `docs/reports/cloud-concentration-gpt-6-luna-v2-2020.md`, MLflow run
+  `7bab5a6eab7e4ccf8e19cbaf3b6b32bb` (`years` 2020, `run_envs` `aks-elusion`).
+  20,000 of the 599,703 paragraphs filed in 2020: precision 0.485 [0.360, 0.611]
+  (32/66), elusion 0.000 [0.000, 0.018] (0/200), rationale sound 66/66, one review job
+  on `aks-elusion`, 1:46:44, 187 documents a minute, review $2.1941. The same pair on
+  2018-2019 gave precision 0.511 [0.358, 0.663] (23/45) and elusion 0/200. Recall's
+  point value of 1.000 is the zero-hit artefact the README already describes; only its
+  interval [0.061, 1.000] carries information. Task 9 is complete.
+- Next, the owner: runbook step 15 the next day (the bill, by resource group), then the
+  phase note, ticks, decisions and docs (task 10).
 
 Open items, each with the task that must close it:
 
