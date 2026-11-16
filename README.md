@@ -85,7 +85,7 @@ Clopper-Pearson 95% intervals:
   an artefact of zero hits, and only the interval carries information.
 - judge/owner agreement 0.80 [0.56, 0.94], 16 of 20
 
-Full report: `docs/reports/cloud-concentration-claude-haiku-5-5-v2.md`. The reasoning,
+Full report: `docs/reports/cloud-concentration-claude-haiku-5-5-v2-2018-2019.md`. The reasoning,
 including where the judge and the owner disagreed: `docs/notes/phase-3.md`.
 
 ## What the pipeline guarantees
@@ -109,9 +109,9 @@ docker compose up -d     # postgres (:5433), redpanda (:9092), mlflow (:5001), p
 uv sync
 uv run elusion collect --year 2018 --year 2019 --year 2020
 uv run elusion review --criterion criteria/cloud-concentration.md --prompt-version v2 --sample 20000
-uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2
+uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019
 uv run elusion label --criterion criteria/cloud-concentration.md --prompt-version v2 --n 20
-uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2
+uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019
 uv run pytest
 ```
 

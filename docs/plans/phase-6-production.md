@@ -191,15 +191,28 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   $2.193085. The local pairs show the same small excess (gpt-6-luna v2: $1.959550
   against $1.958701), so it is how the two totals are kept, not something Azure did.
   The report's cost line uses the scores' sum.
-- **Do not run `judge`, `grade` or `evaluate` for (gpt-6-luna, v2) yet.** The `--year`
-  option of the addendum is not on the commands: only the readers under them take
-  `years` (commit `bdf024c`). Until it is, those three would read 2018, 2019 and 2020
-  as one pile, draw a new discard sample and pay the judge for it. The other pairs
-  have no 2020 scores and are not affected.
-- Next: the rest of the year filter (the `--year` option on the three commands, the
-  report name and population line, the five reports renamed, the MLflow `years`
-  param), then the owner's `judge`, `grade` and `evaluate` for 2020 (task 9), runbook
-  step 15 the next day (the bill, by resource group), the phase note (task 10).
+- Task 9, the year filter, built 2026-11-16 as the addendum says. `judge`, `grade` and
+  `evaluate` take a required, repeatable `--year`; without it the command stops at
+  `Missing option '--year'`. Each reads one population, the pair's paragraphs filed in
+  those years: the piles and the seeded discard draw, the review cost (the scores' own
+  `cost_usd`, summed), the review jobs that scored them (matched by time window) and
+  the grading spend (the ledger records the years; a record without them is read as
+  2018 and 2019). The report names its filing years, says what the population is a part
+  of, and its file name ends in the years; MLflow logs a `years` param. The five
+  committed reports are renamed to `...-2018-2019.md`, contents unchanged.
+  Checked against the real data with the 2020 scores loaded: `evaluate --year 2018
+  --year 2019` for all five pairs, written to a scratch folder with MLflow off, gave
+  the committed reports' metrics, intervals, k/n and companies line for line. The only
+  differences are the designed ones: the years lines, the cost basis (under a tenth of
+  a cent per pair) and the job counts (failed starts that scored nothing drop out:
+  gpt-6-luna v2 goes from 5 rows to 1, haiku v1 from 6 to 4).
+  The runbook's step 14 is closed: the cluster's OpenAI key `elusion-aks` shows
+  `Revoked` on OpenAI's page (owner's screenshot, 2026-11-16).
+- Next, the owner, one at a time: `judge`, `grade` and `evaluate` with `--year 2020
+  --review-model gpt-6-luna` (task 9). The 2020 population is 66 flagged and 19,934
+  discard, so the judge labels 266 paragraphs (66 flagged, 200 drawn), about $0.64 at
+  the ledger's mean cost per call, and the grader reads 66 rationales. Then runbook
+  step 15 the next day (the bill, by resource group) and the phase note (task 10).
 
 Open items, each with the task that must close it:
 

@@ -163,7 +163,7 @@ Prefect flow `evaluate`: piles recomputed from `scores`, joined to the judge row
   grades for the pair (if any)          ──▶ rationale sound, quote verbatim, sound x label
         Clopper-Pearson 95% intervals and the k/n behind them
         ▼
-docs/reports/<criterion>-<model>-<version>.md (committed)
+docs/reports/<criterion>-<model>-<version>-<filing years>.md (committed)
         ▼
 MLflow run in experiment elusion/<criterion>, named <review model>/<prompt version>:
   params, metrics (point/low/high/k/n per metric, costs), artifacts (report, review
