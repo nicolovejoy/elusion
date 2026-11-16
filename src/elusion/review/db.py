@@ -292,8 +292,38 @@ def finish_job(engine: Engine, job_id: str, status: str = "finished") -> None:
         conn.execute(stmt)
 
 
-def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
+def _scored_some(years: Sequence[int]) -> sa.ColumnElement[bool]:
+    """True for a review_jobs row that scored at least one paragraph filed in `years`.
+
+    Neither table names the other: `scores` has no `job_id` and a job has no year. So a
+    job is matched by time: one of the pair's scores for those years has a `scored_at`
+    between the job's start and its finish (or now, for a job with no finish). A killed
+    job with no `finished_at` therefore matches every later score of its pair.
+    """
+    j = review_jobs.c
+    return (
+        sa.select(sa.literal(1))
+        .select_from(scores.join(documents, documents.c.doc_id == scores.c.doc_id))
+        .where(
+            scores.c.model == j.model,
+            scores.c.prompt_version == j.prompt_version,
+            documents.c.year.in_(list(years)),
+            scores.c.scored_at.between(
+                j.started_at, sa.func.coalesce(j.finished_at, sa.func.now())
+            ),
+        )
+        .exists()
+    )
+
+
+def jobs_summary(
+    engine: Engine, model: str, prompt_version: str, years: Sequence[int] | None = None
+) -> dict:
     """What every review_jobs row for (model, prompt_version) adds up to.
+
+    With `years`, only the rows that scored a paragraph filed in those years (see
+    `_scored_some`): the jobs behind one population of the pair.
+
 
     Returns jobs (row count), cost_usd (sum), started_at (earliest start), finished_at
     (latest finish, None if none finished), unfinished (some row has no finished_at)
@@ -307,6 +337,9 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
     counted twice.
     """
     j = review_jobs.c
+    pair = [j.model == model, j.prompt_version == prompt_version]
+    if years is not None:
+        pair.append(_scored_some(years))
     stmt = sa.select(
         sa.func.count(),
         sa.func.coalesce(sa.func.sum(j.cost_usd), 0),
@@ -319,22 +352,16 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
             ),
             0,
         ),
-    ).where(j.model == model, j.prompt_version == prompt_version)
+    ).where(*pair)
     with engine.connect() as conn:
         jobs, cost, started, finished, unfinished, busy = conn.execute(stmt).one()
         open_ids = conn.execute(
-            sa.select(j.job_id)
-            .where(j.model == model, j.prompt_version == prompt_version, j.finished_at.is_(None))
-            .order_by(j.job_id)
+            sa.select(j.job_id).where(*pair, j.finished_at.is_(None)).order_by(j.job_id)
         ).scalars()
         open_ids = [str(i) for i in open_ids]
         env = sa.func.coalesce(j.run_env, "local")
         run_envs = dict(
-            conn.execute(
-                sa.select(env, sa.func.count())
-                .where(j.model == model, j.prompt_version == prompt_version)
-                .group_by(env)
-            ).all()
+            conn.execute(sa.select(env, sa.func.count()).where(*pair).group_by(env)).all()
         )
     return {
         "jobs": jobs,

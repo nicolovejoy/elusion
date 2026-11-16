@@ -372,3 +372,88 @@ def test_scores_cost_usd_sums_the_cost_of_the_given_years_scores() -> None:
         _unfile_documents(engine, ids.values())
         with engine.begin() as conn:
             conn.execute(sa.delete(scores).where(scores.c.model == model))
+
+
+def test_jobs_summary_with_years_keeps_the_jobs_that_scored_that_population() -> None:
+    """Jobs carry no year: one belongs if a score of those years falls inside its window."""
+    from datetime import UTC, datetime, timedelta
+
+    from elusion.review.db import jobs_summary
+
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    ids = _scored_in_three_years(engine, model)
+    t0 = datetime(2026, 11, 6, 15, 0, tzinfo=UTC)
+    hour = timedelta(hours=1)
+
+    def job(start: datetime, seconds: int, cost: float, run_env: str) -> None:
+        j = start_job(
+            engine, criterion="c", model=model, prompt_version="v1", sample_size=1, run_env=run_env
+        )
+        end = start + timedelta(seconds=seconds)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.update(review_jobs)
+                .where(review_jobs.c.job_id == j)
+                .values(started_at=start, finished_at=end, cost_usd=cost)
+            )
+
+    def scored_at(year: int, when: datetime) -> None:
+        with engine.begin() as conn:
+            conn.execute(
+                sa.update(scores)
+                .where(scores.c.model == model, scores.c.doc_id == ids[year])
+                .values(scored_at=when)
+            )
+
+    try:
+        job(t0, 600, 0.50, "local")  # scored the 2018 and 2019 paragraphs
+        job(t0 + hour, 2, 0.25, "aks-elusion")  # a failed start: no score at all
+        job(t0 + 2 * hour, 300, 1.00, "aks-elusion")  # scored the 2020 paragraph
+        scored_at(2018, t0 + timedelta(seconds=5))
+        scored_at(2019, t0 + timedelta(seconds=600))  # on the job's last instant: inside
+        scored_at(2020, t0 + 2 * hour + timedelta(seconds=10))
+
+        new = jobs_summary(engine, model, "v1", years=[2020])
+        assert (new["jobs"], new["busy_s"], new["cost_usd"]) == (1, 300.0, 1.0)
+        assert new["run_envs"] == {"aks-elusion": 1}
+        assert new["started_at"] == t0 + 2 * hour
+
+        old = jobs_summary(engine, model, "v1", years=[2018, 2019])
+        assert (old["jobs"], old["busy_s"], old["run_envs"]) == (1, 600.0, {"local": 1})
+
+        assert jobs_summary(engine, model, "v1", years=[2017])["jobs"] == 0
+        assert jobs_summary(engine, model, "v1")["jobs"] == 3  # no years: every job of the pair
+    finally:
+        _unfile_documents(engine, ids.values())
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.model == model))
+            conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))
+
+
+def test_jobs_summary_with_years_reports_an_unfinished_job_that_scored_them() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from elusion.review.db import jobs_summary
+
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    ids = _scored_in_three_years(engine, model)  # scored_at = now
+    try:
+        j = start_job(engine, criterion="c", model=model, prompt_version="v1", sample_size=1)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.update(review_jobs)
+                .where(review_jobs.c.job_id == j)
+                .values(started_at=datetime.now(UTC) - timedelta(minutes=5))
+            )
+        got = jobs_summary(engine, model, "v1", years=[2020])
+        assert got["unfinished"] is True
+        assert got["unfinished_ids"] == [j]
+    finally:
+        _unfile_documents(engine, ids.values())
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.model == model))
+            conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))
