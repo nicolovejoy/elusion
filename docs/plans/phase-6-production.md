@@ -133,7 +133,15 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
     the session's attention needs `caffeinate -ims -w PID -t SECONDS` on its watcher. The
     interrupted `collect` resumed its download after the wake and still finished with the
     right count. On AKS a sleeping Mac only drops the port-forward and `--watch`.
-- Next: the owner's Azure day (task 8), from `infra/README.md`.
+- The Azure day, 2026-11-16, in progress. Before paid time: the three checks pass, the
+  runbook was read against the module, the chart, the flow code and Azure (Kubernetes
+  1.36 offered in West US 2, `Standard_D2as_v7` unrestricted, 0 of 10 vCPUs used,
+  providers registered, no resource group), and nothing in it needed changing. Runbook
+  steps 1 to 3 done: `terraform apply` confirmed at about 07:50 Pacific, `10 added`;
+  two nodes `Ready`, v1.36.5, Ubuntu 24.04.5 LTS, amd64. `kubectl` in the owner's tab 1
+  points at `aks-elusion`. The cluster is up and billing.
+- Next: runbook step 4 (namespace and the two Secrets), then on through step 14 the
+  same day (task 8), from `infra/README.md`.
 - Then the owner: `judge`,
   `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
 
@@ -153,7 +161,9 @@ Open items, each with the task that must close it:
    settles it, the `apply` itself is the test; Terraform pins the node OS image to
    `Ubuntu2404` and the OS disk to managed, and a refusal falls back to the quota request.
    The `standardDASv5Family` quota is also 0 in West US 2, so the AMD v5 size is no
-   fallback. Closed for planning; the `apply` closes it in fact.
+   fallback. Closed for planning; the `apply` closes it in fact. Closed in fact
+   2026-11-16: the `apply` created the node pool on `Standard_D2as_v7` and both nodes
+   came up `Ready` on Ubuntu 24.04.5 LTS.
 2. **Year filter for `judge`, `grade` and `evaluate`.** Approved by the owner 2026-11-15;
    the design is the addendum under task 9.
 3. **A dedicated OpenAI key for the cluster run** (call 8). It needs its own 1Password
