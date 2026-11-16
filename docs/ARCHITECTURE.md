@@ -1,7 +1,7 @@
 # Data architecture
 
 How data moves through elusion, what each store is for, and why. Phases 0 to 4 and 6 are
-built; later phases are described as planned and marked so.
+built; phase 5 is not, and appears only as a planned row in the reads-and-writes table.
 
 ## One line
 
@@ -207,12 +207,14 @@ score, the `scores` key, or the model behind a provider's id.
 Phase 6 runs the phase 1 and 2 flows, the same code, on a rented Kubernetes cluster, once,
 and removes the cluster the same day. The data model gains one nullable column,
 `review_jobs.run_env`, which records where a review ran (`local` by default, the cluster's
-name on AKS). Otherwise what is new is where the pieces run and how a run is started. A few terms first. AKS (Azure Kubernetes
-Service) is Azure's managed Kubernetes, the counterpart of AWS EKS; Azure runs the control
-plane and we rent the worker machines (nodes). Terraform declares Azure resources in files
-and creates or destroys them from those files. A Helm chart is a template of Kubernetes
-manifests (the YAML that describes pods and volumes) plus a values file; `helm install`
-renders it and applies the result. A Kubernetes Job is a pod that runs once to completion.
+name on AKS). Otherwise what is new is where the pieces run and how a run is started. A
+few terms first. AKS (Azure Kubernetes Service) is Azure's managed Kubernetes, the
+counterpart of AWS EKS; Azure runs the control plane and we rent the worker machines
+(nodes). A pod is one or more containers that Kubernetes runs together on one node.
+Terraform declares Azure resources in files and creates or destroys them from those
+files. A Helm chart is a template of Kubernetes manifests (the YAML that describes pods
+and volumes) plus a values file; `helm install` renders it and applies the result. A
+Kubernetes Job is a pod that runs once to completion.
 
 What exists, and who made it:
 
@@ -235,7 +237,8 @@ Helm chart (infra/helm/elusion), `helm install` by the owner: the cluster's cont
   │ review_jobs  │ │ ingested     │ │ two deployments  │ │ Job per flow run    │
   └──────────────┘ └──────────────┘ └──────────────────┘ └─────────────────────┘
   + the volume `corpus` (the blob container, mounted), the settings ConfigMap, and a
-    hook Job that registers the work pool and the two deployments after every install
+    hook Job that registers the work pool and the two deployments after every
+    install and upgrade
   Two Secrets are named by the chart and created by hand: the OpenAI key, the Postgres
   password. Nothing is exposed to the internet; the owner reaches the cluster with
   `kubectl port-forward`.
@@ -273,9 +276,11 @@ remainder (DECISIONS 2026-11-15).
 
 The corpus is a directory, as it is on the laptop. On AKS that directory is the blob
 container, mounted into each pod by the cluster's Blob CSI driver (CSI is Kubernetes's
-plugin interface for storage), signed in with the nodes' managed identity. `collect` wrote
-the 2020 Parquet file (599,703 paragraphs, 135,306,583 bytes) into it on the cluster in
-5 minutes 28 seconds, and `review` read it back.
+plugin interface for storage), signed in with the nodes' managed identity (an identity
+Azure gives a resource so it can be granted roles without a key or password, the
+counterpart of an instance's IAM role). `collect` wrote the 2020 Parquet file (599,703
+paragraphs, 135,306,583 bytes) into it on the cluster in 5 minutes 28 seconds, and
+`review` read it back.
 
 How the scores came home:
 
@@ -306,7 +311,8 @@ to run the same code where production runs: images in a registry, state in servi
 rather than in the compose file, secrets outside the repo, and a bill. Three choices
 follow from running it for one day. Postgres, Redpanda and the Prefect server are pods
 from the chart, as in `compose.yaml`, because managed databases and Event Hubs would add
-resources to create and destroy for no new lesson. The state that matters leaves the
+resources to create and destroy, and pods from a chart are the most Helm and Kubernetes
+practice (DECISIONS 2026-11-15). The state that matters leaves the
 cluster before it is destroyed (the export), because everything in it dies with it.
 Everything in Azure and in the cluster is declared in a committed file, because a
 resource made by hand is one that `terraform destroy` does not know about. The two
@@ -320,7 +326,7 @@ Secrets are the one exception, since their values cannot be in a file.
 | 2 review | Kafka, `documents`, `scores`, Parquet text | `scores`, job table |
 | 3 judge, label, evaluate | `scores`, `review_jobs`, `documents`, Parquet text, `data/gold/` | `data/gold/<criterion>.csv`, `.judge-runs.jsonl`, `docs/reports/` |
 | 4 leaderboard | report, scores, prompt file, `data/grades/`, MLflow registry | MLflow run (params, metrics, report, prompt, `reviewer` model); registry versions and alias; `data/grades/<criterion>.csv`, `.grade-runs.jsonl` |
-| 5 dedupe | Parquet | Delta table of clusters; `scores` for members |
+| 5 dedupe (planned) | Parquet | Delta table of clusters; `scores` for members |
 | 6 production | same as 1 and 2, in the cluster: HuggingFace JSONL, the cluster's Kafka, `documents`, `scores`, Parquet text on the blob mount | the cluster's Postgres, Kafka and blob container; then `scores` and `review_jobs` copied to `data/exports/` and into the local Postgres |
 
 ## Local services

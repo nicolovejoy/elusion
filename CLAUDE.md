@@ -74,7 +74,7 @@ uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-ver
 uv run elusion promote --run <mlflow run id>   # register that run's reviewer, alias champion
 uv run elusion review --criterion criteria/cloud-concentration.md --reviewer elusion-reviewer@champion --sample 50
 infra/check-image.sh elusion:dev     # phase 6 checks, no Azure needed: image (build it first; PLATFORM=linux/amd64 for the AKS image)
-infra/check-chart.sh                 # the Helm chart renders and validates (needs helm, kubectl)
+infra/check-chart.sh                 # the Helm chart renders and validates (needs helm, docker, uv, and kubectl pointed at a running cluster such as OrbStack's)
 infra/check-terraform.sh             # Terraform fmt, validate, provider pinned, no GUID or email in the .tf files
 infra/export.sh                      # on the Azure day: scores and review_jobs out of the cluster's Postgres into data/exports/
 ```

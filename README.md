@@ -14,9 +14,10 @@ Knowledge/Metadata, Query Plane, Ontology/Relationship, Data Capabilities.
 Instead of a real matter, the corpus is public: the Risk Factors section (Item 1A) of every
 10-K annual filing for 2018, 2019 and 2020, from the EDGAR-CORPUS dataset on HuggingFace.
 That is about 20,000 filings and 1.6 million paragraphs. Each paragraph is treated as one
-"risk factor" document. The review so far covered the first 17,936 of them, in ingest order.
-The criterion for our first question is "does this company say it depends on one or a few
-cloud providers", which is the kind of yes/no question a review team gets handed.
+"risk factor" document. The first reviews covered the first 17,936 of them in ingest order,
+all filed in 2018 and 2019; phase 6 added the first 20,000 filed in 2020. The criterion
+for our first question is "does this company say it depends on one or a few cloud
+providers", which is the kind of yes/no question a review team gets handed.
 
 **Elusion**, the name, is the e-discovery metric for what a review missed: the rate of
 relevant documents inside the pile the system discarded, measured by sampling that pile.
@@ -63,10 +64,11 @@ started by a Prefect worker, with the Parquet corpus in a mounted blob container
 champion, gpt-6-luna with prompt v2, reviewed the first 20,000 paragraphs filed in 2020, a
 year no model had scored, so nothing was paid for twice; the scores were exported before
 the destroy and loaded into the local Postgres after it. Its report is its own population,
-not merged into the 2018-2019 results: precision 0.485 [0.360, 0.611] (32 of 66 flagged),
-elusion 0.000 [0.000, 0.018] (0 of 200 sampled discards), recall not established
-([0.061, 1.000]), Clopper-Pearson 95%. The review cost $2.19 in API spend. What Azure
-charged for the day is not known yet: the bill is read on 2026-11-17. Details in
+not merged into the 2018-2019 results: precision 0.485 [0.360, 0.611] (32 of 66 flagged) and
+elusion 0.000 [0.000, 0.018] (0 of 200 sampled discards), Clopper-Pearson 95%; recall is
+not established ([0.061, 1.000], derived from those two intervals, so it covers the true
+value with probability at least about 90%, not 95%). The review cost $2.19 in API spend.
+What Azure charged for the day is not known yet: the bill is read on 2026-11-17. Details in
 `docs/reports/cloud-concentration-gpt-6-luna-v2-2020.md`, `docs/ARCHITECTURE.md` and
 `infra/README.md`.
 
@@ -81,9 +83,10 @@ review, judge and evaluate flows.
 ## Status
 
 Phases 0 to 4 are done, and phase 6 has run: on AKS on 2026-11-16, destroyed the same
-day. Two things on phase 6 are still open: the Azure bill, which is read on 2026-11-17,
-and the owner's pass on the phase note, which is a draft (`docs/notes/phase-6.md`). Phase 5
-(Spark) and phase 7 are ahead. See `docs/PHASES.md`.
+day. Three things on phase 6 are still open: the Azure bill, which is read on 2026-11-17,
+and the owner's pass on the phase note, which is a draft (`docs/notes/phase-6.md`). The optional
+Pulumi rewrite, the phase's third open box, has not been started. Phase 5 (Spark) and
+phase 7 are ahead. See `docs/PHASES.md`.
 
 ## First result
 

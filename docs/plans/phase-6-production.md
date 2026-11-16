@@ -133,7 +133,7 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
     the session's attention needs `caffeinate -ims -w PID -t SECONDS` on its watcher. The
     interrupted `collect` resumed its download after the wake and still finished with the
     right count. On AKS a sleeping Mac only drops the port-forward and `--watch`.
-- The Azure day, 2026-11-16: run, exported and destroyed; steps 14 and 15 remain.
+- The Azure day, 2026-11-16: run, exported and destroyed; step 15 remains.
   Before paid time: the three checks pass, the
   runbook was read against the module, the chart, the flow code and Azure (Kubernetes
   1.36 offered in West US 2, `Standard_D2as_v7` unrestricted, 0 of 10 vCPUs used,
