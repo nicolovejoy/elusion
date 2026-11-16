@@ -110,6 +110,8 @@ def _unfinished_msg(jobs: dict, model: str, version: str) -> str:
 def judge(
     criterion: str,
     prompt_version: str = "v2",
+    *,
+    years: list[int],
     threshold: int = 3,
     discard_n: int = 200,
     seed: int = DEFAULT_SEED,
@@ -122,15 +124,21 @@ def judge(
     gold_csv: Path | None = None,
     force: bool = False,
 ) -> JudgeSummary:
-    """Label the gold set of the review run (`review_model`, `prompt_version`).
+    """Label the gold set of the review run (`review_model`, `prompt_version`) for the
+    paragraphs filed in `years`.
 
-    `prompt_version` names the review prompt whose scores define the piles; the judge's
-    own prompt is always JUDGE_PROMPT_VERSION. `gold` and `gold_csv` default to
-    `select_gold` over Postgres and data/gold/<criterion>.csv; tests pass their own.
+    `years` has no default. A pair's scores can cover several populations (2018-2019
+    scored on the laptop, 2020 on the cluster), and the seeded discard draw depends on
+    the whole pile it is drawn from: mixing years would pick a new sample and pay the
+    judge to label it. `prompt_version` names the review prompt whose scores define the
+    piles; the judge's own prompt is always JUDGE_PROMPT_VERSION. `gold` and `gold_csv`
+    default to `select_gold` over Postgres and data/gold/<criterion>.csv; tests pass
+    their own.
 
-    While a review job for the pair is unfinished the scores may be partial: the discard
-    sample would be drawn from them, and once the review finishes, new flagged docs would
-    lack labels and a re-draw would pay again. So the flow raises ReviewStillRunning
+    While a review job that scored the population is unfinished the scores may be
+    partial: the discard sample would be drawn from them, and once the review finishes,
+    new flagged docs would lack labels and a re-draw would pay again. So the flow raises
+    ReviewStillRunning
     unless `force` (for a row left unfinished by a killed process).
 
     Spend guard as in the review flow: PROBE_DOCS attempts one at a time (their rows kept),
@@ -148,7 +156,7 @@ def judge(
     if gold is None:
         review_version = f"{criterion}/{prompt_version}"
         engine = db.make_engine(settings.database_url)
-        jobs = jobs_summary(engine, review_model, review_version)
+        jobs = jobs_summary(engine, review_model, review_version, years)
         if jobs["unfinished"]:
             msg = _unfinished_msg(jobs, review_model, review_version)
             if not force:
@@ -156,9 +164,9 @@ def judge(
                     f"{msg}; wait for it to finish, or pass --force if it was killed"
                 )
             log.warning("%s; continuing because force=True", msg)
-        gold = select_gold(engine, review_model, review_version, threshold, discard_n, seed)
+        gold = select_gold(engine, review_model, review_version, threshold, discard_n, seed, years)
         if not gold:
-            raise RuntimeError(f"no scores for ({review_model}, {review_version})")
+            raise RuntimeError(f"no scores for ({review_model}, {review_version}) filed in {years}")
     pile = dict(gold)
     done = labeled_ids(path, provider.model)
     todo = [d for d in pile if d not in done]
@@ -250,6 +258,7 @@ def judge(
             # The review pair this run was for. Older records lack these two fields.
             "review_model": review_model,
             "review_prompt_version": f"{criterion}/{prompt_version}",
+            "years": sorted(years),  # informational: the judge cost line is criterion-wide
             "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         try:

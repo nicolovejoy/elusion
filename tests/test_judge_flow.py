@@ -21,6 +21,9 @@ def prefect_api():
         yield
 
 
+YEARS = [2018, 2019]  # the population every judge() call below names
+
+
 def make_texts(n: int) -> dict[str, str]:
     return {f"d{i:03d}": f"paragraph {i} about hosting" for i in range(n)}
 
@@ -47,7 +50,7 @@ def test_labels_every_gold_id_and_writes_rows(env) -> None:
 
     path, texts = env
     j = FakeJudge(relevant=lambda t: t.startswith("paragraph 0 "))
-    s = judge("c", gold=gold_of(5), provider=j, gold_csv=path)
+    s = judge("c", years=YEARS, gold=gold_of(5), provider=j, gold_csv=path)
     assert (s.labeled, s.skipped, s.failed) == (5, 0, 0)
     assert s.cost_projected_usd is None  # fewer than 20 to label: nothing to project
 
@@ -68,14 +71,14 @@ def test_rerun_skips_labeled_ids(env) -> None:
     from elusion.flows.evaluate import judge
 
     path, _ = env
-    judge("c", gold=gold_of(3), provider=FakeJudge(), gold_csv=path)
+    judge("c", years=YEARS, gold=gold_of(3), provider=FakeJudge(), gold_csv=path)
     j = FakeJudge()
-    s = judge("c", gold=gold_of(5), provider=j, gold_csv=path)
+    s = judge("c", years=YEARS, gold=gold_of(5), provider=j, gold_csv=path)
     assert (s.labeled, s.skipped) == (2, 3)
     assert len(j.calls) == 2
     assert len(judge_rows(path)) == 5
     # A different judge model is a different labeler: nothing is skipped for it.
-    s = judge("c", gold=gold_of(5), provider=FakeJudge(model="other"), gold_csv=path)
+    s = judge("c", years=YEARS, gold=gold_of(5), provider=FakeJudge(model="other"), gold_csv=path)
     assert (s.labeled, s.skipped) == (5, 0)
 
 
@@ -97,13 +100,13 @@ def test_failed_calls_write_no_row_and_are_retried(env) -> None:
     from elusion.flows.evaluate import judge
 
     path, texts = env
-    s = judge("c", gold=gold_of(5), provider=Flaky({texts["d002"]}), gold_csv=path)
+    s = judge("c", years=YEARS, gold=gold_of(5), provider=Flaky({texts["d002"]}), gold_csv=path)
     assert (s.labeled, s.failed) == (4, 1)
     assert s.cost_usd == pytest.approx(0.40)
     assert "d002" not in {r.doc_id for r in judge_rows(path)}
 
     j = Flaky(set())
-    s = judge("c", gold=gold_of(5), provider=j, gold_csv=path)
+    s = judge("c", years=YEARS, gold=gold_of(5), provider=j, gold_csv=path)
     assert (s.labeled, s.skipped, s.failed) == (1, 4, 0)
     assert [p for _, p in j.calls] == [texts["d002"]]
 
@@ -120,7 +123,7 @@ def test_model_echo_mismatch_aborts_and_writes_nothing(env) -> None:
 
     path, _ = env
     with pytest.raises(RuntimeError, match="fake-judge-20990101"):
-        judge("c", gold=gold_of(5), provider=EchoMismatch(), gold_csv=path)
+        judge("c", years=YEARS, gold=gold_of(5), provider=EchoMismatch(), gold_csv=path)
     assert judge_rows(path) == []
 
 
@@ -139,7 +142,7 @@ def test_budget_exceeded_stops_after_probe(env) -> None:
     j = Costly()
     # mean $0.01 x 10 still to label = $0.10 projected > $0.05
     with pytest.raises(BudgetExceeded, match="refusing to continue"):
-        judge("c", gold=gold_of(30), provider=j, gold_csv=path, max_run_usd=0.05)
+        judge("c", years=YEARS, gold=gold_of(30), provider=j, gold_csv=path, max_run_usd=0.05)
     assert len(j.calls) == 20
     assert len(judge_rows(path)) == 20  # the paid probes are kept, so a re-run skips them
 
@@ -148,7 +151,7 @@ def test_budget_ok_reports_projection(env) -> None:
     from elusion.flows.evaluate import judge
 
     path, _ = env
-    s = judge("c", gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=1.0)
+    s = judge("c", years=YEARS, gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=1.0)
     assert s.labeled == 30
     assert s.cost_usd == pytest.approx(0.30)
     # The whole run: 20 probes already billed + 10 labels still to go.
@@ -162,7 +165,9 @@ def test_probe_spend_counts_toward_the_limit(env) -> None:
     path, _ = env
     # The 10 labels left cost $0.10 < $0.25, but with the $0.20 of probes the run is $0.30.
     with pytest.raises(BudgetExceeded, match=r"\$0\.30"):
-        judge("c", gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=0.25)
+        judge(
+            "c", years=YEARS, gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=0.25
+        )
 
 
 class AlwaysRefuses(FakeJudge):
@@ -180,7 +185,7 @@ def test_no_usable_label_in_probe_fails(env) -> None:
     path, _ = env
     j = AlwaysRefuses()
     with pytest.raises(RuntimeError, match="no usable label in 20 attempts"):
-        judge("c", gold=gold_of(30), provider=j, gold_csv=path, max_run_usd=100.0)
+        judge("c", years=YEARS, gold=gold_of(30), provider=j, gold_csv=path, max_run_usd=100.0)
     assert len(j.calls) == 20 and judge_rows(path) == []
 
 
@@ -196,7 +201,7 @@ def test_unexpected_error_keeps_paid_rows_and_fails(env) -> None:
 
     path, _ = env
     with pytest.raises(ValueError, match="bad request"):
-        judge("c", gold=gold_of(6), provider=BrokenOnOne(), gold_csv=path)
+        judge("c", years=YEARS, gold=gold_of(6), provider=BrokenOnOne(), gold_csv=path)
     assert {r.doc_id for r in judge_rows(path)} == {f"d{i:03d}" for i in range(6)} - {"d003"}
 
 
@@ -206,7 +211,7 @@ def test_unknown_id_fails_before_any_call(env) -> None:
     path, _ = env
     j = FakeJudge()
     with pytest.raises(KeyError, match="not in the Parquet corpus"):
-        judge("c", gold=[("nope", "flagged")], provider=j, gold_csv=path)
+        judge("c", years=YEARS, gold=[("nope", "flagged")], provider=j, gold_csv=path)
     assert j.calls == []
 
 
@@ -219,9 +224,9 @@ def test_each_run_that_calls_the_judge_is_recorded(env) -> None:
     from elusion.flows.evaluate import judge
 
     path, texts = env
-    judge("c", gold=gold_of(5), provider=Flaky({texts["d002"]}), gold_csv=path)
-    judge("c", gold=gold_of(5), provider=Flaky(set()), gold_csv=path)
-    judge("c", gold=gold_of(5), provider=Flaky(set()), gold_csv=path)  # nothing to do
+    judge("c", years=YEARS, gold=gold_of(5), provider=Flaky({texts["d002"]}), gold_csv=path)
+    judge("c", years=YEARS, gold=gold_of(5), provider=Flaky(set()), gold_csv=path)
+    judge("c", years=YEARS, gold=gold_of(5), provider=Flaky(set()), gold_csv=path)  # nothing to do
     recs = runs(path)
     assert len(recs) == 2  # the third run made no call and spent nothing
     assert [(r["labeled"], r["failed"]) for r in recs] == [(4, 1), (1, 0)]
@@ -242,7 +247,9 @@ def test_run_stopped_by_the_budget_is_still_recorded(env) -> None:
 
     path, _ = env
     with pytest.raises(BudgetExceeded):
-        judge("c", gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=0.05)
+        judge(
+            "c", years=YEARS, gold=gold_of(30), provider=Costly(), gold_csv=path, max_run_usd=0.05
+        )
     (rec,) = runs(path)
     assert rec["labeled"] == 20 and rec["cost_usd"] == pytest.approx(0.20)
 
@@ -257,7 +264,7 @@ def running_review(monkeypatch):
     monkeypatch.setattr(
         mod,
         "jobs_summary",
-        lambda engine, model, version: {
+        lambda engine, model, version, years: {
             "jobs": 2,
             "unfinished": True,
             "unfinished_ids": ["job-abc"],
@@ -271,7 +278,7 @@ def test_refuses_while_a_review_job_is_unfinished(env, running_review) -> None:
     path, _ = env
     j = FakeJudge()
     with pytest.raises(ReviewStillRunning, match=r"job-abc.*--force"):
-        judge("c", provider=j, gold_csv=path)
+        judge("c", years=YEARS, provider=j, gold_csv=path)
     assert j.calls == [] and judge_rows(path) == []
 
 
@@ -279,25 +286,43 @@ def test_force_labels_despite_an_unfinished_review_job(env, running_review) -> N
     from elusion.flows.evaluate import judge
 
     path, _ = env
-    s = judge("c", provider=FakeJudge(), gold_csv=path, force=True)
+    s = judge("c", years=YEARS, provider=FakeJudge(), gold_csv=path, force=True)
     assert s.labeled == 5
 
 
-def test_review_model_option_selects_the_pair(env, monkeypatch) -> None:
+def test_review_model_and_years_select_the_population(env, monkeypatch) -> None:
     import elusion.flows.evaluate as mod
     from elusion.flows.evaluate import judge
 
     seen = {}
     monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
-    monkeypatch.setattr(
-        mod, "select_gold", lambda engine, model, *a: seen.update(select=model) or gold_of(5)
-    )
 
-    def jobs(engine, model, version):
-        seen["jobs"] = model
+    def select(engine, model, version, threshold, discard_n, seed, years):
+        seen["select"] = (model, years)
+        return gold_of(5)
+
+    def jobs(engine, model, version, years):
+        seen["jobs"] = (model, years)
         return {"jobs": 1, "unfinished": False, "unfinished_ids": []}
 
+    monkeypatch.setattr(mod, "select_gold", select)
     monkeypatch.setattr(mod, "jobs_summary", jobs)
     path, _ = env
-    judge("c", provider=FakeJudge(), gold_csv=path, review_model="other-model")
-    assert seen == {"jobs": "other-model", "select": "other-model"}
+    judge("c", years=[2020], provider=FakeJudge(), gold_csv=path, review_model="other-model")
+    assert seen == {"jobs": ("other-model", [2020]), "select": ("other-model", [2020])}
+
+
+def test_years_is_required(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    with pytest.raises(Exception, match="years"):
+        judge("c", gold=gold_of(2), provider=FakeJudge(), gold_csv=path)
+
+
+def test_ledger_records_the_filing_years(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    judge("c", years=[2020, 2019], gold=gold_of(3), provider=FakeJudge(), gold_csv=path)
+    assert runs(path)[-1]["years"] == [2019, 2020]
