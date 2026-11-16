@@ -39,3 +39,9 @@ corpus:
       - -o uid=10001       # the elusion image's user, so flow runs can write
       - -o gid=10001
       - --file-cache-timeout-in-seconds=120
+      # The driver adds --cancel-list-on-mount-seconds=10 unless the option is set here.
+      # For that long after a mount, a directory listing comes back empty. Each flow-run
+      # pod gets a fresh mount, and the first review on AKS (2026-11-16) listed
+      # /data/corpus 7 seconds after it: no Parquet file found, 0 texts loaded, run
+      # failed before any spend. 0 turns the wait off.
+      - --cancel-list-on-mount-seconds=0
