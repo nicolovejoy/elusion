@@ -208,11 +208,18 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   gpt-6-luna v2 goes from 5 rows to 1, haiku v1 from 6 to 4).
   The runbook's step 14 is closed: the cluster's OpenAI key `elusion-aks` shows
   `Revoked` on OpenAI's page (owner's screenshot, 2026-11-16).
-- Next, the owner, one at a time: `judge`, `grade` and `evaluate` with `--year 2020
-  --review-model gpt-6-luna` (task 9). The 2020 population is 66 flagged and 19,934
-  discard, so the judge labels 266 paragraphs (66 flagged, 200 drawn), about $0.64 at
-  the ledger's mean cost per call, and the grader reads 66 rationales. Then runbook
-  step 15 the next day (the bill, by resource group) and the phase note (task 10).
+- Task 9, the owner's `judge` and `grade` for 2020, done 2026-11-16 with `--year 2020
+  --review-model gpt-6-luna`. The 2020 population is 66 flagged and 19,934 discard.
+  `judge`: 266 labeled (66 flagged, 200 drawn), 0 failed, $0.695124, about 2 minutes;
+  the probe projected $1.03, a third above the real cost. `grade`: 66 graded, 0 failed,
+  $0.272924, projected $0.29. Both ledgers recorded `years: [2020]`, and the judge
+  logged `0 already labeled`, so no 2018-2019 label was touched or redrawn.
+- Next, the owner: start OrbStack and `docker compose up -d` (stopped after `grade`;
+  `evaluate` reads Postgres and logs to MLflow), then `uv run elusion evaluate
+  --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2020
+  --review-model gpt-6-luna`. It makes no model call and writes
+  `docs/reports/cloud-concentration-gpt-6-luna-v2-2020.md`, to be committed. Then
+  runbook step 15 (the bill, by resource group) and the phase note (task 10).
 
 Open items, each with the task that must close it:
 
