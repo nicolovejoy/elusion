@@ -223,8 +223,15 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   2018-2019 gave precision 0.511 [0.358, 0.663] (23/45) and elusion 0/200. Recall's
   point value of 1.000 is the zero-hit artefact the README already describes; only its
   interval [0.061, 1.000] carries information. Task 9 is complete.
-- Next, the owner: runbook step 15 the next day (the bill, by resource group), then the
-  phase note, ticks, decisions and docs (task 10).
+- Task 10, the reference docs, done 2026-11-16: the Terraform, Helm and cluster-run boxes
+  of `docs/PHASES.md` are ticked; all fourteen calls were already recorded in
+  `docs/DECISIONS.md`, so no line was added; `docs/ARCHITECTURE.md` has its phase 6
+  section; the `CLAUDE.md` commands block and the `README.md` status are updated. The
+  phase note `docs/notes/phase-6.md` is a draft awaiting the owner's pass.
+  Remaining, the owner: runbook step 15 the next day (the bill, by resource group), then
+  the pass on the phase note, and after it the ticks left in `docs/PHASES.md`: the
+  destroy-and-confirm-the-bill box (the destroy is done; the bill is not read) and the
+  Note box (the optional Pulumi box is its own decision).
 
 Open items, each with the task that must close it:
 

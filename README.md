@@ -55,17 +55,35 @@ reason matched the paragraph it quoted. Finding: all five precision intervals ov
 the winner (gpt-6-luna, 0.51) is a choice, not a proof, and the local model invented quotes
 in four of its 56 flags. Details in `docs/notes/phase-4.md` and `docs/reports/`.
 
+**Phase 6, production.** The same pipeline ran once on a rented Azure Kubernetes cluster,
+`aks-elusion`, and was destroyed the same day (2026-11-16, about 3 hours 50 minutes from
+create to destroy). Terraform declared the Azure resources, a Helm chart put Postgres,
+Redpanda and the Prefect server in the cluster, and each flow run became a Kubernetes Job
+started by a Prefect worker, with the Parquet corpus in a mounted blob container. The
+champion, gpt-6-luna with prompt v2, reviewed the first 20,000 paragraphs filed in 2020, a
+year no model had scored, so nothing was paid for twice; the scores were exported before
+the destroy and loaded into the local Postgres after it. Its report is its own population,
+not merged into the 2018-2019 results: precision 0.485 [0.360, 0.611] (32 of 66 flagged),
+elusion 0.000 [0.000, 0.018] (0 of 200 sampled discards), recall not established
+([0.061, 1.000]), Clopper-Pearson 95%. The review cost $2.19 in API spend. What Azure
+charged for the day is not known yet: the bill is read on 2026-11-17. Details in
+`docs/reports/cloud-concentration-gpt-6-luna-v2-2020.md`, `docs/ARCHITECTURE.md` and
+`infra/README.md`.
+
 **Next.** Phase 5 clusters near-duplicate paragraphs with Spark (MinHash), so one review
 covers a whole cluster; risk-factor boilerplate repeats across companies and years, and
 dedupe before review is what every e-discovery platform does. It runs locally and costs
 nothing but time. In the posting's terms, it is the first Ontology relationship: "this
-paragraph is a near-copy of that one". Phase 6 is one real run on Azure Kubernetes, built
-and torn down the same day, roughly a dollar an hour, under 20 dollars. Both are optional.
+paragraph is a near-copy of that one". It is optional. Phase 7 is a second corpus, recent
+research on AI agents making decisions that must be auditable, screened with the same
+review, judge and evaluate flows.
 
 ## Status
 
-Phases 0 to 3 are done. Phase 4 has its code, its five runs and its reports in; the phase
-note is still to come. See `docs/PHASES.md`.
+Phases 0 to 4 are done, and phase 6 has run: on AKS on 2026-11-16, destroyed the same
+day. Two things on phase 6 are still open: the Azure bill, which is read on 2026-11-17,
+and the owner's pass on the phase note, which is a draft (`docs/notes/phase-6.md`). Phase 5
+(Spark) and phase 7 are ahead. See `docs/PHASES.md`.
 
 ## First result
 
