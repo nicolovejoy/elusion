@@ -193,3 +193,49 @@ def test_malformed_row_raises_naming_the_line(tmp_path, line):
         f.write(line)
     with pytest.raises(ValueError, match=r"c\.csv:3: malformed gold row"):
         read_rows(path)
+
+
+@requires_service("localhost", 5433, "postgres")
+def test_select_gold_draws_only_from_the_given_filing_years():
+    """Scores of another year must not move the seeded discard draw (they would cost a re-judge)."""
+    from elusion.collect import db as collect_db
+    from elusion.config import settings
+    from elusion.review.db import ensure_schema, insert_scores, make_engine, scores
+
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    collect_db.ensure_schema(engine)
+    version = f"test/{uuid.uuid4().hex[:8]}"
+    pre = uuid.uuid4().hex[:8]
+
+    def score(doc_id, s):
+        return {"doc_id": doc_id, "model": "m", "prompt_version": version, "score": s,
+                "rationale": "", "quote": "", "input_tokens": 0, "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                "cost_usd": 0, "provider": "fake"}  # fmt: skip
+
+    def filed(doc_ids, year):
+        return [
+            {"doc_id": d, "cik": "0", "year": year, "paragraph_index": 0, "word_count": 1}
+            for d in doc_ids
+        ]
+
+    old = [f"{pre}a{i:02d}" for i in range(20)]
+    new = [f"{pre}b{i:02d}" for i in range(20)]
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.insert(collect_db.documents), filed(old, 2019) + filed(new, 2020))
+        insert_scores(engine, [score(d, i % 5) for i, d in enumerate(old)])
+        before = select_gold(engine, "m", version, threshold=2, discard_n=3, seed=5, years=[2019])
+        insert_scores(engine, [score(d, i % 5) for i, d in enumerate(new)])
+        after = select_gold(engine, "m", version, threshold=2, discard_n=3, seed=5, years=[2019])
+        assert after == before
+        assert {d for d, _ in after} <= set(old)
+        only_new = select_gold(engine, "m", version, threshold=2, discard_n=3, seed=5, years=[2020])
+        assert {d for d, _ in only_new} <= set(new)
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.prompt_version == version))
+            conn.execute(
+                sa.delete(collect_db.documents).where(collect_db.documents.c.doc_id.in_(old + new))
+            )

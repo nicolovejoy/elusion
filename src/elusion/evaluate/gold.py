@@ -21,7 +21,7 @@ from __future__ import annotations
 import csv
 import json
 import random
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import astuple, dataclass, fields
 from pathlib import Path
 from typing import Literal
@@ -157,6 +157,13 @@ def select_gold(
     threshold: int = 3,
     discard_n: int = 200,
     seed: int = DEFAULT_SEED,
+    years: Sequence[int] | None = None,
 ) -> list[tuple[str, Pile]]:
-    """The gold ids for one review run, i.e. the (review model, prompt version) pair."""
-    return split_piles(scores_for(engine, model, prompt_version), threshold, discard_n, seed)
+    """The gold ids for one review run, i.e. the (review model, prompt version) pair.
+
+    With `years`, the piles hold only paragraphs filed in those years. The discard draw
+    depends on the whole pile it is drawn from, so scores of another filing year would
+    otherwise change the sample and the judge would be paid to label a new one.
+    """
+    scores = scores_for(engine, model, prompt_version, years)
+    return split_piles(scores, threshold, discard_n, seed)

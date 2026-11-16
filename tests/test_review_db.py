@@ -1,7 +1,9 @@
 import uuid
 
+import pytest
 import sqlalchemy as sa
 
+from elusion.collect import db as collect_db
 from elusion.collect.db import make_engine
 from elusion.config import settings
 from elusion.review.db import (
@@ -13,6 +15,8 @@ from elusion.review.db import (
     review_jobs,
     score_row,
     scores,
+    scores_cost_usd,
+    scores_for,
     start_job,
     unscored_ids,
     update_job,
@@ -289,3 +293,82 @@ def test_jobs_summary_counts_jobs_per_run_env_and_reads_null_as_local() -> None:
     finally:
         with engine.begin() as conn:
             conn.execute(sa.delete(review_jobs).where(review_jobs.c.model == model))
+
+
+def _file_documents(engine, year_of: dict[str, int]) -> None:
+    """Give each doc id a `documents` row with that filing year (the year lives there only)."""
+    collect_db.ensure_schema(engine)
+    rows = [
+        {"doc_id": d, "cik": "0", "year": y, "paragraph_index": 0, "word_count": 1}
+        for d, y in year_of.items()
+    ]
+    with engine.begin() as conn:
+        conn.execute(sa.insert(collect_db.documents), rows)
+
+
+def _unfile_documents(engine, doc_ids) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            sa.delete(collect_db.documents).where(collect_db.documents.c.doc_id.in_(list(doc_ids)))
+        )
+
+
+def _scored_in_three_years(engine, model: str) -> dict[int, str]:
+    """One document per filing year 2018, 2019, 2020, each scored under (model, 'v1')."""
+    ids = {y: "y" + uuid.uuid4().hex[:15] for y in (2018, 2019, 2020)}
+    _file_documents(engine, {i: y for y, i in ids.items()})
+    rows = []
+    for y, i in ids.items():
+        r = score_row(i, "v1", "anthropic", _review())
+        rows.append({**r, "model": model, "score": y - 2016, "cost_usd": (y - 2017) / 100})
+    insert_scores(engine, rows)
+    return ids
+
+
+def test_scores_for_keeps_only_paragraphs_filed_in_the_given_years() -> None:
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    ids = _scored_in_three_years(engine, model)
+    try:
+        assert scores_for(engine, model, "v1", years=[2020]) == {ids[2020]: 4}
+        assert scores_for(engine, model, "v1", years=[2019, 2018]) == {ids[2018]: 2, ids[2019]: 3}
+        assert scores_for(engine, model, "v1", years=[2017]) == {}
+        assert len(scores_for(engine, model, "v1")) == 3  # no years: the whole pair
+    finally:
+        _unfile_documents(engine, ids.values())
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.model == model))
+
+
+def test_verdicts_for_keeps_only_paragraphs_filed_in_the_given_years() -> None:
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    ids = _scored_in_three_years(engine, model)
+    try:
+        got = verdicts_for(engine, model, "v1", min_score=0, years=[2020])
+        assert got == {ids[2020]: Verdict(score=4, rationale="r", quote="q")}
+        assert set(verdicts_for(engine, model, "v1", min_score=3, years=[2018, 2019])) == {
+            ids[2019]
+        }
+    finally:
+        _unfile_documents(engine, ids.values())
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.model == model))
+
+
+def test_scores_cost_usd_sums_the_cost_of_the_given_years_scores() -> None:
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    model = "m-" + uuid.uuid4().hex[:8]
+    assert scores_cost_usd(engine, model, "v1", years=[2018]) == 0.0
+    ids = _scored_in_three_years(engine, model)  # costs 0.01, 0.02, 0.03
+    try:
+        assert scores_cost_usd(engine, model, "v1", years=[2018, 2019]) == pytest.approx(0.03)
+        assert scores_cost_usd(engine, model, "v1", years=[2020]) == pytest.approx(0.03)
+        assert scores_cost_usd(engine, model, "v2", years=[2020]) == 0.0
+    finally:
+        _unfile_documents(engine, ids.values())
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.model == model))

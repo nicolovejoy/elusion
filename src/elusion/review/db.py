@@ -17,8 +17,11 @@ run can be inspected and re-started. `run_env` was added after the first databas
 existed; `create_all` never alters a table, so `ensure_schema` adds the column itself,
 and rows older than the column hold NULL, which is read as `local`.
 
-There is deliberately no foreign key from `scores.doc_id` to `documents.doc_id`: it keeps
-this module independent of the collect module (own MetaData, own `ensure_schema`).
+There is deliberately no foreign key from `scores.doc_id` to `documents.doc_id`: this
+module keeps its own MetaData and `ensure_schema`. It does read `documents` in one place:
+a score has no filing year of its own, so the readers that take `years` join `documents`
+on `doc_id` and keep the paragraphs filed in those years. That is how one (model, prompt
+version) pair can be evaluated as separate populations, one per set of filing years.
 `job_id` is generated client-side with uuid4, so the id is known without a round trip.
 """
 
@@ -32,7 +35,10 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import ARRAY, UUID, insert
 from sqlalchemy.engine import Engine
 
-from elusion.collect.db import make_engine  # noqa: F401  (re-exported for callers)
+from elusion.collect.db import (
+    documents,
+    make_engine,  # noqa: F401  (re-exported for callers)
+)
 from elusion.review.providers import Review, Verdict
 
 metadata = sa.MetaData()
@@ -139,21 +145,60 @@ def unscored_ids(engine: Engine, ids: Sequence[str], model: str, prompt_version:
         return [r[0] for r in conn.execute(stmt)]
 
 
-def scores_for(engine: Engine, model: str, prompt_version: str) -> dict[str, int]:
-    """Every doc_id scored under (model, prompt_version), mapped to its 0-4 score."""
+def _filed_in(stmt: sa.Select, years: Sequence[int] | None) -> sa.Select:
+    """Narrow a query over `scores` to paragraphs filed in `years`; None leaves it alone.
+
+    The year is a column of `documents`, so this is a join on `doc_id`. A score whose
+    document has no `documents` row has no year and drops out whenever years are given.
+    """
+    if years is None:
+        return stmt
+    return stmt.join(documents, documents.c.doc_id == scores.c.doc_id).where(
+        documents.c.year.in_(list(years))
+    )
+
+
+def scores_for(
+    engine: Engine, model: str, prompt_version: str, years: Sequence[int] | None = None
+) -> dict[str, int]:
+    """Every doc_id scored under (model, prompt_version), mapped to its 0-4 score.
+
+    With `years`, only paragraphs filed in those years (see `_filed_in`).
+    """
     stmt = sa.select(scores.c.doc_id, scores.c.score).where(
         scores.c.model == model, scores.c.prompt_version == prompt_version
     )
     with engine.connect() as conn:
-        return {doc_id: score for doc_id, score in conn.execute(stmt)}
+        return {doc_id: score for doc_id, score in conn.execute(_filed_in(stmt, years))}
+
+
+def scores_cost_usd(
+    engine: Engine, model: str, prompt_version: str, years: Sequence[int] | None = None
+) -> float:
+    """What the pair's scores cost, summed from each score's own `cost_usd`; 0.0 if none.
+
+    With `years`, only paragraphs filed in those years. This is the review cost of one
+    population. A billed call that left no score (a refusal, a truncation) has no row
+    here; it is in its job's `review_jobs.cost_usd` only.
+    """
+    stmt = sa.select(sa.func.coalesce(sa.func.sum(scores.c.cost_usd), 0)).where(
+        scores.c.model == model, scores.c.prompt_version == prompt_version
+    )
+    with engine.connect() as conn:
+        return float(conn.execute(_filed_in(stmt, years)).scalar_one())
 
 
 def verdicts_for(
-    engine: Engine, model: str, prompt_version: str, min_score: int
+    engine: Engine,
+    model: str,
+    prompt_version: str,
+    min_score: int,
+    years: Sequence[int] | None = None,
 ) -> dict[str, Verdict]:
     """Every doc under (model, prompt_version) scored >= min_score, as its full Verdict.
 
     Rows whose rationale is NULL or empty are left out: there is no reason to grade.
+    With `years`, only paragraphs filed in those years.
     """
     stmt = sa.select(scores.c.doc_id, scores.c.score, scores.c.rationale, scores.c.quote).where(
         scores.c.model == model,
@@ -162,6 +207,7 @@ def verdicts_for(
         scores.c.rationale.is_not(None),
         scores.c.rationale != "",
     )
+    stmt = _filed_in(stmt, years)
     with engine.connect() as conn:
         return {
             doc_id: Verdict(score=score, rationale=rationale, quote=quote)
