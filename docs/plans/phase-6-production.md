@@ -140,8 +140,18 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   steps 1 to 3 done: `terraform apply` confirmed at about 07:50 Pacific, `10 added`;
   two nodes `Ready`, v1.36.5, Ubuntu 24.04.5 LTS, amd64. `kubectl` in the owner's tab 1
   points at `aks-elusion`. The cluster is up and billing.
-- Next: runbook step 4 (namespace and the two Secrets), then on through step 14 the
-  same day (task 8), from `infra/README.md`.
+  Steps 4 to 6 done by about 08:20 Pacific: namespace and both Secrets created; the
+  image pushed, its registry digest equal to the local image's
+  (`sha256:9dd94ddf…f7ea36`); `helm install` reached `deployed` 79 seconds after it
+  started, with all four pods `Running`, four claims `Bound` (`corpus` on the blob
+  container) and the work pool and both deployments registered. The worker started
+  before the Prefect server was listening, so the pool read `NOT_READY` for about a
+  minute until the worker's start-up retry; a run started in that minute would have
+  waited, not failed. Runbook step 4 now strips the password's newline with
+  `tr -d '[:space:]'`, so the pasted command holds no backslash.
+- Next: runbook step 7 (port-forward) and step 8 (the 5-filing smoke test, the blob
+  mount's first use), then on through step 14 the same day (task 8), from
+  `infra/README.md`.
 - Then the owner: `judge`,
   `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
 

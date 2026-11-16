@@ -130,7 +130,7 @@ is generated here and never shown. The OpenAI key goes from 1Password straight i
 
 ```
 kubectl create namespace elusion
-openssl rand -hex 24 | tr -d '\n' | kubectl -n elusion create secret generic elusion-postgres --from-file=POSTGRES_PASSWORD=/dev/stdin
+openssl rand -hex 24 | tr -d '[:space:]' | kubectl -n elusion create secret generic elusion-postgres --from-file=POSTGRES_PASSWORD=/dev/stdin
 op run --env-file=infra/cluster.env.tpl -- sh -c 'printf %s "$OPENAI_API_KEY" | kubectl -n elusion create secret generic elusion-openai --from-file=OPENAI_API_KEY=/dev/stdin'
 kubectl -n elusion get secret elusion-openai -o jsonpath='{.data.OPENAI_API_KEY}' | wc -c
 ```
