@@ -149,9 +149,22 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   minute until the worker's start-up retry; a run started in that minute would have
   waited, not failed. Runbook step 4 now strips the password's newline with
   `tr -d '[:space:]'`, so the pasted command holds no backslash.
-- Next: runbook step 7 (port-forward) and step 8 (the 5-filing smoke test, the blob
-  mount's first use), then on through step 14 the same day (task 8), from
-  `infra/README.md`.
+  Steps 7 and 8 done by 08:39 Pacific. The 5-filing smoke test passed at once (blob
+  written, 264 documents, watermark 264): the blob mount works and the fallback is not
+  needed. The whole-year collect ran 5 minutes 28 seconds: 599,703 documents, watermark
+  599,703, a 135,306,583-byte Parquet file in the container; highest memory sample
+  2,294 Mi (30-second samples, so not the true peak).
+  Step 9, first try, 08:41: the review failed on batch 1 with
+  `50 ids not in the Parquet corpus`, having loaded 0 texts. Cause: the blob driver's
+  default `--cancel-list-on-mount-seconds=10` (see `docs/DECISIONS.md`, 2026-11-16).
+  No model call, 0 scores, $0.00, no offset committed. Fixed in `values-aks.yaml` and
+  applied by the owner's `helm upgrade` (revision 2) at 08:47; a `sample=0` review then
+  logged `loaded 599703 paragraph texts`. The cluster's `review_jobs` therefore holds
+  two rows that are not the real run: one `failed` (sample 20000, 0 scored) and one
+  `finished` (sample 0). Both will be in the export.
+- Next: runbook step 9, the 20,000 review (no rewind needed: the consumer group holds
+  no committed offset), then steps 11 to 14 the same day (task 8), from
+  `infra/README.md`. The cluster is up and billing until step 13.
 - Then the owner: `judge`,
   `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
 
