@@ -2,7 +2,7 @@
 
 Status: designed 2026-11-15 and checked once by a fresh reader; the owner confirmed the
 controller's calls the same day, with the amendments marked below. Build in progress:
-tasks 0 to 6 are done and task 7 is built up to `terraform validate`; the owner's `terraform plan` is next. See "Progress and open
+tasks 0 to 7 are done; `infra/README.md`, the runbook for the Azure day, is next. See "Progress and open
 items" directly below. Read
 `docs/ARCHITECTURE.md`, the Phase 6 checklist in `docs/PHASES.md` and `compose.yaml` first.
 Hard rules in `CLAUDE.md` apply to every line below, in particular: no Azure resource is
@@ -93,11 +93,16 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
     registration happens when the provider starts, so `terraform plan` performs it.
   - The budget email is `TF_VAR_budget_email`, marked sensitive, in no file. Budget start
     is the first of the current month, ignored after creation.
-  - Expected plan: 10 to add (resource group, cluster, registry, storage account,
-    container, three role assignments, two budgets).
-- Next: the owner's `terraform plan` (end of task 7); then `infra/README.md`, the runbook
-  for the Azure day.
-- Then the owner: `terraform plan` (end of task 7), the Azure day (task 8), `judge`,
+  - The owner's `terraform plan`, 2026-11-15: `Plan: 10 to add, 0 to change, 0 to
+    destroy`, the ten above, read through with the controller. Every stated choice shows
+    as written (Kubernetes 1.36, Free tier, two `Standard_D2as_v7` on Ubuntu 24.04, Azure
+    CNI overlay, blob driver on, registry admin off, storage private and TLS 1.2). Defaults
+    worth knowing: a Standard load balancer with an outbound public IP (in the cost
+    estimate), the disk, file and snapshot drivers on, registry role mode
+    `LegacyRegistryPermissions` (the mode `AcrPull` works in). The plan output is in
+    `data/` (gitignored); it carries the owner's ids.
+- Next: `infra/README.md`, the runbook for the Azure day.
+- Then the owner: the Azure day (task 8), `judge`,
   `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
 
 Open items, each with the task that must close it:
