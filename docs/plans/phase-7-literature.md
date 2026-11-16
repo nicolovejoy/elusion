@@ -1,7 +1,9 @@
 # Phase 7 spec: the literature matter
 
 Status: drafted 2026-11-16; the owner confirmed all fifteen calls as recommended the same
-day (`docs/DECISIONS.md`). Nothing is built. Next is task 0. Read `docs/ARCHITECTURE.md`,
+day (`docs/DECISIONS.md`). Task 0 is done (its results are under the task); no code is
+written. Next is task 1. One point is open for the owner: the first anchor has 44 citing
+works, not 75 (task 0 results, "The anchors"). Read `docs/ARCHITECTURE.md`,
 the Phase 7 checklist in `docs/PHASES.md`, `docs/FIELD-NOTES.md` (sections 2, 4 and 5)
 and the 2026-11-15 phase 7 line in `docs/DECISIONS.md` first. Hard rules in `CLAUDE.md`
 apply to every line below. The phase 6 spec (`docs/plans/phase-6-production.md`) is the
@@ -244,6 +246,108 @@ Part A.
    counts, and records all of it in this spec. If OpenAlex needs a key or asks for a
    contact address, it is an environment variable with a line in `.env.example` and an
    `op://` reference in `.env.tpl`, unset by default, never committed.
+
+   **Results (2026-11-16).** Read from the OpenAlex documentation, which now lives at
+   https://help.openalex.org (the old `docs.openalex.org` addresses redirect there), and
+   checked against the live API the same day, without a key. Each line says which.
+
+   *Access.*
+
+   - A key is needed. Without one the first page of a query works, and the request for
+     the second page of a cursor-paged query returns `401 API key required for cursor
+     paging` (checked). Every search term but two returns more than one page.
+   - The key is free: an account at https://openalex.org/settings/api. It is passed as
+     the query parameter `api_key` or as an `Authorization: Bearer` header (docs). The
+     harvest uses the header, so the key is never part of a URL that could be logged.
+   - The variable is `OPENALEX_API_KEY`, in `.env.example` (empty) and `.env.tpl`
+     (`op://dev-secrets/OpenAlex elusion/credential`). `harvest` refuses to start
+     without it. The owner creates the account; the builder never sends an address.
+   - The "polite pool", where a request carried a contact address in `mailto`, is gone:
+     `mailto` is ignored (docs, deprecations page). No address is asked for anywhere.
+
+   *Cost and limits.* OpenAlex is no longer simply free. It is metered, with a free
+   daily allowance.
+
+   - A key has $1 of usage a day; no key has $0.10 a day, shared by everyone on the same
+     IP address (docs, and the notice in every keyless response).
+   - A search call costs $0.001, a filter-only call $0.0001, a single work by id nothing
+     (docs; the `cost_usd` in each response agreed). A "call" is one page.
+   - The harvest is about 165 search pages of 100 works, about $0.17, and four citation
+     calls at $0.0001. It fits in one day's allowance with room to run it five times.
+   - A new account spends its first dollar at no more than $0.10 every five minutes
+     (docs), so the first harvest takes about ten minutes however fast the code is.
+   - Over any limit the API returns `429` with a `Retry-After` header (docs). The
+     harvest waits that long and retries. The limit is 30 requests a second with a key.
+   - Every response carries `x-ratelimit-remaining-usd` and `x-ratelimit-reset`, the
+     seconds until midnight UTC (checked).
+   - Task 0 itself spent about $0.03 of the keyless allowance.
+
+   *Paging.*
+
+   - `per_page` is at most 100; 200 is deprecated (docs).
+   - Cursor paging: the first request carries `cursor=*`, each response carries
+     `meta.next_cursor`, and the end is a null `next_cursor` with empty `results` (docs;
+     the first page checked).
+   - Page-number paging stops at 10,000 results (docs), which "audit trail" (6,749)
+     does not reach but a broader term would. The harvest uses the cursor throughout.
+
+   *The search.*
+
+   - The query is the parameter `search.title_and_abstract`. The filter form used for
+     the counts in call 3, `title_and_abstract.search:`, still works but is deprecated
+     (docs). The two return the same counts: 54, 144, 1,487 and 6,749 for the four terms
+     checked.
+   - Quoted phrases and upper-case `AND`, `OR`, `NOT` are supported (docs; both boolean
+     terms checked).
+   - The search is *stemmed* by default: words are reduced to their root, so "reviews"
+     matches "review". The `.exact` form turns that off and returns 50 for
+     "technology-assisted review" against 54. The harvest keeps the stemmed default,
+     which is what the counts in call 3 were taken with.
+   - Since August 2026 a query reads the *core* corpus unless told otherwise.
+     `corpus=all` adds an "expansion" set of records from repositories and returns 64
+     for the same term (checked). The harvest sends `corpus=core` explicitly, so a
+     change of default cannot change the population, and the custody row records it.
+   - The filters are `from_publication_date:2023-01-01` and `has_abstract:true`, joined
+     by a comma, which means AND (docs; checked).
+
+   *The fields.* Requested with `select`, all at the root of a work (checked on one):
+   `id`, `doi`, `title`, `publication_year`, `publication_date`, `language`, `type`,
+   `updated_date`, `abstract_inverted_index`.
+
+   - `title` can be null (docs). A work with no title is stored with an empty one.
+   - `language` is detected by OpenAlex, not declared by the publisher (docs).
+   - `updated_date` moves when the citation count moves (docs), so it says nothing
+     about whether the abstract changed. The content hash is what detects that.
+   - Filtering by `updated_date` needs a paid plan (docs). The harvest does not need it.
+   - One abstract was rebuilt from its inverted index with no gaps.
+   - The data is CC0 (docs, pricing page). OpenAlex serves the inverted index and not
+     the plain text "for legal reasons" (docs). The rebuilt text stays in `data/`, which
+     is gitignored, as the anti-goals already require.
+
+   *The anchors.* Resolved by title search; each title matched one work of the right
+   year and venue. "Citing, in window" is the count of works that cite the anchor, were
+   published since 2023-01-01 and have an abstract: the pool that call 6 samples from.
+
+   | Anchor | OpenAlex id | Cited by | Citing, in window |
+   |---|---|---|---|
+   | Cormack and Grossman 2014 | `W2029075138` | 194 | 44 |
+   | O'Mara-Eves and others 2015 | `W4313371821` | 883 | 354 |
+   | Raji and others 2020 | `W3001807593` | 3,047 | 2,218 |
+   | Zheng and others 2023 | `W7133239970` | 14,375 | 12,735 |
+
+   - The citing works are found with the filter `cites:` and the anchor's id (checked;
+     it is not on the documentation pages read).
+   - The sample is `sample=75` with `seed`, in one page. The same seed returned the
+     same 75 ids in the same order twice running; a different seed shared 3 of 75
+     (checked on Raji). The documentation does not promise the same sample after the
+     catalogue changes, so the custody rows are the record of what was drawn, and a
+     re-run does not draw again for an anchor that already has its seeds.
+   - **Open for the owner.** Cormack and Grossman has 44 citing works in the window,
+     fewer than the 75 of call 6. Proposed: take all 44, which is a census of that pool
+     and not a sample, and 75 from each of the others, 269 seeds in place of 300. The
+     alternative is a different anchor for the review strand.
+   - The O'Mara-Eves paper has an erratum (`W2147469877`) that is itself cited 354
+     times. Works that cite only the erratum are outside the pool. Left as it is.
 1. **Two corpora.** Call 7. Tests first: an `edgar` review never reads an `openalex` id
    and the reverse; the 2018-2019 report regenerates byte for byte.
 2. **Harvest.** A Prefect flow: for each term, page through OpenAlex, rebuild each
@@ -330,7 +434,8 @@ $0.00011 each. An abstract with its title is about twice a risk-factor paragraph
 - grade: about $0.50
 - embeddings: cents
 - question drafting, 30 questions across three arms, groundedness judging: about $1
-- OpenAlex: free
+- OpenAlex: about $0.17 of metered usage a harvest, inside the free $1 a day that a key
+  carries, so nothing is paid (task 0 results)
 
 About $8, each run guarded at `ELUSION_MAX_RUN_USD`. The judge figure is the soft one: it
 grows with the flagged pile, and the 200-abstract probe in task 5 is where a prompt that
