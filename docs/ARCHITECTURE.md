@@ -204,9 +204,10 @@ score, the `scores` key, or the model behind a provider's id.
 
 ## Phase 6: the same flows on AKS (built)
 
-Phase 6 runs the phase 1 and 2 flows unchanged on a rented Kubernetes cluster, once, and
-removes the cluster the same day. Nothing in the data model changes. What is new is where
-the pieces run and how a run is started. A few terms first. AKS (Azure Kubernetes
+Phase 6 runs the phase 1 and 2 flows, the same code, on a rented Kubernetes cluster, once,
+and removes the cluster the same day. The data model gains one nullable column,
+`review_jobs.run_env`, which records where a review ran (`local` by default, the cluster's
+name on AKS). Otherwise what is new is where the pieces run and how a run is started. A few terms first. AKS (Azure Kubernetes
 Service) is Azure's managed Kubernetes, the counterpart of AWS EKS; Azure runs the control
 plane and we rent the worker machines (nodes). Terraform declares Azure resources in files
 and creates or destroys them from those files. A Helm chart is a template of Kubernetes
