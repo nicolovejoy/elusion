@@ -1,6 +1,6 @@
 # Phase 6: Production in Azure
 
-<!-- Nico's draft. Brackets are mine to overwrite. -->
+<!-- Nico's draft. One figure is still to fill in: the Azure bill, under "What we learned". -->
 
 ## What we built
 
@@ -9,73 +9,90 @@ Service): two `Standard_D2as_v7` nodes in West US 2, created by my `terraform ap
 about 07:50 Pacific on 2026-11-16 and destroyed at 11:41, about 3 hours 50 minutes of
 billing. It collected the 599,703 paragraphs filed in 2020 and reviewed the first 20,000.
 
-- [Terraform: files that declare the Azure resources; `apply` makes Azure match them,
-  `destroy` removes what they made.]
-- [Helm: a package of Kubernetes manifests with values filled in per cluster. One chart
-  ran Postgres, Redpanda and the Prefect server as pods, mirroring `compose.yaml`.]
-- [Work pool: a queue on the Prefect server holding the job template, the recipe that
-  turns a flow run into a Kubernetes Job (a pod that runs once to completion), retries
-  off.]
-- [Worker: a long-running pod that polls the work pool and creates a Job for each flow
-  run it picks up.]
+Four tools did the work:
 
-Azure to AWS, for each resource the module created or used:
+- **Terraform** declared the Azure resources in files. `apply` made Azure match the
+  files; `destroy` removed everything they had made.
+- **Helm** installed the software into the cluster. A chart is a package of Kubernetes
+  manifests with values filled in per cluster; ours ran Postgres, Redpanda and the
+  Prefect server as pods, mirroring `compose.yaml`.
+- **The work pool** is a queue on the Prefect server. It holds the job template: the
+  recipe that turns one flow run into one Kubernetes Job (a pod that runs once, to
+  completion), with retries off.
+- **The worker** is a long-running pod that polls the work pool and creates a Job for
+  each flow run it picks up.
 
-- resource group `rg-elusion`: [no direct equivalent? a CloudFormation stack?]
-- AKS, free control-plane tier: EKS
-- node resource group `MC_rg-elusion_aks-elusion_westus2`, made by AKS for the nodes,
-  disks and networking: [no equivalent? EKS nodes sit in the account itself]
-- the two node VMs: EC2 instances in a managed node group [m7a.large?]
-- OS disks, and the Postgres, Redpanda and Prefect volumes on the default storage class:
-  EBS [is that class a managed disk?]
-- outbound load balancer and public IP: [NAT gateway and Elastic IP?]
-- [the overlay network's virtual network: a VPC?]
-- container registry, Basic: ECR
-- storage account and its private `corpus` container: S3 [container = bucket?]
-- Blob CSI driver (blobfuse2), mounting the container in pods: [Mountpoint for S3?]
-- the cluster's control-plane identity: the EKS cluster IAM role
-- the kubelet's (node agent's) managed identity: the node IAM role
-- three role assignments (AcrPull, and Storage Blob Data Contributor for the kubelet and
-  for me): IAM policies on roles
-- two $10 budgets, one per resource group: AWS Budgets
+What Terraform made or used in Azure, and the AWS counterpart of each:
+
+| Azure | AWS | Note |
+|---|---|---|
+| Resource group `rg-elusion` | none; nearest is a CloudFormation stack | Every Azure resource lives in exactly one group, and deleting the group deletes them all |
+| AKS, free control-plane tier | EKS | EKS has no free tier for the control plane |
+| Node resource group `MC_rg-elusion_aks-elusion_westus2` | none | AKS makes this second group itself for the nodes, disks and networking; EKS puts those straight into the account |
+| Two node VMs, `Standard_D2as_v7` | EC2 instances in a managed node group | 2 vCPU, 8 GB, AMD: the `m7a.large` class |
+| OS disks and the Postgres, Redpanda and Prefect volumes (managed disks) | EBS volumes | The cluster's default storage class |
+| Virtual network | VPC | Pods get addresses from an overlay range, not from the network itself |
+| Outbound load balancer and public IP | NAT gateway and Elastic IP | Used only for traffic leaving the cluster; nothing is exposed |
+| Container registry, Basic | ECR | |
+| Storage account | none | The account-level wrapper around containers |
+| Its private `corpus` container | S3 bucket | Holds the Parquet file |
+| Blob CSI driver (blobfuse2) | Mountpoint for Amazon S3 CSI driver | Mounts the container in a pod as a directory |
+| Cluster's control-plane identity | EKS cluster IAM role | |
+| Kubelet's (node agent's) managed identity | Node IAM role | Pulls images and reads the corpus, with no key |
+| Three role assignments | IAM policies attached to roles | AcrPull, and Storage Blob Data Contributor for the kubelet and for me |
+| Two $10 budgets, one per resource group | AWS Budgets | |
 
 ## Why we built it
 
 Everything until now ran from `compose.yaml` on one laptop. We wanted to see what changes
 on machines rented by the hour, declared in files and removed the same day, with the
-hard rules (no paying twice, the spend guard, no secrets in git) still
-holding. [My reason, in my words.]
+hard rules (no paying twice, the spend guard, no secrets in git) still holding. IaC with
+Terraform is familiar to me, but Azure's all new, and this was a quick way to dip my toe
+in and kill two birds, in a way.
 
 ## What we learned
 
-Two rehearsals on OrbStack's local Kubernetes caught one fault before paid time. Prefect's Kubernetes integration reschedules a killed run, so
-the worker would have started a second Job and scored further documents; the work pool now defaults to `crash`. The whole-year `collect` peaked at 3.49 GiB
-under its 4Gi limit, raised to 5Gi for margin.
+Rehearsing on OrbStack's local Kubernetes was a good way to learn. It changed the chart
+and the runbook, not the Azure resources. It showed that Prefect restarts a killed run by
+itself, which would have scored and paid for documents nobody asked for; the work pool
+now marks such a run crashed instead. It also showed the whole-year `collect` peaking at
+3.49 GiB under a 4Gi limit, which we raised to 5Gi for margin. The one Azure choice that
+changed, the node size, changed for another reason: the subscription had a quota of 0 for
+the size we first planned.
 
-What broke was the one thing OrbStack could not rehearse: the blob mount. The first
-review failed on batch 1 with `50 ids not in the Parquet corpus`. The driver adds
-`--cancel-list-on-mount-seconds=10`, and for that long after a mount a directory listing
-comes back empty; the review listed `/data/corpus` 7.2 seconds after mounting. No model
-call, $0.00. Setting it to `0` in `values-aks.yaml` and a `helm upgrade` fixed it. [What
-this says about rehearsals.]
+What broke on Azure was the one thing OrbStack could not rehearse, the blob mount. For 10
+seconds after a mount the driver returns an empty directory listing (its default
+`--cancel-list-on-mount-seconds=10`). The review listed the corpus 7.2 seconds in, found
+no text and failed on its first batch, before any model call, at $0.00. One line in
+`values-aks.yaml` and a `helm upgrade` fixed it. A rehearsal proves only what its
+environment shares with the real one.
 
-Expected cost: Azure about $2 for an 8-hour day, review about
-$2.20, judge about $1, grade about $0.20, about $5.50. Model spend: review $2.1941, judge
-$0.695124, grade $0.272924, $3.16 in all against about $3.40.
+Model spend was $3.16 against a projection of about $3.40: review $2.19 (projected
+$2.20), judge $0.70 (about $1), grade $0.27 (about $0.20). Azure was projected at about
+$2 for an 8-hour day, and the cluster ran for under four.
 
-[Azure bill for rg-elusion, read 2026-11-17: $__]
-[Azure bill for MC_rg-elusion_aks-elusion_westus2, read 2026-11-17: $__]
+**To fill in, 2026-11-17.** Azure bill: $__ for `rg-elusion`, $__ for
+`MC_rg-elusion_aks-elusion_westus2`.
 
 ## Results
 
 The population is the first 20,000 of the 599,703 paragraphs filed in 2020, in ingestion
 order, not a random draw; the figures describe those 20,000 only. The truth is the Opus
-judge, which matched my 2018-2019 labels on 16 of 20. Precision is the fraction of flagged
-paragraphs that are truly relevant; elusion is the relevant rate inside the discard pile.
+judge, which matched my 2018-2019 labels on 16 of 20.
 
-- precision: 0.485 [0.360, 0.611] (32/66) for 2020; 0.511 [0.358, 0.663] (23/45) for
-  2018-2019
-- elusion: 0.000 [0.000, 0.018] (0/200) for both
+In plain terms: the reviewer flagged 66 of the 20,000 paragraphs, and the judge agreed on
+32 of them. About half of what it flags is worth a reader's time, and that held on a new
+filing year (23 of 45 on 2018-2019). To see what it missed, the judge read 200 paragraphs
+drawn at random from the 19,934 it discarded and found none relevant. That is what
+missing nothing would look like, but 200 is too few to prove it: the same result is
+expected when as much as 1.8% of the discard pile is relevant, about 360 paragraphs,
+eleven times the 32 we found. So we cannot say we surfaced every relevant paragraph. We
+can say we looked for a miss and found no sign of one.
+
+- precision (the fraction of flagged paragraphs that are truly relevant): 0.485
+  [0.360, 0.611] (32/66) for 2020; 0.511 [0.358, 0.663] (23/45) for 2018-2019
+- elusion (the relevant rate inside the discard pile, measured by sampling it): 0.000
+  [0.000, 0.018] (0/200) for both
 - review: one Job, wall-clock 1:46:44, 187 documents a minute, $2.1941
 - export: 20,000 `scores` rows and 3 `review_jobs` rows, each equal to the cluster's
   count (the 3 include the failed start and a `sample=0` run)
@@ -84,6 +101,6 @@ The two precision intervals overlap almost entirely. Recall (the fraction of tru
 relevant paragraphs the system flagged) reads 1.000 [0.061, 1.000]. The point value is
 an artefact: the discard sample held no relevant paragraph, so the estimate assumes none
 were missed. Only the interval informs, and 0.061 rules out little. Richness (the
-fraction of the whole corpus that is relevant), here of the 20,000, is 0.002 [0.001, 0.020]. Both are derived
-from the two pile intervals, so each covers the true value with probability at least
-about 90%.
+fraction of the whole corpus that is relevant), here of the 20,000, is 0.002
+[0.001, 0.020]. Both are derived from the two pile intervals, so each covers the true
+value with probability at least about 90%.
