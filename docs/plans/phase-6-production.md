@@ -2,7 +2,7 @@
 
 Status: designed 2026-11-15 and checked once by a fresh reader; the owner confirmed the
 controller's calls the same day, with the amendments marked below. Build in progress:
-tasks 0 to 7 are done and `infra/README.md`, the runbook, is written; the owner's Azure day (task 8) is next. See "Progress and open
+tasks 0 to 7 are done and `infra/README.md`, the runbook, is written; the owner's Azure day (task 8) ran on 2026-11-16 and the resources are destroyed. See "Progress and open
 items" directly below. Read
 `docs/ARCHITECTURE.md`, the Phase 6 checklist in `docs/PHASES.md` and `compose.yaml` first.
 Hard rules in `CLAUDE.md` apply to every line below, in particular: no Azure resource is
@@ -133,7 +133,8 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
     the session's attention needs `caffeinate -ims -w PID -t SECONDS` on its watcher. The
     interrupted `collect` resumed its download after the wake and still finished with the
     right count. On AKS a sleeping Mac only drops the port-forward and `--watch`.
-- The Azure day, 2026-11-16, in progress. Before paid time: the three checks pass, the
+- The Azure day, 2026-11-16: run, exported and destroyed; steps 14 and 15 remain.
+  Before paid time: the three checks pass, the
   runbook was read against the module, the chart, the flow code and Azure (Kubernetes
   1.36 offered in West US 2, `Standard_D2as_v7` unrestricted, 0 of 10 vCPUs used,
   providers registered, no resource group), and nothing in it needed changing. Runbook
@@ -162,11 +163,26 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   logged `loaded 599703 paragraph texts`. The cluster's `review_jobs` therefore holds
   two rows that are not the real run: one `failed` (sample 20000, 0 scored) and one
   `finished` (sample 0). Both will be in the export.
-- Next: runbook step 9, the 20,000 review (no rewind needed: the consumer group holds
-  no committed offset), then steps 11 to 14 the same day (task 8), from
-  `infra/README.md`. The cluster is up and billing until step 13.
-- Then the owner: `judge`,
-  `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
+  Step 9 done: the 20,000 review ran from 08:54 to 10:41 Pacific, a 106-minute Job:
+  20,000 scored, 0 failed, $2.193085, 187 documents a minute, `run_env` `aks-elusion`.
+  Step 10 was not needed.
+  Steps 11 and 12 done at 11:16 Pacific. `data/azure-day.txt` holds the nodes, the five
+  Jobs and their durations, the three `review_jobs` rows, the image digest and the
+  cluster name. `infra/export.sh` passed into `data/exports/20261116T191631Z`: 20,000
+  `scores` rows and 3 `review_jobs` rows, each equal to the cluster's count. SHA-256:
+  `scores.csv` `dad94f8035494a0b15709b0a9c4d5d2ecc3a6374880743f7c0996ffd53948c2d`,
+  `review_jobs.csv` `49ddee4fe34f4148d51388c6efd4d8789aab505ef5122e6d0c07fdf10ca37bb3`.
+  Step 13 done: `Destroy complete! Resources: 10 destroyed.` at 11:41 Pacific, on the
+  first try (the cluster took 5 minutes 50 seconds, the resource group 27 seconds).
+  Billing stopped there, about 3 hours 50 minutes after the apply. The four checks ran
+  at 11:54 Pacific: `rg-elusion` and `MC_rg-elusion_aks-elusion_westus2` both `false`,
+  no resource tagged `project=elusion`, and `NetworkWatcherRG` the only group in the
+  subscription (Azure's own, free; see runbook step 13).
+- Next, the owner: runbook step 14 the same day (kubectl back to OrbStack, `docker
+  logout`, local Prefect started, the cluster's OpenAI key revoked and its 1Password
+  item archived), and step 15 the next day (the bill, by resource group).
+- Then: load the export into the local Postgres, then `judge`, `grade` and `evaluate`
+  for 2020 (task 9), the phase note (task 10).
 
 Open items, each with the task that must close it:
 
