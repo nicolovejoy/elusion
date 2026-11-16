@@ -1,7 +1,7 @@
 # Phase 7 spec: the literature matter
 
-Status: drafted 2026-11-16, awaiting the owner's answers to the calls numbered below.
-Nothing here is decided until then, and nothing is built. Read `docs/ARCHITECTURE.md`,
+Status: drafted 2026-11-16; the owner confirmed all fifteen calls as recommended the same
+day (`docs/DECISIONS.md`). Nothing is built. Next is task 0. Read `docs/ARCHITECTURE.md`,
 the Phase 7 checklist in `docs/PHASES.md`, `docs/FIELD-NOTES.md` (sections 2, 4 and 5)
 and the 2026-11-15 phase 7 line in `docs/DECISIONS.md` first. Hard rules in `CLAUDE.md`
 apply to every line below. The phase 6 spec (`docs/plans/phase-6-production.md`) is the
@@ -78,10 +78,10 @@ Four facts shape the design:
   DECISIONS (2026-11-15). Counts read from the OpenAlex API on 2026-11-16, for works
   published since 2023-01-01 that have an abstract, are in call 3.
 
-## Calls for the owner
+## Calls for the owner (answered 2026-11-16)
 
-Each call has a recommendation. "As recommended" for all, or the numbers to change, is
-enough of an answer.
+Answered 2026-11-16: all fifteen as recommended. The wording of the criterion (call 2)
+is still approved by the owner in task 4, before any call is paid for.
 
 1. **Two parts, two pull requests.** Part A ends with the screening report and a pull
    request; part B is built after it merges. One phase note at the end covers both.
