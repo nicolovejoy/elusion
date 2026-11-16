@@ -2,7 +2,7 @@
 
 Status: designed 2026-11-15 and checked once by a fresh reader; the owner confirmed the
 controller's calls the same day, with the amendments marked below. Build in progress:
-tasks 0 to 7 are done; `infra/README.md`, the runbook for the Azure day, is next. See "Progress and open
+tasks 0 to 7 are done and `infra/README.md`, the runbook, is written; the owner's Azure day (task 8) is next. See "Progress and open
 items" directly below. Read
 `docs/ARCHITECTURE.md`, the Phase 6 checklist in `docs/PHASES.md` and `compose.yaml` first.
 Hard rules in `CLAUDE.md` apply to every line below, in particular: no Azure resource is
@@ -101,8 +101,18 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
     estimate), the disk, file and snapshot drivers on, registry role mode
     `LegacyRegistryPermissions` (the mode `AcrPull` works in). The plan output is in
     `data/` (gitignored); it carries the owner's ids.
-- Next: `infra/README.md`, the runbook for the Azure day.
-- Then the owner: the Azure day (task 8), `judge`,
+- `infra/README.md` written, the runbook for task 8. Builder's choices: the amd64 image
+  is built and checked before paid time and pushed as tag `phase6`, its digest read back
+  from the registry; the OpenAI key reaches `kubectl` through a pipe (`--from-file
+  =/dev/stdin`, tried in a dry run), not the command line; the local Prefect server is
+  stopped for the day, because the cluster's UI is built for `localhost:4200` and a
+  command aimed at the wrong server then fails instead of landing locally; the champion
+  check is one `resolve` call against the local MLflow (run 2026-11-15: `openai
+  gpt-6-luna cloud-concentration/v2`). The call 13 fallback is written out: the managed
+  disk render (`corpus.mode=pvc`, `managed-csi`) passes the strict dry run, and the
+  copy-out pod plus `kubectl cp` were tried on OrbStack (same SHA-256 out as in).
+- Next: the owner's Azure day (task 8), from `infra/README.md`.
+- Then the owner: `judge`,
   `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
 
 Open items, each with the task that must close it:
