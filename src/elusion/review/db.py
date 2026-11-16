@@ -11,11 +11,17 @@ double-insert either.
 `review_jobs` is the job table: one row per run, created by `start_job`, bumped as
 batches finish (`update_job` adds to the counters rather than overwriting them), and
 closed by `finish_job` with status 'finished' or 'failed'. It records what was asked
-(criterion, model, prompt version, sample size) and what happened (documents scored,
-dollars spent), so a crashed run can be inspected and re-started.
+(criterion, model, prompt version, sample size), what happened (documents scored,
+dollars spent) and where it ran (`run_env`: `local`, or a cluster's name), so a crashed
+run can be inspected and re-started. `run_env` was added after the first databases
+existed; `create_all` never alters a table, so `ensure_schema` adds the column itself,
+and rows older than the column hold NULL, which is read as `local`.
 
-There is deliberately no foreign key from `scores.doc_id` to `documents.doc_id`: it keeps
-this module independent of the collect module (own MetaData, own `ensure_schema`).
+There is deliberately no foreign key from `scores.doc_id` to `documents.doc_id`: this
+module keeps its own MetaData and `ensure_schema`. It does read `documents` in one place:
+a score has no filing year of its own, so the readers that take `years` join `documents`
+on `doc_id` and keep the paragraphs filed in those years. That is how one (model, prompt
+version) pair can be evaluated as separate populations, one per set of filing years.
 `job_id` is generated client-side with uuid4, so the id is known without a round trip.
 """
 
@@ -29,7 +35,10 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import ARRAY, UUID, insert
 from sqlalchemy.engine import Engine
 
-from elusion.collect.db import make_engine  # noqa: F401  (re-exported for callers)
+from elusion.collect.db import (
+    documents,
+    make_engine,  # noqa: F401  (re-exported for callers)
+)
 from elusion.review.providers import Review, Verdict
 
 metadata = sa.MetaData()
@@ -65,6 +74,7 @@ review_jobs = sa.Table(
     sa.Column("status", sa.Text, nullable=False, server_default="running"),
     sa.Column("docs_scored", sa.Integer, nullable=False, server_default="0"),
     sa.Column("cost_usd", sa.Numeric(10, 6), nullable=False, server_default="0"),
+    sa.Column("run_env", sa.Text),
 )
 
 
@@ -85,6 +95,8 @@ class ScoreRow(TypedDict):
 
 def ensure_schema(engine: Engine) -> None:
     metadata.create_all(engine)
+    with engine.begin() as conn:  # for a review_jobs table created before run_env existed
+        conn.execute(sa.text("ALTER TABLE review_jobs ADD COLUMN IF NOT EXISTS run_env text"))
 
 
 def score_row(doc_id: str, prompt_version: str, provider_name: str, review: Review) -> ScoreRow:
@@ -133,21 +145,60 @@ def unscored_ids(engine: Engine, ids: Sequence[str], model: str, prompt_version:
         return [r[0] for r in conn.execute(stmt)]
 
 
-def scores_for(engine: Engine, model: str, prompt_version: str) -> dict[str, int]:
-    """Every doc_id scored under (model, prompt_version), mapped to its 0-4 score."""
+def _filed_in(stmt: sa.Select, years: Sequence[int] | None) -> sa.Select:
+    """Narrow a query over `scores` to paragraphs filed in `years`; None leaves it alone.
+
+    The year is a column of `documents`, so this is a join on `doc_id`. A score whose
+    document has no `documents` row has no year and drops out whenever years are given.
+    """
+    if years is None:
+        return stmt
+    return stmt.join(documents, documents.c.doc_id == scores.c.doc_id).where(
+        documents.c.year.in_(list(years))
+    )
+
+
+def scores_for(
+    engine: Engine, model: str, prompt_version: str, years: Sequence[int] | None = None
+) -> dict[str, int]:
+    """Every doc_id scored under (model, prompt_version), mapped to its 0-4 score.
+
+    With `years`, only paragraphs filed in those years (see `_filed_in`).
+    """
     stmt = sa.select(scores.c.doc_id, scores.c.score).where(
         scores.c.model == model, scores.c.prompt_version == prompt_version
     )
     with engine.connect() as conn:
-        return {doc_id: score for doc_id, score in conn.execute(stmt)}
+        return {doc_id: score for doc_id, score in conn.execute(_filed_in(stmt, years))}
+
+
+def scores_cost_usd(
+    engine: Engine, model: str, prompt_version: str, years: Sequence[int] | None = None
+) -> float:
+    """What the pair's scores cost, summed from each score's own `cost_usd`; 0.0 if none.
+
+    With `years`, only paragraphs filed in those years. This is the review cost of one
+    population. A billed call that left no score (a refusal, a truncation) has no row
+    here; it is in its job's `review_jobs.cost_usd` only.
+    """
+    stmt = sa.select(sa.func.coalesce(sa.func.sum(scores.c.cost_usd), 0)).where(
+        scores.c.model == model, scores.c.prompt_version == prompt_version
+    )
+    with engine.connect() as conn:
+        return float(conn.execute(_filed_in(stmt, years)).scalar_one())
 
 
 def verdicts_for(
-    engine: Engine, model: str, prompt_version: str, min_score: int
+    engine: Engine,
+    model: str,
+    prompt_version: str,
+    min_score: int,
+    years: Sequence[int] | None = None,
 ) -> dict[str, Verdict]:
     """Every doc under (model, prompt_version) scored >= min_score, as its full Verdict.
 
     Rows whose rationale is NULL or empty are left out: there is no reason to grade.
+    With `years`, only paragraphs filed in those years.
     """
     stmt = sa.select(scores.c.doc_id, scores.c.score, scores.c.rationale, scores.c.quote).where(
         scores.c.model == model,
@@ -156,6 +207,7 @@ def verdicts_for(
         scores.c.rationale.is_not(None),
         scores.c.rationale != "",
     )
+    stmt = _filed_in(stmt, years)
     with engine.connect() as conn:
         return {
             doc_id: Verdict(score=score, rationale=rationale, quote=quote)
@@ -192,7 +244,13 @@ def insert_scores(engine: Engine, rows: Iterable[ScoreRow]) -> int:
 
 
 def start_job(
-    engine: Engine, *, criterion: str, model: str, prompt_version: str, sample_size: int
+    engine: Engine,
+    *,
+    criterion: str,
+    model: str,
+    prompt_version: str,
+    sample_size: int,
+    run_env: str = "local",
 ) -> str:
     job_id = str(uuid.uuid4())
     with engine.begin() as conn:
@@ -204,6 +262,7 @@ def start_job(
                 prompt_version=prompt_version,
                 sample_size=sample_size,
                 status="running",
+                run_env=run_env,
             )
         )
     return job_id
@@ -233,13 +292,44 @@ def finish_job(engine: Engine, job_id: str, status: str = "finished") -> None:
         conn.execute(stmt)
 
 
-def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
+def _scored_some(years: Sequence[int]) -> sa.ColumnElement[bool]:
+    """True for a review_jobs row that scored at least one paragraph filed in `years`.
+
+    Neither table names the other: `scores` has no `job_id` and a job has no year. So a
+    job is matched by time: one of the pair's scores for those years has a `scored_at`
+    between the job's start and its finish (or now, for a job with no finish). A killed
+    job with no `finished_at` therefore matches every later score of its pair.
+    """
+    j = review_jobs.c
+    return (
+        sa.select(sa.literal(1))
+        .select_from(scores.join(documents, documents.c.doc_id == scores.c.doc_id))
+        .where(
+            scores.c.model == j.model,
+            scores.c.prompt_version == j.prompt_version,
+            documents.c.year.in_(list(years)),
+            scores.c.scored_at.between(
+                j.started_at, sa.func.coalesce(j.finished_at, sa.func.now())
+            ),
+        )
+        .exists()
+    )
+
+
+def jobs_summary(
+    engine: Engine, model: str, prompt_version: str, years: Sequence[int] | None = None
+) -> dict:
     """What every review_jobs row for (model, prompt_version) adds up to.
+
+    With `years`, only the rows that scored a paragraph filed in those years (see
+    `_scored_some`): the jobs behind one population of the pair.
+
 
     Returns jobs (row count), cost_usd (sum), started_at (earliest start), finished_at
     (latest finish, None if none finished), unfinished (some row has no finished_at)
     and unfinished_ids (those rows' job ids, sorted: a running job, or a killed one),
-    and busy_s: each row's own duration summed, a row with no finish counted up to now.
+    busy_s: each row's own duration summed, a row with no finish counted up to now,
+    and run_envs: the row count per environment the jobs ran in (NULL counts as `local`).
     A crashed and resumed review is several rows, so cost and busy time cover them all.
     Busy time, not the first-start-to-last-finish span: a failed start or a probe hours
     before the main run would otherwise count the idle gap between rows as review time.
@@ -247,6 +337,9 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
     counted twice.
     """
     j = review_jobs.c
+    pair = [j.model == model, j.prompt_version == prompt_version]
+    if years is not None:
+        pair.append(_scored_some(years))
     stmt = sa.select(
         sa.func.count(),
         sa.func.coalesce(sa.func.sum(j.cost_usd), 0),
@@ -259,15 +352,17 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
             ),
             0,
         ),
-    ).where(j.model == model, j.prompt_version == prompt_version)
+    ).where(*pair)
     with engine.connect() as conn:
         jobs, cost, started, finished, unfinished, busy = conn.execute(stmt).one()
         open_ids = conn.execute(
-            sa.select(j.job_id)
-            .where(j.model == model, j.prompt_version == prompt_version, j.finished_at.is_(None))
-            .order_by(j.job_id)
+            sa.select(j.job_id).where(*pair, j.finished_at.is_(None)).order_by(j.job_id)
         ).scalars()
         open_ids = [str(i) for i in open_ids]
+        env = sa.func.coalesce(j.run_env, "local")
+        run_envs = dict(
+            conn.execute(sa.select(env, sa.func.count()).where(*pair).group_by(env)).all()
+        )
     return {
         "jobs": jobs,
         "cost_usd": float(cost),
@@ -276,6 +371,7 @@ def jobs_summary(engine: Engine, model: str, prompt_version: str) -> dict:
         "unfinished": unfinished > 0,
         "unfinished_ids": open_ids,
         "busy_s": float(busy),
+        "run_envs": run_envs,
     }
 
 

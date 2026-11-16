@@ -1,0 +1,59 @@
+# Redpanda: the Kafka-compatible broker holding the documents.ingested topic, as the
+# compose `redpanda` service. One listener, advertised as the Service name, because every
+# client is inside the cluster (call 7: nothing exposed).
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+spec:
+  selector: {app.kubernetes.io/name: redpanda}
+  ports:
+    - {name: kafka, port: 9092, targetPort: 9092}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redpanda
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+spec:
+  serviceName: redpanda
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: redpanda}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redpanda
+        {{- include "elusion.labels" . | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 101   # the image's redpanda user, so it can write its data volume
+      containers:
+        - name: redpanda
+          image: {{ .Values.redpanda.image }}
+          args:
+            - redpanda
+            - start
+            - --overprovisioned
+            - --smp=1
+            - --memory={{ .Values.redpanda.memory }}
+            - --node-id=0
+            - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+            - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+          ports:
+            - {name: kafka, containerPort: 9092}
+          readinessProbe:
+            tcpSocket: {port: 9092}
+            periodSeconds: 5
+          resources: {{- toYaml .Values.redpanda.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/redpanda/data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.redpanda.storage }}

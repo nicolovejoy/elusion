@@ -53,12 +53,19 @@ def env(monkeypatch, tmp_path):
 
     seen: dict = {}
 
-    def fake_scores_for(engine, model, prompt_version):
-        seen["scores_for"] = (engine, model, prompt_version)
+    def fake_scores_for(engine, model, prompt_version, years):
+        seen["scores_for"] = (engine, model, prompt_version, years)
         return dict(SCORES)
 
-    def fake_jobs_summary(engine, model, prompt_version):
-        seen["jobs_summary"] = (engine, model, prompt_version)
+    def fake_scores_cost(engine, model, prompt_version, years):
+        seen["scores_cost_usd"] = (engine, model, prompt_version, years)
+        return 0.60  # not the jobs' 0.75: the report's review cost is the scores' own
+
+    def fake_count_documents(engine, year):
+        return {2018: 600, 2019: 400, 2020: 5000}[year]
+
+    def fake_jobs_summary(engine, model, prompt_version, years):
+        seen["jobs_summary"] = (engine, model, prompt_version, years)
         return {
             "jobs": 2,
             "cost_usd": 0.75,
@@ -67,6 +74,7 @@ def env(monkeypatch, tmp_path):
             "unfinished": False,
             "unfinished_ids": [],
             "busy_s": 3600.0,  # less than the 1:02:03 span: a gap between the two jobs
+            "run_envs": {"local": 1, "aks-x": 1},
         }
 
     def fake_company_counts(engine, doc_ids):
@@ -75,6 +83,8 @@ def env(monkeypatch, tmp_path):
 
     monkeypatch.setattr(mod, "scores_for", fake_scores_for)
     monkeypatch.setattr(mod, "jobs_summary", fake_jobs_summary)
+    monkeypatch.setattr(mod, "scores_cost_usd", fake_scores_cost)
+    monkeypatch.setattr(mod, "count_documents", fake_count_documents)
     monkeypatch.setattr(mod, "company_counts", fake_company_counts)
 
     csv = gold_path("c", tmp_path)
@@ -97,6 +107,7 @@ def run(tmp_path, **kw):
 
     args = dict(
         prompt_version="v2",
+        years=[2019, 2018],
         engine=FAKE_ENGINE,
         data_dir=tmp_path,
         reports_dir=tmp_path / "reports",
@@ -112,14 +123,18 @@ def run(tmp_path, **kw):
 def test_writes_the_report_and_returns_its_path(env) -> None:
     tmp_path, seen = env
     path = run(tmp_path)
-    assert path == tmp_path / "reports" / "c-rev-model-v2.md"
+    assert path == tmp_path / "reports" / "c-rev-model-v2-2018-2019.md"
     md = path.read_text()
 
-    assert seen["scores_for"] == (FAKE_ENGINE, "rev-model", "c/v2")
-    assert seen["jobs_summary"] == (FAKE_ENGINE, "rev-model", "c/v2")
+    # every reader is asked for the same population: the pair, filed in those years
+    population = (FAKE_ENGINE, "rev-model", "c/v2", [2018, 2019])
+    assert seen["scores_for"] == population
+    assert seen["jobs_summary"] == population
+    assert seen["scores_cost_usd"] == population
     assert seen["company_ids"] == ["f00", "f01", "f02"]  # flagged and judged relevant
 
-    assert "- population N: 20" in md
+    assert "- filing years: 2018-2019" in md
+    assert "- population N: 20 of 1000 paragraphs filed in 2018-2019, in ingestion order" in md
     assert "- flagged (score >= 3): 4" in md
     assert "- discard (score < 3): 16" in md
     assert (
@@ -132,11 +147,30 @@ def test_writes_the_report_and_returns_its_path(env) -> None:
     assert "- judge model: fake-judge" in md
     assert "- judge prompt version: c/judge-v1" in md
     assert "- seed: 20261104" in md and "- date: 2026-11-04" in md
-    assert "$0.7500 (sum over 2 review_jobs rows)" in md
+    assert "- review run: $0.6000 (the cost of this population's scores, summed)" in md
+    assert "- review jobs that scored this population: 2 (1 local, 1 on aks-x)" in md
     assert "- judge run: $0.7500" in md
     assert "summed over 2 review_jobs rows (each from its start to its finish): 1:00:00" in md
     assert "- Acme Corp: 3" in md
     assert "-1/" not in md and "corpus" not in md
+
+
+def test_years_is_required(env) -> None:
+    from elusion.flows.evaluate import evaluate
+
+    tmp_path, _ = env
+    with pytest.raises(Exception, match="years"):
+        evaluate("c", engine=FAKE_ENGINE, data_dir=tmp_path, log_mlflow=False)
+
+
+def test_another_year_is_another_population_and_another_report_file(env) -> None:
+    tmp_path, seen = env
+    path = run(tmp_path, years=[2020])
+    assert path.name == "c-rev-model-v2-2020.md"
+    assert seen["scores_for"][3] == [2020]
+    assert "- population N: 20 of 5000 paragraphs filed in 2020, in ingestion order" in (
+        path.read_text()
+    )
 
 
 def test_piles_come_from_scores_not_the_csv_pile_column(env, monkeypatch) -> None:
@@ -146,7 +180,7 @@ def test_piles_come_from_scores_not_the_csv_pile_column(env, monkeypatch) -> Non
     # g00 now scores 3: it moves into the flagged pile (its judge label is 1) although
     # the CSV still says "discard"; f03 drops to 2 and is now a discard-sample row.
     rescored = {**SCORES, "g00": 3, "f03": 2}
-    monkeypatch.setattr(mod, "scores_for", lambda e, m, p: dict(rescored))
+    monkeypatch.setattr(mod, "scores_for", lambda e, m, p, y: dict(rescored))
     # the draw changes with the pile, so label every g doc (all 0) to cover whichever it picks
     append_rows(
         gold_path("c", tmp_path), [row(f"g{i:02d}", 0, pile="discard") for i in range(1, 16)]
@@ -161,7 +195,9 @@ def test_refuses_when_flagged_docs_lack_a_judge_label(env, monkeypatch) -> None:
     import elusion.flows.evaluate as mod
 
     tmp_path, _ = env
-    monkeypatch.setattr(mod, "scores_for", lambda e, m, p: {**SCORES, "x01": 4, "x02": 3, "x03": 2})
+    monkeypatch.setattr(
+        mod, "scores_for", lambda e, m, p, y: {**SCORES, "x01": 4, "x02": 3, "x03": 2}
+    )
     with pytest.raises(mod.MissingLabels, match=r"2 flagged .*elusion judge"):
         run(tmp_path)
     assert not (tmp_path / "reports").exists()
@@ -171,7 +207,7 @@ def test_no_scores_is_an_error(env, monkeypatch) -> None:
     import elusion.flows.evaluate as mod
 
     tmp_path, _ = env
-    monkeypatch.setattr(mod, "scores_for", lambda e, m, p: {})
+    monkeypatch.setattr(mod, "scores_for", lambda e, m, p, y: {})
     with pytest.raises(RuntimeError, match=r"no scores for \(rev-model, c/v2\)"):
         run(tmp_path)
 
@@ -194,7 +230,7 @@ def test_warns_but_writes_the_report_while_a_review_job_is_unfinished(
     monkeypatch.setattr(
         mod,
         "jobs_summary",
-        lambda e, m, p: {
+        lambda e, m, p, y: {
             "jobs": 1,
             "cost_usd": 0.1,
             "started_at": T0,
@@ -202,6 +238,7 @@ def test_warns_but_writes_the_report_while_a_review_job_is_unfinished(
             "unfinished": True,
             "unfinished_ids": ["job-abc"],
             "busy_s": 60.0,
+            "run_envs": {"local": 1},
         },
     )
     path = run(tmp_path)
@@ -267,6 +304,7 @@ def test_evaluate_logs_one_run_and_returns_its_id(env, monkeypatch) -> None:
     result = evaluate(
         "c",
         prompt_version="v2",
+        years=[2018, 2019],
         engine=FAKE_ENGINE,
         data_dir=tmp_path,
         reports_dir=tmp_path / "reports",
@@ -282,8 +320,10 @@ def test_evaluate_logs_one_run_and_returns_its_id(env, monkeypatch) -> None:
     assert run.data.params["provider"] == "anthropic"
     assert run.data.params["report_path"] == str(result.report_path)
     assert run.data.params["review_jobs"] == "2"
+    assert run.data.params["run_envs"] == "aks-x,local"
+    assert run.data.params["years"] == "2018,2019"
     names = {a.path for a in client.list_artifacts(result.run_id)}
-    assert "c-rev-model-v2.md" in names
+    assert "c-rev-model-v2-2018-2019.md" in names
     assert {"v2.md", "c.md"} <= names  # the prompt file and the criterion file
     assert not any(n.endswith(".csv") for n in names)
 
@@ -298,9 +338,9 @@ def test_report_is_written_even_when_logging_fails(env, monkeypatch) -> None:
 
     monkeypatch.setattr(mod, "log_run", boom)
     monkeypatch.setattr(mod, "provider_for", lambda e, m, v: "anthropic")
-    with pytest.raises(RuntimeError, match="report written to .*c-rev-model-v2.md"):
+    with pytest.raises(RuntimeError, match="report written to .*c-rev-model-v2-2018-2019.md"):
         run(tmp_path, log_mlflow=True)
-    assert (tmp_path / "reports" / "c-rev-model-v2.md").is_file()
+    assert (tmp_path / "reports" / "c-rev-model-v2-2018-2019.md").is_file()
 
 
 def add_grades(tmp_path, grader=JUDGE):
@@ -325,7 +365,9 @@ def add_grades(tmp_path, grader=JUDGE):
     )
     ledger = grade_runs_path(path)
     pair = {"review_model": "rev-model", "review_prompt_version": "c/v2"}
-    append_grade_run(ledger, {**pair, "cost_usd": 0.25})
+    append_grade_run(ledger, {**pair, "cost_usd": 0.25})  # no `years`: read as 2018, 2019
+    # the same pair's other population: never counted for 2018-2019
+    append_grade_run(ledger, {**pair, "years": [2020], "cost_usd": 2.0})
     # other pairs' spend, same ledger: never counted for this pair
     append_grade_run(ledger, {**pair, "review_prompt_version": "c/v3", "cost_usd": 4.0})
     append_grade_run(ledger, {**pair, "review_model": "x", "cost_usd": 8.0})
@@ -344,7 +386,7 @@ def test_report_has_rationale_quality_when_graded(env) -> None:
     assert "- unsound and relevant: 1" in md
     assert "- unsound and not relevant: 1" in md
     assert "- grade run: $0.2500" in md
-    assert "- total for this pair (review + grade): $1.0000" in md  # 0.75 + 0.25; no judge
+    assert "- total for this population (review + grade): $0.8500" in md  # 0.60 + 0.25
 
 
 def test_report_without_grades_says_so(env) -> None:
@@ -360,6 +402,7 @@ def run_logged(tmp_path) -> str:
     return evaluate(
         "c",
         prompt_version="v2",
+        years=[2018, 2019],
         engine=FAKE_ENGINE,
         data_dir=tmp_path,
         reports_dir=tmp_path / "reports",
@@ -413,7 +456,7 @@ def test_report_path_has_no_character_windows_rejects(tmp_path) -> None:
     """`:` in an Ollama tag broke a Windows checkout of the committed report."""
     from elusion.flows.evaluate import report_path
 
-    got = report_path(tmp_path, "cloud-concentration", "qwen2.5:14b", "v2")
-    assert got.name == "cloud-concentration-qwen2.5-14b-v2.md"
-    bad = report_path(tmp_path, "c", 'a<b>c:d"e/f\\g|h?i*j', "x/y")
-    assert bad.name == "c-a-b-c-d-e-f-g-h-i-j-x-y.md"
+    got = report_path(tmp_path, "cloud-concentration", "qwen2.5:14b", "v2", [2019, 2018])
+    assert got.name == "cloud-concentration-qwen2.5-14b-v2-2018-2019.md"
+    bad = report_path(tmp_path, "c", 'a<b>c:d"e/f\\g|h?i*j', "x/y", [2020])
+    assert bad.name == "c-a-b-c-d-e-f-g-h-i-j-x-y-2020.md"

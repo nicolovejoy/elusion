@@ -1,0 +1,43 @@
+# The two Prefect deployments on the cluster (phase 6, task 5). A deployment is a named,
+# server-side record of "run this flow, on this work pool, with these defaults"; starting
+# one (`prefect deployment run review/review --param ...`) creates a flow run, which the
+# worker turns into a Kubernetes Job from the work pool's job template.
+#
+# Registered by the chart's hook Job (templates/prefect-register.yaml) with
+#   prefect deploy --all --prefect-file /config/prefect.yaml
+# No build or push steps: the image is built and pushed beforehand, and the work pool's
+# template names it. The code is the package installed in the image, so the entrypoints
+# are module paths, not file paths.
+name: elusion
+prefect-version: 3.9.1
+
+pull:
+  # Where the flow-run process starts: the image's working directory, which holds criteria/.
+  - prefect.deployments.steps.set_working_directory:
+      directory: /app
+
+deployments:
+  - name: collect
+    entrypoint: elusion.flows.collect.collect
+    description: One filing year end to end (Hugging Face -> Parquet, Postgres, Kafka).
+    work_pool:
+      name: elusion
+      job_variables:
+        # A whole year's paragraphs are held in memory. The 2020 rehearsal peaked at
+        # 3.49 GiB (memory.peak, file cache included), so the limit leaves 1.5 GiB over it.
+        memory_request: 3Gi
+        memory_limit: 5Gi
+        cpu_request: 500m
+        cpu_limit: "1"
+
+  - name: review
+    entrypoint: elusion.flows.review.review
+    description: Score up to `sample` ids from the topic against one criterion.
+    work_pool:
+      name: elusion
+      job_variables:
+        # One year's texts (about a third of the 1 GB three years take) plus the run.
+        memory_request: 1536Mi
+        memory_limit: 3Gi
+        cpu_request: 500m
+        cpu_limit: "1"

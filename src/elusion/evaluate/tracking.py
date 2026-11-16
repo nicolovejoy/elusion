@@ -3,7 +3,8 @@
 MLflow vocabulary, in plain words:
 
 - An *experiment* is a folder of related runs. Here: one per criterion, `elusion/<criterion>`.
-- A *run* is one attempt, here one (review model, prompt version) evaluated once.
+- A *run* is one attempt, here one population (a review model, a prompt version and the
+  filing years) evaluated once.
 - A *param* is an input you chose and want remembered (model, prompt version, threshold).
 - A *metric* is a number the run produced (precision, cost). Each estimate is logged as
   several numbers, `<name>_point`, `_low`, `_high`, `_k`, `_n`, so the leaderboard can
@@ -41,6 +42,7 @@ def run_params(report: RunReport, provider: str, report_path: Path) -> dict[str,
         "criterion": report.criterion,
         "review_model": report.review_model,
         "prompt_version": report.prompt_version,
+        "years": ",".join(str(y) for y in sorted(report.years)),
         "provider": provider,
         "generation_settings": json.dumps(GENERATION_SETTINGS.get(provider, {}), sort_keys=True),
         "judge_model": report.judge_model,
@@ -51,6 +53,8 @@ def run_params(report: RunReport, provider: str, report_path: Path) -> dict[str,
         "review_jobs": str(report.review_jobs),
         "report_path": str(report_path),
     }
+    if report.review_envs:
+        params["run_envs"] = ",".join(sorted(report.review_envs))
     if provider == "ollama":
         # The tag can move; the digest pins what actually produced these scores.
         params["model_digest"] = settings.ollama_digest

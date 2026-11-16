@@ -1,7 +1,7 @@
 # Data architecture
 
-How data moves through elusion, what each store is for, and why. Phases 0 to 3 are
-built; later phases are described as planned and marked so.
+How data moves through elusion, what each store is for, and why. Phases 0 to 4 and 6 are
+built; phase 5 is not, and appears only as a planned row in the reads-and-writes table.
 
 ## One line
 
@@ -163,7 +163,7 @@ Prefect flow `evaluate`: piles recomputed from `scores`, joined to the judge row
   grades for the pair (if any)          ──▶ rationale sound, quote verbatim, sound x label
         Clopper-Pearson 95% intervals and the k/n behind them
         ▼
-docs/reports/<criterion>-<model>-<version>.md (committed)
+docs/reports/<criterion>-<model>-<version>-<filing years>.md (committed)
         ▼
 MLflow run in experiment elusion/<criterion>, named <review model>/<prompt version>:
   params, metrics (point/low/high/k/n per metric, costs), artifacts (report, review
@@ -202,6 +202,122 @@ elusion review --reviewer elusion-reviewer@champion
 Promotion changes which configuration `--reviewer` resolves to. It does not change a
 score, the `scores` key, or the model behind a provider's id.
 
+## Phase 6: the same flows on AKS (built)
+
+Phase 6 runs the phase 1 and 2 flows, the same code, on a rented Kubernetes cluster, once,
+and removes the cluster the same day. The data model gains one nullable column,
+`review_jobs.run_env`, which records where a review ran (`local` by default, the cluster's
+name on AKS). Otherwise what is new is where the pieces run and how a run is started. A
+few terms first. AKS (Azure Kubernetes Service) is Azure's managed Kubernetes, the
+counterpart of AWS EKS; Azure runs the control plane and we rent the worker machines
+(nodes). A pod is one or more containers that Kubernetes runs together on one node.
+Terraform declares Azure resources in files and creates or destroys them from those
+files. A Helm chart is a template of Kubernetes manifests (the YAML that describes pods
+and volumes) plus a values file; `helm install` renders it and applies the result. A
+Kubernetes Job is a pod that runs once to completion.
+
+What exists, and who made it:
+
+```
+Terraform (infra/terraform), run by the owner: 10 resources in Azure, West US 2
+  resource group rg-elusion ─ AKS cluster aks-elusion (2 x Standard_D2as_v7, free control plane)
+  │                            └─ AKS creates a second group, MC_rg-elusion_aks-elusion_westus2,
+  │                               for the node machines, disks and networking
+  ├─ container registry ........... holds the image (AWS: ECR)
+  ├─ storage account + container `corpus` ... holds the Parquet (AWS: S3 bucket)
+  ├─ 3 role assignments ........... the nodes may pull the image and use the container;
+  │                                 the owner may use it too; no account key is used
+  └─ 2 budgets of $10 ............. one on each resource group, with an email alert
+
+Helm chart (infra/helm/elusion), `helm install` by the owner: the cluster's contents
+  ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐ ┌─────────────────────┐
+  │ postgres-0   │ │ redpanda-0   │ │ prefect-server-0 │ │ prefect-worker      │
+  │ documents,   │ │ topic        │ │ flow-run state,  │ │ polls the work pool │
+  │ scores,      │ │ documents.   │ │ the work pool,   │ │ `elusion`, starts a │
+  │ review_jobs  │ │ ingested     │ │ two deployments  │ │ Job per flow run    │
+  └──────────────┘ └──────────────┘ └──────────────────┘ └─────────────────────┘
+  + the volume `corpus` (the blob container, mounted), the settings ConfigMap, and a
+    hook Job that registers the work pool and the two deployments after every
+    install and upgrade
+  Two Secrets are named by the chart and created by hand: the OpenAI key, the Postgres
+  password. Nothing is exposed to the internet; the owner reaches the cluster with
+  `kubectl port-forward`.
+```
+
+How one flow run happens:
+
+```
+owner's laptop                               AKS cluster
+prefect deployment run review/review ──▶ prefect-server-0: a flow run is created and
+  (through port-forward to :4200)            put on the work pool `elusion`
+                                                         │ polled by
+                                                         ▼
+                                          prefect-worker: fills the pool's job template
+                                                         │ creates
+                                                         ▼
+                                          Kubernetes Job (backoffLimit 0, never retried)
+                                          └─ pod from the elusion image, same code as the laptop
+                                             ├─ /data/corpus  ◀── corpus volume (blob container)
+                                             ├─ Kafka, Postgres ◀─ the cluster's own services
+                                             └─ OpenAI call: gpt-6-luna, prompt v2, pinned
+                                                         │
+                                                         ▼
+                                          cluster Postgres `scores`, `review_jobs`
+                                          (`run_env` = aks-elusion on every job row)
+```
+
+The work pool is the server-side queue the worker watches. The worker is a small
+long-running process; it never runs the flow itself. For each flow run it creates a Job
+from the pool's job template, which is how a batch review becomes a service on
+Kubernetes: a Job per run, not a server waiting for requests. `backoffLimit: 0` and
+Prefect's `crash` behaviour on SIGTERM keep a killed pod from being retried by Kubernetes
+or by Prefect, because a retry of `sample=20000` would score 20,000 more documents, not the
+remainder (DECISIONS 2026-11-15).
+
+The corpus is a directory, as it is on the laptop. On AKS that directory is the blob
+container, mounted into each pod by the cluster's Blob CSI driver (CSI is Kubernetes's
+plugin interface for storage), signed in with the nodes' managed identity (an identity
+Azure gives a resource so it can be granted roles without a key or password, the
+counterpart of an instance's IAM role). `collect` wrote the 2020 Parquet file (599,703
+paragraphs, 135,306,583 bytes) into it on the cluster in 5 minutes 28 seconds, and
+`review` read it back.
+
+How the scores came home:
+
+```
+cluster Postgres ── infra/export.sh ──▶ data/exports/STAMP/{scores,review_jobs}.csv
+  COPY ... TO STDOUT; row counts checked against the table before and after; SHA-256 sums
+        │
+        ▼ terraform destroy: 10 destroyed, the same day; the files on the laptop remain
+        │
+        ▼ COPY ... FROM (header match), one transaction, at home
+local Postgres `scores` (+20,000 rows), `review_jobs` (+3)      ← the local ledger now knows
+        │                                                          every paragraph paid for
+        ▼ judge, grade, evaluate --year 2020 --review-model gpt-6-luna
+docs/reports/cloud-concentration-gpt-6-luna-v2-2020.md   its own population, by filing year
+```
+
+The cluster scored the first 20,000 paragraphs of filing year 2020 in ingestion order, so
+the report describes those 20,000, not a random draw from the year. It reads: precision
+0.485 [0.360, 0.611] (32/66 flagged, Clopper-Pearson 95%), elusion 0.000 [0.000, 0.018]
+(0/200 sampled discards), recall not established ([0.061, 1.000], derived from the two
+pile intervals). The 2018 and 2019 reports are untouched; `--year` is what keeps the two
+populations apart.
+
+### Why a cluster, and why it is built this way
+
+The laptop already ran the whole pipeline, so a cluster adds no capability. The point is
+to run the same code where production runs: images in a registry, state in services
+rather than in the compose file, secrets outside the repo, and a bill. Three choices
+follow from running it for one day. Postgres, Redpanda and the Prefect server are pods
+from the chart, as in `compose.yaml`, because managed databases and Event Hubs would add
+resources to create and destroy, and pods from a chart are the most Helm and Kubernetes
+practice (DECISIONS 2026-11-15). The state that matters leaves the
+cluster before it is destroyed (the export), because everything in it dies with it.
+Everything in Azure and in the cluster is declared in a committed file, because a
+resource made by hand is one that `terraform destroy` does not know about. The two
+Secrets are the one exception, since their values cannot be in a file.
+
 ## Where each phase reads and writes
 
 | Phase | Reads | Writes |
@@ -210,8 +326,8 @@ score, the `scores` key, or the model behind a provider's id.
 | 2 review | Kafka, `documents`, `scores`, Parquet text | `scores`, job table |
 | 3 judge, label, evaluate | `scores`, `review_jobs`, `documents`, Parquet text, `data/gold/` | `data/gold/<criterion>.csv`, `.judge-runs.jsonl`, `docs/reports/` |
 | 4 leaderboard | report, scores, prompt file, `data/grades/`, MLflow registry | MLflow run (params, metrics, report, prompt, `reviewer` model); registry versions and alias; `data/grades/<criterion>.csv`, `.grade-runs.jsonl` |
-| 5 dedupe | Parquet | Delta table of clusters; `scores` for members |
-| 6 production | same as 2, on AKS | same as 2 |
+| 5 dedupe (planned) | Parquet | Delta table of clusters; `scores` for members |
+| 6 production | same as 1 and 2, in the cluster: HuggingFace JSONL, the cluster's Kafka, `documents`, `scores`, Parquet text on the blob mount | the cluster's Postgres, Kafka and blob container; then `scores` and `review_jobs` copied to `data/exports/` and into the local Postgres |
 
 ## Local services
 

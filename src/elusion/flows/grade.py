@@ -8,7 +8,9 @@ that one reviewer answer, never a gold label, and its verdicts go to data/grades
 evaluate/grades.py). `evaluate` joins them with the labels afterwards, in memory.
 
 Only flagged verdicts (score >= threshold) are graded: those are the ones whose reasons a
-reader would act on. The mechanics are the judge flow's (flows/evaluate.py): the first
+reader would act on. `years` names the population: only paragraphs filed in those years
+are graded, and the ledger records the years with the run's spend. The mechanics are the
+judge flow's (flows/evaluate.py): the first
 PROBE_DOCS calls run one at a time and their mean cost projects the run against
 ELUSION_MAX_RUN_USD; every echoed model must equal the pinned one; the rest runs in a
 thread pool, one batch at a time, each batch appended to the CSV before the next starts.
@@ -91,6 +93,8 @@ def grade_batch(
 def grade(
     criterion: str,
     prompt_version: str = "v2",
+    *,
+    years: list[int],
     review_model: str | None = None,
     threshold: int = 3,
     max_run_usd: float | None = None,
@@ -100,10 +104,13 @@ def grade(
     verdicts: dict[str, Verdict] | None = None,
     grades_csv: Path | None = None,
 ) -> GradeSummary:
-    """Grade the flagged rationales of the review run (`review_model`, `prompt_version`).
+    """Grade the flagged rationales of the review run (`review_model`, `prompt_version`)
+    for the paragraphs filed in `years`.
 
-    `verdicts` defaults to every verdict of the pair scoring >= `threshold`, read from
-    Postgres; `grades_csv` to data/grades/<criterion>.csv. Tests pass their own. The
+    `years` has no default: one pair can hold several populations (2018-2019 scored on
+    the laptop, 2020 on the cluster) and a run must say which one it grades. `verdicts`
+    defaults to every verdict of the pair for those years scoring >= `threshold`, read
+    from Postgres; `grades_csv` to data/grades/<criterion>.csv. Tests pass their own. The
     spend guard is the judge flow's: above `max_run_usd` (default ELUSION_MAX_RUN_USD)
     the flow raises BudgetExceeded before any concurrent spend, and a probe without a
     single usable grade raises RuntimeError.
@@ -118,9 +125,11 @@ def grade(
     review_version = f"{criterion}/{prompt_version}"
     if verdicts is None:
         engine = db.make_engine(settings.database_url)
-        verdicts = verdicts_for(engine, review_model, review_version, threshold)
+        verdicts = verdicts_for(engine, review_model, review_version, threshold, years)
         if not verdicts:
-            raise RuntimeError(f"no flagged scores for ({review_model}, {review_version})")
+            raise RuntimeError(
+                f"no flagged scores for ({review_model}, {review_version}) filed in {years}"
+            )
     done = graded_ids(path, review_model, review_version, grader.model)
     todo = sorted(d for d in verdicts if d not in done)
     summary = GradeSummary(skipped=len(verdicts) - len(todo))
@@ -215,6 +224,7 @@ def grade(
             "prompt_version": prompt.version,
             "review_model": review_model,
             "review_prompt_version": review_version,
+            "years": sorted(years),
             "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         try:

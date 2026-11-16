@@ -42,8 +42,8 @@ def run(path, verdicts, grader, review_model="rev", **kw):
     from elusion.flows.grade import grade
 
     return grade(
-        "c", "v2", review_model=review_model, verdicts=verdicts, grader=grader,
-        grades_csv=path, **kw,
+        "c", "v2", **{"years": [2018, 2019], **kw}, review_model=review_model,
+        verdicts=verdicts, grader=grader, grades_csv=path,
     )  # fmt: skip
 
 
@@ -182,16 +182,34 @@ def test_defaults_read_verdicts_for_the_pair(env, monkeypatch) -> None:
     seen = {}
     monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
 
-    def fake_verdicts(engine, model, version, min_score):
-        seen.update(args=(engine, model, version, min_score))
+    def fake_verdicts(engine, model, version, min_score, years):
+        seen.update(args=(engine, model, version, min_score, years))
         return verdicts_of(2)
 
     monkeypatch.setattr(mod, "verdicts_for", fake_verdicts)
     path, _ = env
     s = mod.grade(
-        "c", "v2", review_model="other", grader=FakeGrader(), grades_csv=path, threshold=4
-    )
-    assert seen["args"] == ("engine", "other", "c/v2", 4) and s.graded == 2
+        "c", "v2", years=[2020], review_model="other", grader=FakeGrader(), grades_csv=path,
+        threshold=4,
+    )  # fmt: skip
+    assert seen["args"] == ("engine", "other", "c/v2", 4, [2020]) and s.graded == 2
+
+
+def test_years_is_required(env) -> None:
+    import elusion.flows.grade as mod
+
+    path, _ = env
+    with pytest.raises(Exception, match="years"):
+        mod.grade("c", "v2", verdicts=verdicts_of(1), grader=FakeGrader(), grades_csv=path)
+
+
+def test_ledger_records_the_filing_years_so_each_population_sees_its_own_cost(env) -> None:
+    path, _ = env
+    run(path, verdicts_of(30), Costly(), max_run_usd=1.0, years=[2020, 2019])
+    ledger = grade_runs_path(path)
+    assert json.loads(ledger.read_text().splitlines()[-1])["years"] == [2019, 2020]
+    assert grade_cost_usd(ledger, "rev", "c/v2", years=[2019, 2020]) == pytest.approx(0.30)
+    assert grade_cost_usd(ledger, "rev", "c/v2", years=[2018, 2019]) == 0.0
 
 
 def test_no_verdicts_is_an_error(env, monkeypatch) -> None:
@@ -201,4 +219,4 @@ def test_no_verdicts_is_an_error(env, monkeypatch) -> None:
     monkeypatch.setattr(mod, "verdicts_for", lambda *a: {})
     path, _ = env
     with pytest.raises(RuntimeError, match=r"no flagged scores for \(rev, c/v2\)"):
-        mod.grade("c", "v2", review_model="rev", grader=FakeGrader(), grades_csv=path)
+        mod.grade("c", "v2", years=[2020], review_model="rev", grader=FakeGrader(), grades_csv=path)

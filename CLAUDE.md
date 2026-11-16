@@ -68,12 +68,21 @@ uv run pytest                 # tests
 uv run elusion collect --year 2019
 uv run elusion review --criterion criteria/cloud-concentration.md --sample 20000
 uv run elusion review --criterion criteria/cloud-concentration.md --prompt-version v2 --sample 20000 --provider openai --model gpt-6-luna
-uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]
-uv run elusion grade --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]
-uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2 [--review-model gpt-6-luna]   # report + one MLflow run
+uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019 [--review-model gpt-6-luna]
+uv run elusion grade --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019 [--review-model gpt-6-luna]
+uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019 [--review-model gpt-6-luna]   # report + one MLflow run
 uv run elusion promote --run <mlflow run id>   # register that run's reviewer, alias champion
 uv run elusion review --criterion criteria/cloud-concentration.md --reviewer elusion-reviewer@champion --sample 50
+infra/check-image.sh elusion:dev     # phase 6 checks, no Azure needed: image (build it first; PLATFORM=linux/amd64 for the AKS image)
+infra/check-chart.sh                 # the Helm chart renders and validates (needs helm, docker, uv, and kubectl pointed at a running cluster such as OrbStack's)
+infra/check-terraform.sh             # Terraform fmt, validate, provider pinned, no GUID or email in the .tf files
+infra/export.sh                      # on the Azure day: scores and review_jobs out of the cluster's Postgres into data/exports/
 ```
+
+`infra/README.md` is the Azure-day runbook: every command, in order, for the one cluster run.
+
+`--year` is required on judge, grade and evaluate and names the population by filing year:
+`--year 2018 --year 2019` is the laptop's, `--year 2020` the AKS run's (gpt-6-luna, v2 only).
 
 Commands that call a paid model need the API keys from 1Password: prefix them with
 `op run --env-file=.env.tpl --`. Run judge, grade and evaluate for one criterion one at a

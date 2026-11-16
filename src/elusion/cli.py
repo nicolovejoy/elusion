@@ -144,6 +144,19 @@ def promote(
 DEFAULT_SEED = 20261104
 
 
+# A pair's scores can cover several populations (2018 and 2019 scored on the laptop, 2020
+# on the cluster). judge, grade and evaluate each work on one, so the option is required:
+# no default can mix years by accident.
+Years = Annotated[
+    list[int],
+    typer.Option(
+        "--year",
+        help="Filing year of the paragraphs to evaluate; repeat it for several "
+        "(--year 2018 --year 2019).",
+    ),
+]
+
+
 @app.command()
 def judge(
     criterion: Annotated[
@@ -152,6 +165,7 @@ def judge(
     prompt_version: Annotated[
         str, typer.Option(help="Review prompt version whose scores define the two piles.")
     ],
+    year: Years,
     threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
     discard_n: Annotated[
         int, typer.Option(help="Paragraphs sampled at random from the discard pile.")
@@ -184,6 +198,7 @@ def judge(
         summary = judge_flow(
             criterion.stem,
             prompt_version=prompt_version,
+            years=sorted(set(year)),
             threshold=threshold,
             discard_n=discard_n,
             seed=seed,
@@ -205,6 +220,7 @@ def grade(
     prompt_version: Annotated[
         str, typer.Option(help="Review prompt version whose flagged rationales are graded.")
     ],
+    year: Years,
     review_model: Annotated[
         str | None,
         typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
@@ -224,6 +240,7 @@ def grade(
         grade_flow(
             criterion.stem,
             prompt_version=prompt_version,
+            years=sorted(set(year)),
             review_model=review_model,
             threshold=threshold,
             max_run_usd=max_run_usd,
@@ -262,6 +279,7 @@ def evaluate(
     prompt_version: Annotated[
         str, typer.Option(help="Review prompt version whose scores define the two piles.")
     ],
+    year: Years,
     threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
     seed: Annotated[
         int, typer.Option(help="Seed the discard sample was drawn with.")
@@ -284,6 +302,7 @@ def evaluate(
         result = evaluate_flow(
             criterion.stem,
             prompt_version=prompt_version,
+            years=sorted(set(year)),
             threshold=threshold,
             seed=seed,
             discard_n=discard_n,

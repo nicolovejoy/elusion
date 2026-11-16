@@ -1,0 +1,55 @@
+# The corpus volume: ELUSION_DATA_DIR for the flow-run Jobs, mounted at /data (call 11).
+# Laptop (corpus.mode=pvc): an ordinary PersistentVolumeClaim from the default storage class.
+# AKS (corpus.mode=blob): the blob container, through the Blob CSI driver. Static
+# provisioning: the PersistentVolume below points at the existing container Terraform
+# made, and the kubelet's managed identity signs in (no account key, no key Secret).
+{{- $c := .Values.corpus }}
+{{- if eq $c.mode "blob" }}
+{{- $b := $c.blob }}
+{{- $account := required "corpus.blob.storageAccount is required on AKS: --set from terraform output" $b.storageAccount }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Release.Namespace }}-corpus
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+spec:
+  capacity:
+    storage: {{ $c.size }}
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain   # the container outlives the cluster; Terraform owns it
+  storageClassName: elusion-blob          # a name only, so this PV binds to the claim below
+  mountOptions: {{- toYaml $b.mountOptions | nindent 4 }}
+  csi:
+    driver: blob.csi.azure.com
+    # Unique per container in the cluster; '#' and '/' are reserved by the driver.
+    volumeHandle: {{ printf "%s_%s" $account $b.containerName }}
+    volumeAttributes:
+      protocol: {{ $b.protocol }}
+      resourceGroup: {{ required "corpus.blob.resourceGroup is required on AKS: --set from terraform output" $b.resourceGroup }}
+      storageAccount: {{ $account }}
+      containerName: {{ $b.containerName }}
+      AzureStorageAuthType: MSI
+      AzureStorageIdentityClientID: {{ required "corpus.blob.identityClientId is required on AKS: --set from terraform output" $b.identityClientId | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: corpus
+  labels: {{- include "elusion.labels" . | nindent 4 }}
+spec:
+  {{- if eq $c.mode "blob" }}
+  accessModes: [ReadWriteMany]
+  storageClassName: elusion-blob
+  volumeName: {{ .Release.Namespace }}-corpus
+  {{- else if eq $c.mode "pvc" }}
+  accessModes: [ReadWriteOnce]
+  {{- with $c.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  {{- else }}
+  {{- fail (printf "corpus.mode must be pvc or blob, not %q" $c.mode) }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $c.size }}

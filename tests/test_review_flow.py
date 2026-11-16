@@ -512,3 +512,15 @@ def test_the_judge_model_cannot_be_a_reviewer(env) -> None:
             provider=FakeProvider(model=settings.judge_model),
             ids=ListIdSource(IDS),
         )
+
+
+def test_job_row_records_the_configured_run_env(env, monkeypatch) -> None:
+    import dataclasses
+
+    import elusion.flows.review as mod
+    from elusion.flows.review import review
+
+    engine, _ = env
+    monkeypatch.setattr(mod, "settings", dataclasses.replace(settings, run_env="aks-test"))
+    s = review("cloud-concentration", sample=2, provider=FakeProvider(), ids=ListIdSource(IDS))
+    assert get_job(engine, s.job_id)["run_env"] == "aks-test"
