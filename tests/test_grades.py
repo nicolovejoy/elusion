@@ -119,3 +119,23 @@ def test_grade_cost_filters_by_pair(tmp_path):
     assert grade_cost_usd(ledger, "m1", "c/v2") == pytest.approx(0.75)
     assert grade_cost_usd(ledger, "m2", "c/v2") == pytest.approx(2.0)
     assert grade_cost_usd(ledger, "m3", "c/v2") == 0.0
+
+
+def test_grade_cost_filters_by_filing_years(tmp_path):
+    ledger = grade_runs_path(tmp_path / "grades" / "c.csv")
+    a = {"review_model": "m1", "review_prompt_version": "c/v2"}
+    append_grade_run(ledger, {**a, "years": [2018, 2019], "cost_usd": 0.25})
+    append_grade_run(ledger, {**a, "years": [2020], "cost_usd": 0.5})
+    assert grade_cost_usd(ledger, "m1", "c/v2", years=[2020]) == pytest.approx(0.5)
+    assert grade_cost_usd(ledger, "m1", "c/v2", years=[2019, 2018]) == pytest.approx(0.25)
+    assert grade_cost_usd(ledger, "m1", "c/v2", years=[2018]) == 0.0  # another population
+    assert grade_cost_usd(ledger, "m1", "c/v2") == pytest.approx(0.75)  # no years: all
+
+
+def test_a_grade_run_recorded_without_years_counts_as_2018_and_2019(tmp_path):
+    """Every run before the ledger had `years` graded that population (DECISIONS 2026-11-16)."""
+    ledger = grade_runs_path(tmp_path / "grades" / "c.csv")
+    a = {"review_model": "m1", "review_prompt_version": "c/v2"}
+    append_grade_run(ledger, {**a, "cost_usd": 1.0})
+    assert grade_cost_usd(ledger, "m1", "c/v2", years=[2018, 2019]) == pytest.approx(1.0)
+    assert grade_cost_usd(ledger, "m1", "c/v2", years=[2020]) == 0.0

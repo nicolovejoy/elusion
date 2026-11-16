@@ -13,13 +13,15 @@ the model: whether the reviewer's quote really occurs in the paragraph.
 
 Next to the CSV, data/grades/<criterion>.grade-runs.jsonl keeps one JSON line per grade run
 (grades written, failures, dollars spent), the same ledger shape as the gold judge runs.
+Each record names the review pair and the filing years it graded, so that a report on one
+population of a pair (say, the paragraphs filed in 2020) counts its own grading spend only.
 """
 
 from __future__ import annotations
 
 import csv
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import astuple, dataclass, fields
 from pathlib import Path
 
@@ -40,6 +42,10 @@ class GradeRow:
 
 COLUMNS = [f.name for f in fields(GradeRow)]
 _INT_COLUMNS = ("score", "sound", "quote_verbatim")
+
+# The filing years of every grade run recorded before the ledger had a `years` field: all
+# of them graded the 2018 and 2019 population. The ledger files are not rewritten.
+LEGACY_YEARS = (2018, 2019)
 
 
 def grades_path(criterion: str, data_dir: Path) -> Path:
@@ -129,12 +135,17 @@ def append_grade_run(path: Path, record: dict) -> None:
 
 
 def grade_cost_usd(
-    path: Path, review_model: str | None = None, review_prompt_version: str | None = None
+    path: Path,
+    review_model: str | None = None,
+    review_prompt_version: str | None = None,
+    years: Sequence[int] | None = None,
 ) -> float:
     """Total `cost_usd` over the grade runs recorded in `path`; 0.0 if there is none.
 
     With `review_model` and/or `review_prompt_version`, only runs whose ledger record
-    carries those exact values count, so a pair sees its own grading spend.
+    carries those exact values count, so a pair sees its own grading spend. With `years`,
+    only runs recorded for exactly those filing years (a record without the field is read
+    as LEGACY_YEARS).
     """
     if not path.is_file():
         return 0.0
@@ -142,7 +153,10 @@ def grade_cost_usd(
     with path.open(encoding="utf-8") as f:
         records = [json.loads(line) for line in f if line.strip()]
     return sum(
-        r["cost_usd"] for r in records if all(v is None or r.get(k) == v for k, v in want.items())
+        r["cost_usd"]
+        for r in records
+        if all(v is None or r.get(k) == v for k, v in want.items())
+        and (years is None or sorted(r.get("years", LEGACY_YEARS)) == sorted(years))
     )
 
 
