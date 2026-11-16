@@ -117,9 +117,10 @@ kubectl get nodes -o wide
 ```
 
 The context is `aks-elusion`. From here on, every `kubectl` and `helm` command goes to
-Azure, not to OrbStack. Pass: two nodes, `Ready`, OS image Ubuntu 24.04. (`kubectl` 1.33
-is three minor versions behind the cluster's 1.36; it worked against OrbStack's 1.36.
-If it misbehaves, stop and ask for a `brew upgrade` command.)
+Azure, not to OrbStack. Pass: two nodes, `Ready`, OS image Ubuntu 24.04. (The shell's
+`kubectl` is Homebrew's 1.37, one minor version ahead of the cluster's 1.36, which is
+inside the supported gap. OrbStack also ships a 1.33 `kubectl` in `~/.orbstack/bin`;
+`which kubectl` should print `/opt/homebrew/bin/kubectl`.)
 
 ### 4. Namespace and the two Secrets
 
@@ -303,12 +304,51 @@ Terraform lists 10 resources to destroy and asks for `yes`. Pass:
 
 ```
 date
-az group exists --name "$RG"
-az group exists --name "$NODE_RG"
+az group exists --name rg-elusion
+az group exists --name MC_rg-elusion_aks-elusion_westus2
 az resource list --tag project=elusion -o table
+az group list --query "[].name" -o tsv
 ```
 
-Pass: `false`, `false`, and an empty list. Note the time: billing stops here.
+Pass: `false`, `false`, an empty list, and no group named `rg-elusion` or `MC_...` in the
+last list. The subscription held no resource group at all before the day (checked
+2026-11-15), so anything that last command prints was made today. `NetworkWatcherRG` is
+the one name that may show: Azure can create it by itself when a region gets its first
+virtual network, and it costs nothing. The group names are written out, not read from
+`$RG` and `$NODE_RG`, because after a destroy `terraform output` is empty and a new
+terminal could not set them. Note the time: billing stops here.
+
+#### If the destroy fails or stops part-way
+
+Run it again first. `terraform destroy` picks up where it stopped, and a timeout or a
+conflict on the second-to-last resource is usually gone on the second try.
+
+If it still fails, or the state file `infra/terraform/terraform.tfstate` is lost or
+damaged, delete the resource group directly. This needs no Terraform state. Deleting the
+group deletes the cluster, and Azure then deletes the node resource group (`MC_...`)
+with it:
+
+```
+az group delete --name rg-elusion --yes
+```
+
+It takes about 10 minutes and prints nothing on success. Then run the four checks above
+again. If `MC_rg-elusion_aks-elusion_westus2` still exists after `rg-elusion` is gone,
+delete it the same way:
+
+```
+az group delete --name MC_rg-elusion_aks-elusion_westus2 --yes
+```
+
+After a direct delete the state file still lists resources that no longer exist. Move it
+aside so that a later `apply` starts clean (the file stays on the laptop, gitignored):
+
+```
+mv infra/terraform/terraform.tfstate "infra/terraform/terraform.tfstate.gone-$(date +%Y%m%d)"
+```
+
+The two budgets are deleted with their groups. Billing stops when the groups are gone,
+whichever way they went.
 
 ### 14. Tidy the laptop and revoke the key
 
@@ -368,7 +408,52 @@ The phase note says which path was taken.
 ## If anything blocks for more than an hour
 
 Export what exists (step 12) and destroy (steps 13 and 14). The run can resume on a later
-day, because the export is loaded into the local Postgres first.
+day, on a new cluster, without paying twice. Do not load that export into the local
+Postgres yet: the resume day's export will hold every row, and task 9 loads only that one.
+
+### Resuming on a later day
+
+A new cluster's Postgres is empty, so by itself it would score again every document the
+first day paid for. The first day's export has to go into the new cluster before the
+review starts. Tried on OrbStack's cluster 2026-11-15: 300 exported scores loaded, and the
+review that followed logged `0 to score, 50 skipped` for all six batches.
+
+Run the day as written through step 8 (the whole-year collect gives the same 599,703
+paragraphs in the same order, so the review pulls the same first 20,000 ids) and the
+champion check of step 9. Then, before the review:
+
+Point `EXPORT` at the first day's export folder and check it is the right one:
+
+```
+export EXPORT=$(ls -d data/exports/* | tail -1)
+echo "$EXPORT"
+cat "$EXPORT/counts.txt"
+```
+
+Create the `scores` and `review_jobs` tables. A review with `sample=0` does it: it scores
+nothing, costs nothing and leaves one job row with `sample_size` 0.
+
+```
+uv run prefect deployment run review/review --param criterion=cloud-concentration --param sample=0 --param provider_name=openai --param model=gpt-6-luna --param prompt_version=v2 --watch
+```
+
+Load the two files and count:
+
+```
+kubectl -n elusion exec -i postgres-0 -- psql -U elusion -d elusion -v ON_ERROR_STOP=1 -c "copy scores from stdin with (format csv, header match)" < "$EXPORT/scores.csv"
+kubectl -n elusion exec -i postgres-0 -- psql -U elusion -d elusion -v ON_ERROR_STOP=1 -c "copy review_jobs from stdin with (format csv, header match)" < "$EXPORT/review_jobs.csv"
+kubectl -n elusion exec postgres-0 -- psql -U elusion -d elusion -tAc "select 'scores', count(*) from scores union all select 'review_jobs', count(*) from review_jobs"
+```
+
+Pass: each `COPY` prints the number in `counts.txt`; `scores` equals it, and `review_jobs`
+is one more (the `sample=0` row). Loading a file a second time fails on its primary key
+and changes nothing.
+
+Then start the review of step 9 as written. The new cluster's consumer group starts at
+the beginning of the topic, so no rewind is needed. The early batches log
+`0 to score, 50 skipped` up to where the first day stopped. The spend guard's probe
+needs 20 unscored documents, so its projection line appears only once the run reaches
+them. The rest of the day is unchanged; step 12's export then holds both days.
 
 ## A new terminal mid-day
 

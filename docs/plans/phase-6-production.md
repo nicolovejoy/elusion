@@ -111,6 +111,26 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   gpt-6-luna cloud-concentration/v2`). The call 13 fallback is written out: the managed
   disk render (`corpus.mode=pvc`, `managed-csi`) passes the strict dry run, and the
   copy-out pod plus `kubectl cp` were tried on OrbStack (same SHA-256 out as in).
+- Review of the runbook the evening before, 2026-11-15, with a second rehearsal on
+  OrbStack's cluster (installed, run, removed):
+  - The whole-year `collect` had only run in a container at `limit=5` and `limit=10`.
+    Run for all of 2020 under its 4Gi limit: `Completed`, 599,703 paragraphs in
+    `documents` and on the topic (the local count), the container's `memory.peak` 3.49 GiB.
+    That figure includes file cache the kernel can give back, so it is an upper bound on
+    what the limit has to hold. It fits, with about 0.5 GiB to spare.
+  - Resuming on a later day (the last line of task 8) needs the first day's export loaded
+    into the *new cluster's* Postgres before the review, not into the local one. Written
+    into `infra/README.md` and tried: a `sample=0` review creates the tables at no cost,
+    `COPY ... FROM STDIN (header match)` loads the two files, a second load is refused by
+    the primary key, and a `sample=300` review then skipped all 300.
+  - `infra/README.md` gains the branch for a failed destroy or a lost state file
+    (`az group delete --name rg-elusion`), and the after-destroy checks name the groups
+    and list every resource group in the subscription, which held none before the day.
+  - The Mac idle-slept two minutes into the rehearsal and OrbStack's virtual machine
+    stayed paused through every dark wake, for an hour. A laptop-cluster run that outlasts
+    the session's attention needs `caffeinate -ims -w PID -t SECONDS` on its watcher. The
+    interrupted `collect` resumed its download after the wake and still finished with the
+    right count. On AKS a sleeping Mac only drops the port-forward and `--watch`.
 - Next: the owner's Azure day (task 8), from `infra/README.md`.
 - Then the owner: `judge`,
   `grade` and `evaluate` for 2020 (task 9), the phase note (task 10).
@@ -139,7 +159,10 @@ Open items, each with the task that must close it:
    the revoke step is in task 8.
 4. **`kubectl` 1.33.9 against OrbStack's Kubernetes 1.36.5.** Three minor versions apart,
    outside the supported gap of one. It has answered correctly so far; if it misbehaves
-   in tasks 4 to 6, bring the owner a `brew upgrade` command to approve.
+   in tasks 4 to 6, bring the owner a `brew upgrade` command to approve. Closed
+   2026-11-15: the shell's `kubectl` is Homebrew's 1.37.2 (`/opt/homebrew/bin/kubectl`),
+   one minor version from 1.36; the 1.33.9 binary is the copy OrbStack ships in
+   `~/.orbstack/bin`, which a login shell does not pick first.
 5. **Nothing that identifies the Azure subscription goes into git** (its name, its id,
    the directory id). Terraform reads the id from `ARM_SUBSCRIPTION_ID`. To sign in, plain
    `az login` fails on the multi-factor check; `az login --tenant` with the directory id
@@ -534,7 +557,8 @@ Done in one sitting, commands from `infra/README.md`, the controller alongside:
 11. Next day: read the cost for the resource group in the Azure portal and record it.
 
 If anything blocks for more than an hour, export what exists and destroy; the run is
-resumable on a later day because the export is loaded back first.
+resumable on a later day because the export is loaded back first: into the new cluster's
+Postgres, before the review ("Resuming on a later day" in `infra/README.md`).
 
 ### 9. Bring the scores home
 
