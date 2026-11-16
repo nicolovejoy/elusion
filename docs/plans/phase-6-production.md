@@ -178,11 +178,28 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
   at 11:54 Pacific: `rg-elusion` and `MC_rg-elusion_aks-elusion_westus2` both `false`,
   no resource tagged `project=elusion`, and `NetworkWatcherRG` the only group in the
   subscription (Azure's own, free; see runbook step 13).
-- Next, the owner: runbook step 14 the same day (kubectl back to OrbStack, `docker
-  logout`, local Prefect started, the cluster's OpenAI key revoked and its 1Password
-  item archived), and step 15 the next day (the bill, by resource group).
-- Then: load the export into the local Postgres, then `judge`, `grade` and `evaluate`
-  for 2020 (task 9), the phase note (task 10).
+  Step 14 at 12:13 Pacific: kubectl back on `orbstack`, the `aks-elusion` context,
+  cluster and user removed from the kubeconfig, Docker signed out of the registry, the
+  local Prefect started. The owner archived the 1Password item `OpenAI elusion aks`.
+- Task 9, first bullet, done 2026-11-16: the export `20261116T191631Z` is in the local
+  Postgres. Both files went in by `copy ... with (format csv, header match)` inside one
+  transaction, after the same load had been tried and rolled back. 20,000 scores, all
+  (gpt-6-luna, `cloud-concentration/v2`), every one a paragraph filed in 2020, no key
+  collision, no score without its document; `scores` went from 84,650 to 104,650 rows
+  and `review_jobs` from 15 to 18, the three new ones with `run_env` `aks-elusion`.
+  The 2020 scores' own `cost_usd` sum to $2.194061, $0.000976 above the job's
+  $2.193085. The local pairs show the same small excess (gpt-6-luna v2: $1.959550
+  against $1.958701), so it is how the two totals are kept, not something Azure did.
+  The report's cost line uses the scores' sum.
+- **Do not run `judge`, `grade` or `evaluate` for (gpt-6-luna, v2) yet.** The `--year`
+  option of the addendum is not on the commands: only the readers under them take
+  `years` (commit `bdf024c`). Until it is, those three would read 2018, 2019 and 2020
+  as one pile, draw a new discard sample and pay the judge for it. The other pairs
+  have no 2020 scores and are not affected.
+- Next: the rest of the year filter (the `--year` option on the three commands, the
+  report name and population line, the five reports renamed, the MLflow `years`
+  param), then the owner's `judge`, `grade` and `evaluate` for 2020 (task 9), runbook
+  step 15 the next day (the bill, by resource group), the phase note (task 10).
 
 Open items, each with the task that must close it:
 
