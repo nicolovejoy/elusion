@@ -4,6 +4,10 @@ A `RunReport` holds every number the page shows; `render` turns it into Markdown
 no I/O, so the page can be tested from a fixed set of values. The evaluate flow
 (flows/evaluate.py) gathers the values from Postgres and the gold CSV and writes the file.
 
+A report describes one *population*: the paragraphs filed in the given years and scored
+under one (review model, prompt version) pair. The same pair can have several, e.g. 2018
+and 2019 scored on the laptop and 2020 on the cluster, each with its own page.
+
 Measured metrics (precision, elusion, judge agreement) print their sample as k/n: k
 relevant (or agreeing) out of n labeled. Derived metrics (richness, recall) have no
 sample of their own; they combine the two pile intervals weighted by pile sizes, and
@@ -12,6 +16,7 @@ say so instead of printing a k/n.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -30,7 +35,9 @@ class RunReport:
     seed: int
     discard_n: int  # size of the seeded discard draw
     threshold: int
-    population: int  # every paragraph scored under (review_model, prompt_version)
+    years: tuple[int, ...]  # filing years of the population
+    filed: int  # every paragraph filed in those years, scored or not
+    population: int  # the paragraphs filed in `years` and scored under the pair
     n_flagged: int
     n_discard: int
     precision: Estimate
@@ -38,9 +45,9 @@ class RunReport:
     richness: Estimate
     recall: Estimate
     agreement: Estimate | None  # None when the owner has not labeled anything yet
-    review_cost_usd: float
+    review_cost_usd: float  # the population's scores, each one's own cost, summed
     judge_cost_criterion_usd: float  # whole criterion, every review pair; not part of the total
-    review_jobs: int  # review_jobs rows for the pair
+    review_jobs: int  # review_jobs rows that scored at least one paragraph of the population
     review_wall_clock: timedelta | None  # review_jobs durations summed; None if no rows
     review_unfinished: bool  # a job has no finished_at: wall-clock runs to now
     companies: list[tuple[str, int]]
@@ -53,6 +60,15 @@ class RunReport:
     grade_cost_usd: float = 0.0
     # review_jobs rows per environment they ran in ("local", or a cluster's name).
     review_envs: dict[str, int] = field(default_factory=dict)
+
+
+def years_label(years: Iterable[int]) -> str:
+    """'2018-2019' for [2019, 2018]: every year, in order, joined by '-'.
+
+    Used in the report text and its file name. Every year is listed, never a range, so
+    '2018-2020' can only mean those two years.
+    """
+    return "-".join(str(y) for y in sorted(set(years)))
 
 
 def _interval(e: Estimate) -> str:
@@ -77,12 +93,14 @@ def _envs(envs: dict[str, int]) -> str:
 
 
 def render(r: RunReport) -> str:
+    years = years_label(r.years)
     lines = [
         f"# Review report: {r.criterion}",
         "",
         f"- criterion: {r.criterion}",
         f"- review model: {r.review_model}",
         f"- review prompt version: {r.prompt_version}",
+        f"- filing years: {years}",
         f"- judge model: {r.judge_model}",
         f"- judge prompt version: {r.judge_prompt_version}",
         f"- judge effort: {EFFORT}",
@@ -91,9 +109,11 @@ def render(r: RunReport) -> str:
         "",
         "## Population",
         "",
-        "Every paragraph scored under the review model and prompt version above.",
+        f"Every paragraph filed in {years} and scored under the review model and prompt",
+        "version above.",
         "",
-        f"- population N: {r.population}",
+        f"- population N: {r.population} of {r.filed} paragraphs filed in {years}, "
+        "in ingestion order, not a random draw",
         f"- flagged (score >= {r.threshold}): {r.n_flagged}",
         f"- discard (score < {r.threshold}): {r.n_discard}",
         f"- threshold: {r.threshold}",
@@ -157,15 +177,19 @@ def render(r: RunReport) -> str:
         "",
         "## Cost",
         "",
-        f"- review run: ${r.review_cost_usd:.4f} (sum over {r.review_jobs} review_jobs rows)",
+        f"- review run: ${r.review_cost_usd:.4f} (the cost of this population's scores, summed)",
     ]
-    if r.review_envs:
-        lines.append(f"- review jobs by environment: {_envs(r.review_envs)}")
+    if r.review_jobs:
+        where = f" ({_envs(r.review_envs)})" if r.review_envs else ""
+        lines.append(f"- review jobs that scored this population: {r.review_jobs}{where}")
     lines += [
         f"- judge run: ${r.judge_cost_criterion_usd:.4f} "
         "(whole criterion, every review pair: judge-runs ledger)",
-        f"- grade run: ${r.grade_cost_usd:.4f} (this review pair: grade-runs ledger)",
-        f"- total for this pair (review + grade): ${total:.4f}",
+        f"- grade run: ${r.grade_cost_usd:.4f} (this population: grade-runs ledger)",
+        f"- total for this population (review + grade): ${total:.4f}",
+        "",
+        "A billed call that left no score (a refusal, a truncated answer) is in its review",
+        "job's own total and is not in this sum.",
         "",
         "## Wall-clock",
         "",

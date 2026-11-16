@@ -21,15 +21,21 @@ skipped, and a failed call (refusal, truncation, invalid JSON) writes no row, so
 re-run retries exactly those ids. There is no Kafka here: the gold ids are a fixed list.
 
 `evaluate`: scores + judge labels (+ rationale grades, if any) -> metrics ->
-docs/reports/<criterion>-<model>-<v>.md. It makes no LLM call. The two piles are
+docs/reports/<criterion>-<model>-<v>-<years>.md. It makes no LLM call. The two piles are
 recomputed from the current scores, not taken from the CSV `pile` column, so the report
 always describes the scores as they stand.
+
+Both flows work on one *population*: the paragraphs filed in the given `years` and
+scored under one (review model, prompt version) pair. `years` has no default. The same
+pair can hold several populations (2018 and 2019 scored on the laptop, 2020 on the
+cluster), and each keeps its own piles, discard draw, report file and MLflow run.
 """
 
 from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -39,7 +45,7 @@ from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
 from sqlalchemy.engine import Engine
 
-from elusion.collect.db import company_counts
+from elusion.collect.db import company_counts, count_documents
 from elusion.config import settings
 from elusion.evaluate import metrics
 from elusion.evaluate.gold import (
@@ -58,7 +64,7 @@ from elusion.evaluate.gold import (
     split_piles,
 )
 from elusion.evaluate.grades import grade_cost_usd, grade_runs_path, grades_path, rows_for
-from elusion.evaluate.report import RunReport, render
+from elusion.evaluate.report import RunReport, render, years_label
 from elusion.evaluate.tracking import log_run
 from elusion.flows.review import (
     PROBE_DOCS,
@@ -70,7 +76,7 @@ from elusion.flows.review import (
 )
 from elusion.review import db
 from elusion.review.corpus import load_texts
-from elusion.review.db import jobs_summary, provider_for, scores_for
+from elusion.review.db import jobs_summary, provider_for, scores_cost_usd, scores_for
 from elusion.review.prompt import PROMPTS_DIR, load_prompt
 from elusion.review.providers import AnthropicProvider, Judge
 
@@ -285,10 +291,13 @@ class EvalResult:
     run_id: str | None
 
 
-def report_path(reports_dir: Path, criterion: str, model: str, prompt_version: str) -> Path:
+def report_path(
+    reports_dir: Path, criterion: str, model: str, prompt_version: str, years: Sequence[int]
+) -> Path:
+    """docs/reports/<criterion>-<model>-<version>-<years>.md, e.g. `...-v2-2018-2019.md`."""
     # Windows rejects < > : " / \ | ? * in a filename; an Ollama tag like qwen2.5:14b has a colon.
     name = re.sub(r'[<>:"/\\|?*]', "-", f"{criterion}-{model}-{prompt_version}")
-    return reports_dir / f"{name}.md"
+    return reports_dir / f"{name}-{years_label(years)}.md"
 
 
 def report_date(now: datetime) -> str:
@@ -304,6 +313,8 @@ def report_date(now: datetime) -> str:
 def evaluate(
     criterion: str,
     prompt_version: str = "v2",
+    *,
+    years: list[int],
     threshold: int = 3,
     seed: int = DEFAULT_SEED,
     engine: Engine | None = None,
@@ -315,18 +326,23 @@ def evaluate(
     today: str | None = None,
     log_mlflow: bool = True,
 ) -> EvalResult:
-    """Compute the metrics of the review run (review_model, `prompt_version`) from the
-    judge's labels, write the Markdown report and log one MLflow run for it.
+    """Compute the metrics of the review run (review_model, `prompt_version`) over the
+    paragraphs filed in `years`, from the judge's labels; write the Markdown report and
+    log one MLflow run for it.
 
-    Flagged = every doc scoring >= `threshold` under the pair; each must carry a label by
-    `judge_model`, otherwise MissingLabels (re-running `elusion judge` fills them). The
-    discard sample = the seeded draw of `discard_n` from this pair's own discard pile
+    Everything is read for that population only: the scores, their cost (each score's
+    own `cost_usd`, summed), the review jobs that scored them and the grading spend.
+
+    Flagged = every doc of the population scoring >= `threshold` under the pair; each
+    must carry a label by `judge_model`, otherwise MissingLabels (re-running `elusion
+    judge` fills them). The discard sample = the seeded draw of `discard_n` from the
+    population's own discard pile
     (`split_piles`, the same draw `elusion judge` made); each drawn doc must carry a label
     by `judge_model`, otherwise MissingDiscardLabels. Labels for docs outside the draw
     (e.g. flagged by another review run) are never counted, so elusion stays a uniform
     sample. Tests pass a fake `engine` and their own paths.
 
-    An unfinished review job for the pair only warns (on stderr): the report is still
+    An unfinished review job that scored the population only warns (on stderr): the report is still
     written, and its wall-clock line says a job has not finished.
 
     The report is written before MLflow is touched. If logging fails (server down) the
@@ -338,17 +354,18 @@ def evaluate(
     engine = engine or db.make_engine(settings.database_url)
     csv = gold_path(criterion, data_dir or settings.data_dir)
     version = f"{criterion}/{prompt_version}"
+    years = sorted(set(years))
 
-    jobs = jobs_summary(engine, review_model, version)
+    jobs = jobs_summary(engine, review_model, version, years)
     if jobs["unfinished"]:
         msg = _unfinished_msg(jobs, review_model, version)
         msg += "; the scores may be partial, so this report may be too"
         print(f"WARNING: {msg}", file=sys.stderr)
         log.warning(msg)
 
-    scores = scores_for(engine, review_model, version)
+    scores = scores_for(engine, review_model, version, years)
     if not scores:
-        raise RuntimeError(f"no scores for ({review_model}, {version})")
+        raise RuntimeError(f"no scores for ({review_model}, {version}) filed in {years}")
     flagged = {d for d, s in scores.items() if s >= threshold}
     judged = {r.doc_id: r for r in judge_rows(csv) if r.labeler == judge_model}
     missing = flagged - judged.keys()
@@ -397,7 +414,9 @@ def evaluate(
             grader_prompt_version=", ".join(
                 sorted({g.grader_prompt_version for g in grades.values()})
             ),
-            grade_cost_usd=grade_cost_usd(grade_runs_path(grades_csv), review_model, version),
+            grade_cost_usd=grade_cost_usd(
+                grade_runs_path(grades_csv), review_model, version, years
+            ),
         )
 
     report = RunReport(
@@ -410,6 +429,8 @@ def evaluate(
         seed=seed,
         discard_n=discard_n,
         threshold=threshold,
+        years=tuple(years),
+        filed=sum(count_documents(engine, y) for y in years),
         population=len(scores),
         n_flagged=n_flagged,
         n_discard=n_discard,
@@ -418,7 +439,7 @@ def evaluate(
         richness=metrics.richness(precision, elusion, n_flagged, n_discard),
         recall=metrics.recall(precision, elusion, n_flagged, n_discard),
         agreement=agreement,
-        review_cost_usd=jobs["cost_usd"],
+        review_cost_usd=scores_cost_usd(engine, review_model, version, years),
         judge_cost_criterion_usd=judge_cost_usd(judge_runs_path(csv)),
         review_jobs=jobs["jobs"],
         review_wall_clock=wall_clock,
@@ -427,7 +448,7 @@ def evaluate(
         companies=company_counts(engine, relevant),
         **graded,
     )
-    path = report_path(reports_dir, criterion, review_model, prompt_version)
+    path = report_path(reports_dir, criterion, review_model, prompt_version, years)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render(report), encoding="utf-8")
     log.info("report written to %s", path)

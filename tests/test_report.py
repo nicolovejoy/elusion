@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from elusion.evaluate.metrics import Estimate
-from elusion.evaluate.report import RunReport, render
+from elusion.evaluate.report import RunReport, render, years_label
 
 
 def make_report(**kw) -> RunReport:
@@ -15,6 +15,8 @@ def make_report(**kw) -> RunReport:
         seed=20261104,
         discard_n=200,
         threshold=2,
+        years=(2018, 2019),
+        filed=1004312,
         population=12906,
         n_flagged=117,
         n_discard=12789,
@@ -79,11 +81,11 @@ def test_render_says_population_not_corpus() -> None:
 def test_render_cost_wall_clock_and_companies() -> None:
     md = render(make_report())
     assert "$0.8340" in md and "$1.2300" in md and "$2.0640" not in md
-    assert "- total for this pair (review + grade): $0.8340" in md
-    assert md.index("judge run:") < md.index("total for this pair")
+    assert "- total for this population (review + grade): $0.8340" in md
+    assert md.index("judge run:") < md.index("total for this population")
     assert "summed over 2 review_jobs rows (each from its start to its finish): 0:45:12" in md
     assert "judge run: $1.2300 (whole criterion, every review pair: judge-runs ledger)" in md
-    assert "(this review pair: grade-runs ledger)" in md
+    assert "(this population: grade-runs ledger)" in md
     assert "- Acme Corp: 5\n- Beta Inc: 2" in md
 
 
@@ -152,20 +154,46 @@ def test_render_without_grades_says_so() -> None:
 def test_render_cost_includes_the_grade_run() -> None:
     md = render(make_report(**GRADED))
     assert "- grade run: $0.2500" in md
-    assert f"- total for this pair (review + grade): ${0.834 + 0.25:.4f}" in md
+    assert f"- total for this population (review + grade): ${0.834 + 0.25:.4f}" in md
 
 
-def test_render_lists_review_jobs_per_environment() -> None:
+def test_render_lists_the_jobs_that_scored_the_population_per_environment() -> None:
     md = render(make_report(review_jobs=6, review_envs={"aks-elusion": 1, "local": 5}))
-    assert "- review jobs by environment: 5 local, 1 on aks-elusion" in md
-    assert md.index("review run:") < md.index("review jobs by environment") < md.index("judge run:")
+    line = "- review jobs that scored this population: 6 (5 local, 1 on aks-elusion)"
+    assert line in md
+    assert md.index("review run:") < md.index(line) < md.index("judge run:")
 
 
 def test_render_one_environment() -> None:
     md = render(make_report(review_envs={"local": 2}))
-    assert "- review jobs by environment: 2 local\n" in md
+    assert "- review jobs that scored this population: 2 (2 local)\n" in md
 
 
-def test_render_without_jobs_has_no_environment_line() -> None:
+def test_render_without_jobs_has_no_jobs_line() -> None:
     md = render(make_report(review_jobs=0, review_wall_clock=None))
-    assert "by environment" not in md
+    assert "review jobs that scored" not in md
+
+
+def test_years_label_lists_every_year_in_order() -> None:
+    assert years_label([2019, 2018]) == "2018-2019"
+    assert years_label([2020]) == "2020"
+    assert years_label((2018, 2020)) == "2018-2020"  # every year is listed, so this is two
+    assert years_label([2020, 2018, 2019, 2019]) == "2018-2019-2020"
+
+
+def test_render_names_the_filing_years_and_what_the_population_is_a_part_of() -> None:
+    md = render(make_report())
+    assert "- filing years: 2018-2019\n" in md
+    assert (
+        "- population N: 12906 of 1004312 paragraphs filed in 2018-2019, "
+        "in ingestion order, not a random draw\n" in md
+    )
+    one = render(make_report(years=(2020,), filed=599703, population=20000))
+    assert "- filing years: 2020\n" in one
+    assert "- population N: 20000 of 599703 paragraphs filed in 2020, in ingestion order" in one
+
+
+def test_render_review_cost_is_the_populations_own_scores() -> None:
+    md = " ".join(render(make_report()).split())
+    assert "- review run: $0.8340 (the cost of this population's scores, summed)" in md
+    assert "A billed call that left no score" in md and "is not in this sum" in md

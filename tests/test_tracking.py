@@ -149,3 +149,9 @@ def test_run_params_lists_run_envs_sorted_and_only_when_known(report):
     p = run_params(make_report(review_envs={"local": 5, "aks-elusion": 1}), "openai", Path("r.md"))
     assert p["run_envs"] == "aks-elusion,local"
     assert "run_envs" not in run_params(report, "anthropic", Path("r.md"))
+
+
+def test_run_params_names_the_filing_years(report):
+    assert run_params(report, "anthropic", Path("r.md"))["years"] == "2018,2019"
+    one = make_report(years=(2020,))
+    assert run_params(one, "openai", Path("r.md"))["years"] == "2020"
