@@ -23,9 +23,10 @@ deployments:
     work_pool:
       name: elusion
       job_variables:
-        # A whole year's paragraphs are held in memory (about 3 GB).
+        # A whole year's paragraphs are held in memory. The 2020 rehearsal peaked at
+        # 3.49 GiB (memory.peak, file cache included), so the limit leaves 1.5 GiB over it.
         memory_request: 3Gi
-        memory_limit: 4Gi
+        memory_limit: 5Gi
         cpu_request: 500m
         cpu_limit: "1"
 

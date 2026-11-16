@@ -65,7 +65,7 @@ from prefect.client.schemas.objects import FlowRun
 from prefect_kubernetes.worker import KubernetesWorkerJobConfiguration
 tpl = json.load(sys.stdin)
 cfg = asyncio.run(KubernetesWorkerJobConfiguration.from_template_and_values(
-    tpl, {"memory_request": "3Gi", "memory_limit": "4Gi"}))
+    tpl, {"memory_request": "3Gi", "memory_limit": "5Gi"}))
 cfg.prepare_for_flow_run(FlowRun(id=uuid.uuid4(), name="check", flow_id=uuid.uuid4()))
 m = cfg.job_manifest
 m["metadata"]["name"] = "check"

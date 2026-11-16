@@ -118,6 +118,8 @@ As of 2026-11-15, on branch `phase-6-production` (pushed, no pull request yet):
     `documents` and on the topic (the local count), the container's `memory.peak` 3.49 GiB.
     That figure includes file cache the kernel can give back, so it is an upper bound on
     what the limit has to hold. It fits, with about 0.5 GiB to spare.
+    The owner raised the limit to 5Gi the next morning (2026-11-16): the nodes have room,
+    and an out-of-memory kill on paid time would cost a `helm upgrade` and a second collect.
   - Resuming on a later day (the last line of task 8) needs the first day's export loaded
     into the *new cluster's* Postgres before the review, not into the local one. Written
     into `infra/README.md` and tried: a `sample=0` review creates the tables at no cost,
