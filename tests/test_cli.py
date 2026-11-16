@@ -3,6 +3,9 @@ from typer.testing import CliRunner
 from elusion import __version__
 from elusion.cli import app
 
+# judge, grade and evaluate refuse to run without the filing years of their population.
+YEARS = ["--year", "2019", "--year", "2018"]
+
 
 def test_version_command_prints_version() -> None:
     result = CliRunner().invoke(app, ["version"])
@@ -69,12 +72,20 @@ def test_judge_command_passes_criterion_name_and_defaults(monkeypatch) -> None:
     monkeypatch.setattr(mod, "judge", fake_flow)
     result = CliRunner().invoke(
         app,
-        ["judge", "--criterion", "criteria/cloud-concentration.md", "--prompt-version", "v2"],
+        [
+            "judge",
+            "--criterion",
+            "criteria/cloud-concentration.md",
+            "--prompt-version",
+            "v2",
+            *YEARS,
+        ],
     )
     assert result.exit_code == 0, result.output
     assert seen == {
         "criterion": "cloud-concentration",
         "prompt_version": "v2",
+        "years": [2018, 2019],
         "threshold": 3,
         "discard_n": 200,
         "seed": DEFAULT_SEED,
@@ -108,12 +119,20 @@ def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> 
     monkeypatch.setattr(mod, "evaluate", fake_flow)
     result = CliRunner().invoke(
         app,
-        ["evaluate", "--criterion", "criteria/cloud-concentration.md", "--prompt-version", "v2"],
+        [
+            "evaluate",
+            "--criterion",
+            "criteria/cloud-concentration.md",
+            "--prompt-version",
+            "v2",
+            *YEARS,
+        ],
     )
     assert result.exit_code == 0, result.output
     assert seen == {
         "criterion": "cloud-concentration",
         "prompt_version": "v2",
+        "years": [2018, 2019],
         "threshold": 3,
         "seed": DEFAULT_SEED,
         "review_model": None,
@@ -136,7 +155,7 @@ def test_judge_force_flag_is_passed(monkeypatch, tmp_path) -> None:
     seen = {}
     monkeypatch.setattr(mod, "judge", lambda criterion, **kw: seen.update(kw) or "ok")
     r = CliRunner().invoke(
-        app, ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v2", "--force"]
+        app, ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v2", *YEARS, "--force"]
     )
     assert r.exit_code == 0, r.output
     assert seen["force"] is True
@@ -149,7 +168,9 @@ def test_judge_refusal_exits_1_without_traceback(monkeypatch, tmp_path) -> None:
         raise mod.ReviewStillRunning("review job job-abc is still running")
 
     monkeypatch.setattr(mod, "judge", refuse)
-    r = CliRunner().invoke(app, ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v2"])
+    r = CliRunner().invoke(
+        app, ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v2", *YEARS]
+    )
     assert r.exit_code == 1
     assert "job-abc is still running" in r.output
     assert not isinstance(r.exception, mod.ReviewStillRunning)
@@ -163,7 +184,7 @@ def test_evaluate_missing_labels_exits_1_without_traceback(monkeypatch, tmp_path
 
     monkeypatch.setattr(mod, "evaluate", missing)
     r = CliRunner().invoke(
-        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2", *YEARS]
     )
     assert r.exit_code == 1
     assert "2 flagged paragraphs have no label" in r.output
@@ -178,7 +199,7 @@ def test_evaluate_no_labeled_rows_exits_1(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(mod, "evaluate", empty)
     r = CliRunner().invoke(
-        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2", *YEARS]
     )
     assert r.exit_code == 1
     assert "no labeled rows in the discard pile" in r.output
@@ -192,7 +213,7 @@ def test_evaluate_other_value_errors_still_raise(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(mod, "evaluate", bug)
     r = CliRunner().invoke(
-        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2", *YEARS]
     )
     assert isinstance(r.exception, ValueError)
 
@@ -210,7 +231,7 @@ def test_review_model_and_discard_n_pass_through(monkeypatch, tmp_path) -> None:
         "evaluate",
         lambda criterion, **kw: seen_e.update(kw) or EvalResult(Path("p.md"), None),
     )
-    base = ["--criterion", _crit(tmp_path), "--prompt-version", "v2", "--review-model", "x"]
+    base = ["--criterion", _crit(tmp_path), "--prompt-version", "v2", *YEARS, "--review-model", "x"]
     assert CliRunner().invoke(app, ["judge", *base]).exit_code == 0
     assert CliRunner().invoke(app, ["evaluate", *base, "--discard-n", "50"]).exit_code == 0
     assert seen_j["review_model"] == "x"
@@ -225,7 +246,7 @@ def test_evaluate_missing_discard_labels_exits_1(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(mod, "evaluate", missing)
     r = CliRunner().invoke(
-        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+        app, ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v2", *YEARS]
     )
     assert r.exit_code == 1 and "Traceback" not in r.output
     assert "2 sampled discard paragraphs" in r.output
@@ -318,18 +339,21 @@ def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         mod, "grade", lambda criterion, **kw: seen.update(criterion=criterion, **kw) or "grade ok"
     )
-    r = CliRunner().invoke(app, ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v2"])
+    r = CliRunner().invoke(
+        app, ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v2", *YEARS]
+    )
     assert r.exit_code == 0, r.output
     assert seen == {
         "criterion": "c",
         "prompt_version": "v2",
+        "years": [2018, 2019],
         "review_model": None,
         "threshold": 3,
         "max_run_usd": None,
     }
     assert "grade ok" in r.output
     seen.clear()
-    args = ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v3"]
+    args = ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v3", *YEARS]
     args += ["--review-model", "m", "--threshold", "4", "--max-run-usd", "2.5"]
     r = CliRunner().invoke(app, args)
     assert r.exit_code == 0, r.output
@@ -356,3 +380,44 @@ def test_promote_reviewer_error_exits_1_without_traceback(monkeypatch) -> None:
     monkeypatch.setattr(mod, "promote", bad)
     r = CliRunner().invoke(app, ["promote", "--run", "x"])
     assert r.exit_code == 1 and "error: no run 'x'" in r.output
+
+
+def test_judge_grade_and_evaluate_refuse_to_run_without_a_year(monkeypatch, tmp_path) -> None:
+    """No default: a pair can hold several populations, and a run must name its own."""
+    import elusion.flows.evaluate as ev
+    import elusion.flows.grade as gr
+
+    called = []
+    monkeypatch.setattr(ev, "judge", lambda *a, **kw: called.append("judge"))
+    monkeypatch.setattr(ev, "evaluate", lambda *a, **kw: called.append("evaluate"))
+    monkeypatch.setattr(gr, "grade", lambda *a, **kw: called.append("grade"))
+    for command in ("judge", "grade", "evaluate"):
+        r = CliRunner().invoke(
+            app, [command, "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+        )
+        assert r.exit_code == 2, command
+        assert "--year" in r.output, command
+    assert called == []
+
+
+def test_grade_command_passes_the_years(monkeypatch, tmp_path) -> None:
+    import elusion.flows.grade as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "grade", lambda criterion, **kw: seen.update(kw) or "graded")
+    r = CliRunner().invoke(
+        app, ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v2", "--year", "2020"]
+    )
+    assert r.exit_code == 0, r.output
+    assert seen["years"] == [2020] and "graded" in r.output
+
+
+def test_a_year_given_twice_counts_once(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "judge", lambda criterion, **kw: seen.update(kw) or "ok")
+    args = ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v2"]
+    r = CliRunner().invoke(app, [*args, "--year", "2020", "--year", "2020"])
+    assert r.exit_code == 0, r.output
+    assert seen["years"] == [2020]
