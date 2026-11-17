@@ -32,6 +32,7 @@ from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
 
 from elusion.config import settings
+from elusion.corpora import corpus_for
 from elusion.evaluate.grades import (
     GradeRow,
     append_grade_run,
@@ -140,7 +141,7 @@ def grade(
     if not todo:
         return summary
 
-    texts = load_texts(settings.corpus_dir)
+    texts = load_texts(corpus_for(criterion).text_dir(settings.data_dir))
     missing = [d for d in todo if d not in texts]
     if missing:
         raise KeyError(f"{len(missing)} ids not in the Parquet corpus, e.g. {missing[0]}")

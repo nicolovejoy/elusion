@@ -149,3 +149,22 @@ def test_label_rounds_odd_n_down_with_a_note(tmp_path, monkeypatch, capsys):
     mod.label("c", 7, seed=1)
     assert seen["n"] == 6
     assert "rounding n=7 down to 6" in capsys.readouterr().out
+
+
+def test_label_reads_the_texts_of_the_criterions_corpus(monkeypatch, tmp_path):
+    import dataclasses
+
+    import elusion.config as config
+    import elusion.evaluate.label as mod
+    import elusion.review.corpus as corpus_mod
+
+    seen = []
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path))
+    monkeypatch.setattr(mod, "select_for_audit", lambda path, n, seed: [("f00", "flagged")] * n)
+    monkeypatch.setattr(corpus_mod, "load_texts", lambda text_dir: seen.append(text_dir) or {})
+    monkeypatch.setattr(
+        mod, "run_session", lambda path, texts, sel: {"answered": 0, "skipped": 0, "remaining": 0}
+    )
+    mod.label("cloud-concentration", 2)
+    mod.label("auditable-decisions", 2)
+    assert seen == [tmp_path / "corpus", tmp_path / "abstracts"]

@@ -1,9 +1,9 @@
 # Phase 7 spec: the literature matter
 
 Status: drafted 2026-11-16; the owner confirmed all fifteen calls as recommended the same
-day (`docs/DECISIONS.md`). Task 0 is done (its results are under the task); no code is
-written. Next is task 1. One point is open for the owner: the first anchor has 44 citing
-works, not 75 (task 0 results, "The anchors"). Read `docs/ARCHITECTURE.md`,
+day (`docs/DECISIONS.md`). Tasks 0 and 1 are done (results under each task). Next is
+task 2. One point is open for the owner: whether to add search terms for agent papers
+(under call 3). Read `docs/ARCHITECTURE.md`,
 the Phase 7 checklist in `docs/PHASES.md`, `docs/FIELD-NOTES.md` (sections 2, 4 and 5)
 and the 2026-11-15 phase 7 line in `docs/DECISIONS.md` first. Hard rules in `CLAUDE.md`
 apply to every line below. The phase 6 spec (`docs/plans/phase-6-production.md`) is the
@@ -130,6 +130,31 @@ is still approved by the owner in task 4, before any call is paid for.
    net that keeps richness low. The last three terms are new since DECISIONS 2026-11-15;
    "predictive coding" stays out (it is also a neuroscience theory). Recommended as
    listed. Dropping "audit trail" roughly halves the cost and the noise.
+
+   **Open (raised by the owner, 2026-11-16): terms for agent papers.** The nine terms
+   return 12,471 distinct works, not 16,000: many works match more than one term. They
+   reach a paper about auditing an AI agent only when it happens to use one of the nine
+   phrases. Of about 9,060 works matching the agent terms below, about 300 are already
+   in the harvest. Counts are of works the nine terms do not return, taken on
+   2026-11-16 with exact matching, and are approximate.
+
+   | Added terms | New works |
+   |---|---|
+   | agent phrases AND (audit, audits, auditing, auditable, auditability) | 3,900 |
+   | ... AND (accountability, accountable) | 1,500 more |
+   | ... AND traceability or provenance; "human oversight" or "human-in-the-loop"; logging or observability | 3,300 more |
+   | "AI audit", "algorithmic audit" and their variants; "decision provenance" | 1,300 more |
+   | language models AND (auditable, auditability); language models AND "human oversight"; contestability AND AI | 7,100 more |
+
+   The agent phrases are "AI agent", "LLM agent", "LLM-based agent", "agentic AI",
+   "agentic system", "agentic workflow" and "autonomous agent", each with its plural.
+   These terms need the `.exact` form of the search: stemmed, "agentic" becomes "agent"
+   (766,639 works) and "auditability" becomes "audit". The custody row would record
+   which form each term used. The options put to the owner: A, the first row only
+   (about 16,400 works, the size the cost estimate assumed); B, the first four rows
+   (about 22,500 works, about $2 more review and a larger judge run; recommended); C,
+   all five (about 29,600). None of the four anchors of call 6 is an agent paper, so
+   with A, B or C a fifth anchor is needed for harvest recall to test the new terms.
 
 4. **The reviewer.** gpt-6-luna, the champion's model, with a new `auditable-decisions/v1`
    prompt built on the structure of `cloud-concentration/v2`; judge `claude-opus-5-5`
@@ -342,14 +367,37 @@ Part A.
      (checked on Raji). The documentation does not promise the same sample after the
      catalogue changes, so the custody rows are the record of what was drawn, and a
      re-run does not draw again for an anchor that already has its seeds.
-   - **Open for the owner.** Cormack and Grossman has 44 citing works in the window,
-     fewer than the 75 of call 6. Proposed: take all 44, which is a census of that pool
-     and not a sample, and 75 from each of the others, 269 seeds in place of 300. The
-     alternative is a different anchor for the review strand.
+   - Cormack and Grossman has 44 citing works in the window, fewer than the 75 of call
+     6. Settled 2026-11-16: take all 44, which is a census of that pool and not a
+     sample, and 75 from each of the others, 269 seeds in place of 300. E-discovery is
+     a small research field, so another anchor for that strand would have a small pool
+     too.
    - The O'Mara-Eves paper has an erratum (`W2147469877`) that is itself cited 354
      times. Works that cite only the erratum are outside the pool. Left as it is.
 1. **Two corpora.** Call 7. Tests first: an `edgar` review never reads an `openalex` id
    and the reverse; the 2018-2019 report regenerates byte for byte.
+
+   **Results (2026-11-16).** 290 tests pass, 15 of them new.
+
+   - `src/elusion/corpora.py` is the one committed place: it defines the two corpora
+     (name, topic, text directory) and maps each criterion to one. A criterion that is
+     not in the map is refused before a job row or a model call exists.
+   - `documents` has `corpus` (`edgar` by default) and `cik` is nullable.
+     `collect.db.ensure_schema` alters an existing table; the laptop's 1,604,015 rows
+     all read `edgar`. A dump taken first is in `data/backups/`.
+   - `review`, `judge`, `grade` and `label` read the topic and the text directory of
+     the criterion's corpus. A document of the other corpus has no text there, so the
+     run fails before any call. The consumer group names did not change.
+   - The report's count of documents in the population's years is of the criterion's
+     corpus only.
+   - Not done, and why: the readers of `scores` take no corpus. A score's prompt
+     version begins with its criterion, and a criterion has one corpus, so a pair's
+     scores cannot span two.
+   - The six committed reports were regenerated with the code before and after this
+     task, with their original dates: each pair is identical. Against the committed
+     files, the 2020 report is identical and the five 2018-2019 reports are not, with
+     or without this task: phase 6 changed the report's wording and cost lines after
+     they were written, and they were renamed but never regenerated.
 2. **Harvest.** A Prefect flow: for each term, page through OpenAlex, rebuild each
    abstract, write the custody rows, the Parquet text, the `documents` rows and the
    topic messages. Safe to re-run: a known (work, hash) adds a custody row for the new

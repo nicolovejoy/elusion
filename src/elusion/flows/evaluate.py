@@ -47,6 +47,7 @@ from sqlalchemy.engine import Engine
 
 from elusion.collect.db import company_counts, count_documents
 from elusion.config import settings
+from elusion.corpora import corpus_for
 from elusion.evaluate import metrics
 from elusion.evaluate.gold import (
     DEFAULT_SEED,
@@ -184,7 +185,7 @@ def judge(
     if not todo:
         return summary
 
-    texts = load_texts(settings.corpus_dir)
+    texts = load_texts(corpus_for(criterion).text_dir(settings.data_dir))
     missing = [d for d in todo if d not in texts]
     if missing:
         raise KeyError(f"{len(missing)} ids not in the Parquet corpus, e.g. {missing[0]}")
@@ -430,7 +431,7 @@ def evaluate(
         discard_n=discard_n,
         threshold=threshold,
         years=tuple(years),
-        filed=sum(count_documents(engine, y) for y in years),
+        filed=sum(count_documents(engine, y, corpus_for(criterion).name) for y in years),
         population=len(scores),
         n_flagged=n_flagged,
         n_discard=n_discard,

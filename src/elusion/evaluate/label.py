@@ -92,6 +92,7 @@ def label(criterion: str, n: int, seed: int = DEFAULT_SEED) -> str:
     down (with a note) rather than silently labeling one fewer than asked.
     """
     from elusion.config import settings
+    from elusion.corpora import corpus_for
     from elusion.review.corpus import load_texts
 
     if n < 2:
@@ -109,6 +110,6 @@ def label(criterion: str, n: int, seed: int = DEFAULT_SEED) -> str:
     for pile in ("flagged", "discard"):
         if sum(1 for _, p in selection if p == pile) < n // 2:
             typer.echo(f"note: fewer than {n // 2} unlabeled '{pile}' paragraphs; taking all")
-    texts = load_texts(settings.corpus_dir)
+    texts = load_texts(corpus_for(criterion).text_dir(settings.data_dir))
     s = run_session(path, texts, selection)
     return f"answered {s['answered']}, skipped {s['skipped']}, remaining {s['remaining']}"

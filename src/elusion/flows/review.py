@@ -34,6 +34,7 @@ from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
 
 from elusion.config import settings
+from elusion.corpora import corpus_for
 from elusion.review import db
 from elusion.review.corpus import load_texts
 from elusion.review.pricing import cost_usd
@@ -222,6 +223,9 @@ def review(
         raise ProviderConfigError(
             f"the judge model cannot be a reviewer: {provider.model!r} is ELUSION_JUDGE_MODEL"
         )
+    # Which topic and which text directory: the criterion's corpus, and no other. Looked up
+    # before the job row exists, so a criterion that names no corpus starts nothing.
+    corpus = corpus_for(criterion)
     engine = db.make_engine(settings.database_url)
     db.ensure_schema(engine)
     job_id = db.start_job(
@@ -260,9 +264,9 @@ def review(
         if ids is None:
             group = group_id(criterion, provider.model, prompt.version)
             log.info("kafka consumer group %s", group)
-            ids = KafkaIdSource(settings.kafka_bootstrap, group)
+            ids = KafkaIdSource(settings.kafka_bootstrap, group, corpus.topic)
         t0 = time.monotonic()
-        texts = load_texts(settings.corpus_dir)
+        texts = load_texts(corpus.text_dir(settings.data_dir))
         log.info("loaded %s paragraph texts in %.1fs", len(texts), time.monotonic() - t0)
 
         probe_costs: list[float] = []  # billed cost of every probe attempt, failures included

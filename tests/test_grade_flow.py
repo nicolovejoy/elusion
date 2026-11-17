@@ -220,3 +220,20 @@ def test_no_verdicts_is_an_error(env, monkeypatch) -> None:
     path, _ = env
     with pytest.raises(RuntimeError, match=r"no flagged scores for \(rev, c/v2\)"):
         mod.grade("c", "v2", years=[2020], review_model="rev", grader=FakeGrader(), grades_csv=path)
+
+
+def test_grade_reads_the_texts_of_the_criterions_corpus(env, monkeypatch) -> None:
+    import elusion.flows.grade as mod
+    from elusion.config import settings
+    from elusion.flows.grade import grade
+
+    path, texts = env
+    seen = []
+    monkeypatch.setattr(mod, "load_texts", lambda text_dir: seen.append(text_dir) or dict(texts))
+    for criterion in ("c", "auditable-decisions"):
+        grade(
+            criterion, "v2", years=[2018, 2019], review_model="rev",
+            verdicts=verdicts_of(2), grader=FakeGrader(),
+            grades_csv=path.with_name(f"{criterion}.csv"),
+        )  # fmt: skip
+    assert seen == [settings.data_dir / "corpus", settings.data_dir / "abstracts"]

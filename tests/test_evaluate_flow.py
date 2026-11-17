@@ -61,7 +61,8 @@ def env(monkeypatch, tmp_path):
         seen["scores_cost_usd"] = (engine, model, prompt_version, years)
         return 0.60  # not the jobs' 0.75: the report's review cost is the scores' own
 
-    def fake_count_documents(engine, year):
+    def fake_count_documents(engine, year, corpus):
+        seen.setdefault("count_documents", []).append((year, corpus))
         return {2018: 600, 2019: 400, 2020: 5000}[year]
 
     def fake_jobs_summary(engine, model, prompt_version, years):
@@ -460,3 +461,9 @@ def test_report_path_has_no_character_windows_rejects(tmp_path) -> None:
     assert got.name == "cloud-concentration-qwen2.5-14b-v2-2018-2019.md"
     bad = report_path(tmp_path, "c", 'a<b>c:d"e/f\\g|h?i*j', "x/y", [2020])
     assert bad.name == "c-a-b-c-d-e-f-g-h-i-j-x-y-2020.md"
+
+
+def test_filed_counts_only_documents_of_the_criterions_corpus(env) -> None:
+    tmp_path, seen = env
+    run(tmp_path)
+    assert seen["count_documents"] == [(2018, "edgar"), (2019, "edgar")]

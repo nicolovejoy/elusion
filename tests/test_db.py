@@ -70,3 +70,53 @@ def test_company_counts_sorted_by_count_then_name() -> None:
     finally:
         with engine.begin() as conn:
             conn.execute(sa.delete(documents).where(documents.c.cik == cik))
+
+
+def _doc(year: int, **extra) -> dict:
+    return {
+        "doc_id": uuid.uuid4().hex[:16],
+        "year": year,
+        "paragraph_index": 0,
+        "word_count": 3,
+        **extra,
+    }
+
+
+def test_a_row_without_a_corpus_is_a_10k_row_and_an_abstract_needs_no_filer() -> None:
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    old_style = _doc(1998, cik="1")  # what every row written before the column looked like
+    abstract = _doc(1998, corpus="openalex")  # no cik: an abstract has no filer
+    ids = [old_style["doc_id"], abstract["doc_id"]]
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.insert(documents), [old_style])
+            conn.execute(sa.insert(documents), [abstract])
+            found = dict(
+                conn.execute(
+                    sa.select(documents.c.doc_id, documents.c.corpus).where(
+                        documents.c.doc_id.in_(ids)
+                    )
+                ).all()
+            )
+        assert found == {old_style["doc_id"]: "edgar", abstract["doc_id"]: "openalex"}
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(documents).where(documents.c.doc_id.in_(ids)))
+
+
+def test_count_documents_counts_one_corpus_when_two_share_a_year() -> None:
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    rows = [_doc(1997, cik="1"), _doc(1997, cik="1"), _doc(1997, corpus="openalex")]
+    ids = [r["doc_id"] for r in rows]
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.insert(documents), rows[:2])
+            conn.execute(sa.insert(documents), rows[2:])
+        assert count_documents(engine, 1997, corpus="edgar") == 2
+        assert count_documents(engine, 1997, corpus="openalex") == 1
+        assert count_documents(engine, 1997) == 3  # no corpus: every row of the year
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(documents).where(documents.c.doc_id.in_(ids)))

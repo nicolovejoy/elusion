@@ -326,3 +326,22 @@ def test_ledger_records_the_filing_years(env) -> None:
     path, _ = env
     judge("c", years=[2020, 2019], gold=gold_of(3), provider=FakeJudge(), gold_csv=path)
     assert runs(path)[-1]["years"] == [2019, 2020]
+
+
+def test_judge_reads_the_texts_of_the_criterions_corpus(env, monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+    from elusion.config import settings
+    from elusion.flows.evaluate import judge
+
+    path, texts = env
+    seen = []
+    monkeypatch.setattr(mod, "load_texts", lambda text_dir: seen.append(text_dir) or dict(texts))
+    judge("c", years=YEARS, gold=gold_of(2), provider=FakeJudge(), gold_csv=path)
+    judge(
+        "auditable-decisions",
+        years=YEARS,
+        gold=gold_of(2),
+        provider=FakeJudge(),
+        gold_csv=path.with_name("a.csv"),
+    )
+    assert seen == [settings.data_dir / "corpus", settings.data_dir / "abstracts"]
