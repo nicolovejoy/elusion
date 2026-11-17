@@ -22,6 +22,7 @@ table: works identified per term, and how many were left once duplicates were re
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import TypedDict
 
 import sqlalchemy as sa
@@ -92,3 +93,53 @@ def drawn_anchors(engine: Engine) -> set[str]:
     stmt = sa.select(harvest_custody.c.query).where(harvest_custody.c.route == "citation")
     with engine.connect() as conn:
         return set(conn.execute(stmt.distinct()).scalars())
+
+
+@dataclass(frozen=True)
+class QueryCount:
+    route: str
+    query: str
+    search_form: str | None
+    works: int  # distinct works the query has returned, over every harvest
+
+
+def works_per_query(engine: Engine) -> list[QueryCount]:
+    """Distinct works identified by each query: searches first, each route in the order
+    its queries were first run. The "identified" boxes of a PRISMA flow diagram.
+
+    Distinct, because a second harvest writes a second row for a work it finds again.
+    """
+    c = harvest_custody.c
+    stmt = (
+        sa.select(c.route, c.query, c.search_form, sa.func.count(sa.distinct(c.work_id)))
+        .group_by(c.route, c.query, c.search_form)
+        .order_by(sa.case((c.route == "search", 0), else_=1), sa.func.min(c.id))
+    )
+    with engine.connect() as conn:
+        return [QueryCount(*row) for row in conn.execute(stmt)]
+
+
+@dataclass(frozen=True)
+class Seed:
+    anchors: tuple[str, ...]  # the anchors whose sample drew this work, sorted
+    by_search: bool  # a search term returned it too
+
+
+def seed_works(engine: Engine) -> dict[str, Seed]:
+    """Every work drawn on the citation route, by work id, and whether a search term
+    also returned it. Harvest recall is `by_search` over the seeds the judge calls
+    relevant. It is keyed by work and not by document, so a seed whose abstract changed
+    between the two routes still counts as found.
+    """
+    c = harvest_custody.c
+    stmt = sa.select(
+        c.work_id,
+        sa.func.array_agg(sa.distinct(c.query)).filter(c.route == "citation"),
+        sa.func.bool_or(c.route == "search"),
+    ).group_by(c.work_id)
+    stmt = stmt.having(sa.func.bool_or(c.route == "citation"))
+    with engine.connect() as conn:
+        return {
+            work_id: Seed(anchors=tuple(sorted(anchors)), by_search=by_search)
+            for work_id, anchors, by_search in conn.execute(stmt)
+        }
