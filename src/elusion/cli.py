@@ -47,6 +47,19 @@ def collect(
 
 
 @app.command()
+def harvest(
+    max_pages: Annotated[
+        int | None,
+        typer.Option(help="Stop after this many pages of 100 works per search term."),
+    ] = None,
+) -> None:
+    """Fetch the abstracts the search terms return from OpenAlex; store and publish them."""
+    from elusion.flows.harvest import harvest as harvest_flow
+
+    typer.echo(harvest_flow(max_pages=max_pages))
+
+
+@app.command()
 def review(
     criterion: Annotated[
         Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")

@@ -37,6 +37,11 @@ class Settings:
     sec_user_agent: str | None = field(
         default_factory=lambda: os.environ.get("ELUSION_SEC_USER_AGENT") or None
     )
+    # OpenAlex API key for the phase 7 harvest. A secret: no default, and only `harvest`
+    # needs it. Free at https://openalex.org/settings/api.
+    openalex_api_key: str | None = field(
+        default_factory=lambda: os.environ.get("OPENALEX_API_KEY") or None
+    )
     # Pinned model snapshot id used for the bulk review pass (hard rule: always pinned).
     review_model: str = field(
         default_factory=lambda: _env("ELUSION_REVIEW_MODEL", "claude-haiku-5-5")

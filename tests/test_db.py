@@ -120,3 +120,34 @@ def test_count_documents_counts_one_corpus_when_two_share_a_year() -> None:
     finally:
         with engine.begin() as conn:
             conn.execute(sa.delete(documents).where(documents.c.doc_id.in_(ids)))
+
+
+def test_an_abstract_row_has_no_filer_and_names_its_corpus() -> None:
+    from elusion.collect.db import known_doc_ids
+
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    ids = [uuid.uuid4().hex[:16] for _ in range(2)]
+    docs = [
+        {
+            "doc_id": i,
+            "cik": None,
+            "company": None,
+            "year": 1998,
+            "paragraph_index": 0,
+            "text": "a b",
+        }
+        for i in ids
+    ]
+    try:
+        assert known_doc_ids(engine, ids) == set()
+        assert upsert_documents(engine, docs, corpus="openalex") == 2
+        assert known_doc_ids(engine, [*ids, "f" * 16]) == set(ids)
+        assert known_doc_ids(engine, []) == set()
+        with engine.connect() as conn:
+            rows = conn.execute(sa.select(documents).where(documents.c.doc_id.in_(ids))).all()
+        assert {(r.corpus, r.cik) for r in rows} == {("openalex", None)}
+        assert count_documents(engine, 1998, "openalex") == 2
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(documents).where(documents.c.doc_id.in_(ids)))

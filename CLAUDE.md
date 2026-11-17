@@ -51,9 +51,10 @@ the stores and why each store exists. `docs/plans/phase-N-*.md` is the spec for 
 
 ```
 src/elusion/collect/    EDGAR-CORPUS download, paragraph split, Parquet, Postgres load, Kafka publish
+                        phase 7: OpenAlex client, search terms, abstracts Parquet, custody table
 src/elusion/review/     provider interface, pinned models, versioned prompts, scorer, job table
 src/elusion/evaluate/   labeling CLI, metrics (Clopper-Pearson), report generator
-src/elusion/flows/      Prefect flows: collect, review, evaluate, dedupe
+src/elusion/flows/      Prefect flows: collect, harvest, review, evaluate, dedupe
 src/elusion/spark/      optional MinHash near-duplicate job
 infra/terraform/  infra/helm/elusion/  infra/pulumi/
 docs/  data/ (gitignored)  tests/
@@ -66,6 +67,7 @@ docker compose up -d          # postgres, redpanda, mlflow, prefect server
 uv sync                       # install
 uv run pytest                 # tests
 uv run elusion collect --year 2019
+op run --env-file=.env.tpl -- uv run elusion harvest [--max-pages 1]   # phase 7: abstracts from OpenAlex for the terms in src/elusion/collect/terms.py; free, metered, safe to re-run
 uv run elusion review --criterion criteria/cloud-concentration.md --sample 20000
 uv run elusion review --criterion criteria/cloud-concentration.md --prompt-version v2 --sample 20000 --provider openai --model gpt-6-luna
 uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019 [--review-model gpt-6-luna]

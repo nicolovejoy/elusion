@@ -58,8 +58,11 @@ def ensure_schema(engine: Engine) -> None:
         conn.execute(sa.text("ALTER TABLE documents ALTER COLUMN cik DROP NOT NULL"))
 
 
-def upsert_documents(engine: Engine, docs: Iterable[Document], batch_size: int = 5000) -> int:
-    """Insert rows for `docs`, skipping doc_ids already present. Returns rows inserted."""
+def upsert_documents(
+    engine: Engine, docs: Iterable[Document], batch_size: int = 5000, corpus: str = "edgar"
+) -> int:
+    """Insert rows for `docs` under `corpus`, skipping doc_ids already present. Returns
+    rows inserted. An abstract has no filer: its `cik` and `company` are None."""
     inserted = 0
     batch: list[dict] = []
 
@@ -88,12 +91,26 @@ def upsert_documents(engine: Engine, docs: Iterable[Document], batch_size: int =
                 "year": d["year"],
                 "paragraph_index": d["paragraph_index"],
                 "word_count": len(d["text"].split()),
+                "corpus": corpus,
             }
         )
         if len(batch) >= batch_size:
             flush()
     flush()
     return inserted
+
+
+def known_doc_ids(engine: Engine, doc_ids: Iterable[str], batch_size: int = 5000) -> set[str]:
+    """Which of `doc_ids` already have a `documents` row."""
+    ids = list(doc_ids)
+    known: set[str] = set()
+    with engine.connect() as conn:
+        for start in range(0, len(ids), batch_size):
+            stmt = sa.select(documents.c.doc_id).where(
+                documents.c.doc_id.in_(ids[start : start + batch_size])
+            )
+            known.update(conn.execute(stmt).scalars())
+    return known
 
 
 def count_documents(engine: Engine, year: int | None = None, corpus: str | None = None) -> int:

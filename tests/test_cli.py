@@ -421,3 +421,19 @@ def test_a_year_given_twice_counts_once(monkeypatch, tmp_path) -> None:
     r = CliRunner().invoke(app, [*args, "--year", "2020", "--year", "2020"])
     assert r.exit_code == 0, r.output
     assert seen["years"] == [2020]
+
+
+def test_harvest_command_runs_the_flow_and_prints_its_summary(monkeypatch) -> None:
+    import elusion.flows.harvest as mod
+
+    seen = {}
+
+    def fake_flow(**kw):
+        seen.update(kw)
+        return "harvest summary"
+
+    monkeypatch.setattr(mod, "harvest", fake_flow)
+    result = CliRunner().invoke(app, ["harvest", "--max-pages", "1"])
+    assert result.exit_code == 0, result.output
+    assert seen == {"max_pages": 1}
+    assert "harvest summary" in result.output
