@@ -1,11 +1,13 @@
 # Phase 7 spec: the literature matter
 
 Status: drafted 2026-11-16; the owner confirmed all fifteen calls as recommended the same
-day (`docs/DECISIONS.md`). Tasks 0 to 2 are done (results under each task). Task 3 is built
-and waits for one command from the owner; task 4 is drafted and waits for the owner's
-approval of the wording. Later the same day the owner widened the search to agent papers, moved the
+day (`docs/DECISIONS.md`). Tasks 0 to 3 are done (results under each task); task 4 is drafted
+and waits for the owner's approval of the wording, and task 5, the paid runs, follows it.
+Later on 2026-11-16 the owner widened the search to agent papers, moved the
 window to 2025-01-01 and added a fifth anchor ("Changed by the owner" under calls 3
-and 6); where an older line below says 2023 or nine terms, those blocks govern. Read `docs/ARCHITECTURE.md`,
+and 6); where an older line below says 2023 or nine terms, those blocks govern. On 2026-11-17
+the owner made the first paid review a probe of 1,500 abstracts, not 200 (the same heading
+under call 4). Read `docs/ARCHITECTURE.md`,
 the Phase 7 checklist in `docs/PHASES.md`, `docs/FIELD-NOTES.md` (sections 2, 4 and 5)
 and the 2026-11-15 phase 7 line in `docs/DECISIONS.md` first. Hard rules in `CLAUDE.md`
 apply to every line below. The phase 6 spec (`docs/plans/phase-6-production.md`) is the
@@ -188,6 +190,18 @@ is still approved by the owner in task 4, before any call is paid for.
    needs a change it becomes v2 (a published prompt version is never edited).
    Recommended.
 
+   **Changed by the owner, 2026-11-17: the probe is 1,500 abstracts, not 200.** A
+   review reads the topic `abstracts.ingested` from its start, in the order the
+   harvest published. The first 1,389 messages are the one-page run of 2026-11-16:
+   the first page of each of the sixteen terms, in the order of `terms.py`. So the
+   first 200 are all from the four narrow terms (31 for technology-assisted review,
+   19 for high-recall retrieval, 100 for citation screening, 50 for e-discovery),
+   where far more than the corpus's share will be flagged, and a prompt that flags
+   too much on agent papers would not show. The first 1,500 hold a page from every
+   term. They cost about $0.30 where 200 cost
+   $0.04. They are OpenAlex's top-ranked hits for each term, so they are still richer
+   than the corpus: the probe checks the prompt and does not estimate the flag rate.
+
 5. **Your labels.** `elusion label` on 20 abstracts (10 flagged, 10 discarded), blind,
    as in phase 3, so the report can state judge-against-owner agreement for this
    criterion. About 20 minutes of your time. Recommended.
@@ -297,7 +311,8 @@ is still approved by the owner in task 4, before any call is paid for.
 
 ```
 uv run elusion harvest
-uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 20000
+uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 1500    # the probe
+uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 25000   # the rest: SAMPLE is an upper limit, and scored ids are skipped
 uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna
 uv run elusion evaluate ...                      # the same flags; report gains the PRISMA counts and harvest recall
 uv run elusion index --criterion criteria/auditable-decisions.md --prompt-version v1 --review-model gpt-6-luna
@@ -490,16 +505,33 @@ Part A.
 3. **Citation route.** Call 6: the seeded sample of citing works per anchor, through
    the same flow, marked `citation`.
 
-   **Results (2026-11-16): built and tested, not yet drawn.** After the search terms,
+   **Results (2026-11-16 built, 2026-11-17 drawn).** After the search terms,
    `harvest` asks OpenAlex for `sample=75` with seed 20261116 of the works that cite
    each anchor, and stores them with the route `citation`, the anchor's id as the
    query and the seed in the custody row. An anchor that has `citation` rows is not
    drawn again. `--seeds-only` skips the searches. Checked without a key: a sample of
-   75 from the 23 works citing Cormack and Grossman returns all 23. The draw itself
-   has not run, because 1Password would not release the key with the owner away:
-   `op run --env-file=.env.tpl -- uv run elusion harvest --seeds-only`, five requests.
-   It must not run at the same time as another harvest, since both rewrite the same
-   Parquet files.
+   75 from the 23 works citing Cormack and Grossman returns all 23. A draw must not
+   run at the same time as another harvest, since both rewrite the same Parquet files.
+
+   The owner ran `op run --env-file=.env.tpl -- uv run elusion harvest --seeds-only`
+   on 2026-11-17 (harvest `ce741cd0d1784f3188191f544a26639b`, five requests):
+
+   | Anchor | Seeds drawn | Also returned by a search term |
+   | --- | ---: | ---: |
+   | Cormack and Grossman 2014 | 23 | 9 |
+   | O'Mara-Eves and others 2015 | 75 | 1 |
+   | Raji and others 2020 | 75 | 15 |
+   | Zheng and others 2023 | 75 | 1 |
+   | Chan and others 2024 | 75 | 21 |
+
+   - 323 custody rows and 322 distinct works: one work cites two anchors.
+   - 47 of the 322 were also returned by a search term, and 275 are new documents. The
+     corpus is now 23,521 abstracts, and `documents`, the two Parquet files and the
+     topic agree on that number.
+   - 47 of 322 is not harvest recall. Most works that cite an anchor are not about
+     auditing a decision system (a paper that cites the LLM-judge survey is usually
+     one that used an LLM judge). Harvest recall counts only the seeds the judge
+     calls relevant, so it waits for task 5.
 4. **Criterion and prompts.** `criteria/auditable-decisions.md`, review `v1`, `judge-v1`,
    `grade-v1`. The owner approves the wording before any call is paid for.
 
@@ -512,7 +544,8 @@ Part A.
    paper; 4 as its main contribution. Flagged is 3 and above, as for the 10-K
    criterion. Until the first paid call these files may be edited; after it, a change
    is a new version.
-5. **Owner: the paid runs.** Review 200, read the flags together, then review the rest;
+5. **Owner: the paid runs.** Review 1,500 (call 4, changed 2026-11-17), read the flags
+   together, then review the rest;
    judge; label (call 5); grade; evaluate. Each is guarded at `ELUSION_MAX_RUN_USD` and
    run one at a time.
 6. **Report.** `evaluate` adds, for an `openalex` population: the PRISMA counts
@@ -581,8 +614,8 @@ Part B.
 Model spend, from the local ledgers: gpt-6-luna has cost $4.15 for 37,936 paragraphs,
 $0.00011 each. An abstract with its title is about twice a risk-factor paragraph.
 
-- review: about 23,500 abstracts (the 23,246 harvested and up to 323 seeds) at about
-  $0.0002 = about $4.70
+- review: 23,521 abstracts (the 23,246 harvested and the 275 seeds no term returned)
+  at about $0.0002 = about $4.70, the probe's $0.30 included
 - judge: every flagged abstract plus 200 discards. Phase 6 paid $0.70 for 266
   paragraphs; at 3% flagged this is about 900 abstracts of twice the length, about
   $4.75
@@ -594,5 +627,5 @@ $0.00011 each. An abstract with its title is about twice a risk-factor paragraph
 
 About $11.50, where the calls of 2026-11-16 said $8 before the agent terms were added;
 the project would stand near $23 of its $40. Each run is guarded at `ELUSION_MAX_RUN_USD`. The judge figure is the soft one: it
-grows with the flagged pile, and the 200-abstract probe in task 5 is where a prompt that
+grows with the flagged pile, and the 1,500-abstract probe in task 5 is where a prompt that
 flags too much gets caught while it is still cheap.
