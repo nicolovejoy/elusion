@@ -85,3 +85,10 @@ def record(engine: Engine, hits: Iterable[Hit], batch_size: int = 2000) -> int:
         with engine.begin() as conn:
             inserted += len(conn.execute(stmt).all())
     return inserted
+
+
+def drawn_anchors(engine: Engine) -> set[str]:
+    """The anchors whose citation sample has been drawn: those with a `citation` row."""
+    stmt = sa.select(harvest_custody.c.query).where(harvest_custody.c.route == "citation")
+    with engine.connect() as conn:
+        return set(conn.execute(stmt.distinct()).scalars())

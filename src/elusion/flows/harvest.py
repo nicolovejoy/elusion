@@ -23,6 +23,12 @@ leave an abstract unreviewed with nothing to show it.
 
 Each term is fetched and stored before the next is asked for, so a failure on the
 twelfth term keeps the first eleven.
+
+After the terms come the *citation samples*: for each anchor paper in `collect.terms`,
+a seeded random sample of the works that cite it, stored the same way with the route
+`citation` in place of `search`. An anchor is sampled once. A later harvest finds its
+`citation` rows and does not draw again, so the seeds stay the ones first drawn even
+if OpenAlex would now answer the same seed differently.
 """
 
 from __future__ import annotations
@@ -37,8 +43,17 @@ from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
 
 from elusion.collect import abstracts, custody, db, kafka
-from elusion.collect.openalex import OpenAlex, Work, search_filter, to_work
-from elusion.collect.terms import FROM_DATE, OPENALEX_CORPUS, TERMS, Term
+from elusion.collect.openalex import OpenAlex, Work, citing_filter, search_filter, to_work
+from elusion.collect.terms import (
+    ANCHORS,
+    FROM_DATE,
+    OPENALEX_CORPUS,
+    SAMPLE_SEED,
+    SEEDS_PER_ANCHOR,
+    TERMS,
+    Anchor,
+    Term,
+)
 from elusion.config import settings
 from elusion.corpora import OPENALEX
 
@@ -49,7 +64,8 @@ Publish = Callable[[list[tuple[str, dict]]], Any]
 class HarvestSummary:
     harvest_id: str
     harvested_at: datetime
-    hits: int  # custody rows written: works returned, counted once per term
+    hits: int  # search custody rows written: works returned, counted once per term
+    seeds: int  # citation custody rows written: works drawn from those citing an anchor
     new_documents: int  # abstracts not seen before, each published to the topic once
     skipped: int  # works returned without an abstract or a year
     pages: int  # requests OpenAlex answered, each one metered
@@ -57,7 +73,8 @@ class HarvestSummary:
     def __str__(self) -> str:
         return (
             f"harvest {self.harvest_id} at {self.harvested_at:%Y-%m-%d %H:%M:%S} UTC: "
-            f"{self.hits} hits over {self.pages} pages, {self.new_documents} new documents "
+            f"{self.hits} search hits and {self.seeds} citation seeds over {self.pages} "
+            f"pages, {self.new_documents} new documents "
             f"stored and published, {self.skipped} skipped (no abstract or no year)"
         )
 
@@ -77,21 +94,47 @@ def fetch_term(client: Any, term: Term, max_pages: int | None) -> tuple[list[Wor
         else:
             works.append(work)
     get_run_logger().info(
-        "%s [%s]: %s works, %s skipped; allowance left today: $%s",
-        term.query,
-        term.form,
+        "%s works, %s skipped, $%s of today's allowance left: %s [%s]",
         len(works),
         skipped,
         client.remaining_usd,
+        term.query,
+        term.form,
     )
     return works, skipped
 
 
+@dataclass(frozen=True)
+class Origin:
+    """How a batch of works was found: what every one of its custody rows says."""
+
+    route: str  # search | citation
+    query: str  # the search string, or the anchor's work id
+    filter: str
+    search_form: str | None = None
+    sample_seed: int | None = None
+
+
+@task(cache_policy=NO_CACHE, retries=2, retry_delay_seconds=60)
+def fetch_seeds(client: Any, anchor: Anchor) -> tuple[list[Work], int]:
+    """The seeded sample of works citing `anchor`, as documents, and how many were skipped."""
+    raws = client.citing_sample(anchor.work_id, FROM_DATE, SEEDS_PER_ANCHOR, SAMPLE_SEED)
+    works = [w for w in map(to_work, raws) if w is not None]
+    get_run_logger().info(
+        "%s seeds, %s skipped: works citing %s (%s)",
+        len(works),
+        len(raws) - len(works),
+        anchor.work_id,
+        anchor.label,
+    )
+    return works, len(raws) - len(works)
+
+
 @task(cache_policy=NO_CACHE)
-def store_term(
-    works: list[Work], term: Term, harvest_id: str, harvested_at: datetime, publish: Publish
+def store_hits(
+    works: list[Work], origin: Origin, harvest_id: str, harvested_at: datetime, publish: Publish
 ) -> tuple[int, int]:
-    """Store one term's works; returns (custody rows written, new documents)."""
+    """Store one query's works; returns (custody rows written, new documents)."""
     engine = db.make_engine(settings.database_url)
     by_id = {w["doc_id"]: w for w in works}  # a cursor can serve one work twice
     known = db.known_doc_ids(engine, by_id)
@@ -120,11 +163,11 @@ def store_term(
             {
                 "harvest_id": harvest_id,
                 "harvested_at": harvested_at,
-                "route": "search",
-                "query": term.query,
-                "search_form": term.form,
-                "sample_seed": None,
-                "filter": search_filter(FROM_DATE),
+                "route": origin.route,
+                "query": origin.query,
+                "search_form": origin.search_form,
+                "sample_seed": origin.sample_seed,
+                "filter": origin.filter,
                 "openalex_corpus": OPENALEX_CORPUS,
                 "work_id": w["work_id"],
                 "doc_id": w["doc_id"],
@@ -133,7 +176,9 @@ def store_term(
             for w in by_id.values()
         ),
     )
-    get_run_logger().info("%s: %s hits recorded, %s new documents", term.query, hits, len(new))
+    get_run_logger().info(
+        "%s %s rows recorded, %s new documents: %s", hits, origin.route, len(new), origin.query
+    )
     return hits, len(new)
 
 
@@ -143,11 +188,15 @@ def _publish_to_kafka(messages: list[tuple[str, dict]]) -> int:
 
 @flow(name="harvest")
 def harvest(
-    max_pages: int | None = None, client: Any = None, publish: Publish | None = None
+    max_pages: int | None = None,
+    seeds_only: bool = False,
+    client: Any = None,
+    publish: Publish | None = None,
 ) -> HarvestSummary:
-    """Harvest every term in `collect.terms`. Safe to re-run.
+    """Harvest every term in `collect.terms`, then each anchor's sample. Safe to re-run.
 
     `max_pages` caps the pages asked per term, for a first look at a few hundred works.
+    `seeds_only` skips the searches and draws only the citation samples still missing.
     `client` and `publish` are for the tests, which pass stand-ins for OpenAlex and Kafka.
     """
     client = client or OpenAlex(settings.openalex_api_key)  # refuses to exist without a key
@@ -160,17 +209,34 @@ def harvest(
 
     harvest_id = uuid.uuid4().hex
     harvested_at = datetime.now(UTC)
-    hits = new_documents = skipped = 0
-    for term in TERMS:
+    hits = seeds = new_documents = skipped = 0
+    for term in () if seeds_only else TERMS:
         works, term_skipped = fetch_term(client, term, max_pages)
-        term_hits, term_new = store_term(works, term, harvest_id, harvested_at, publish)
+        origin = Origin("search", term.query, search_filter(FROM_DATE), search_form=term.form)
+        term_hits, term_new = store_hits(works, origin, harvest_id, harvested_at, publish)
         hits += term_hits
         new_documents += term_new
         skipped += term_skipped
+    drawn = custody.drawn_anchors(engine)
+    for anchor in ANCHORS:
+        if anchor.work_id in drawn:
+            continue
+        works, anchor_skipped = fetch_seeds(client, anchor)
+        origin = Origin(
+            "citation",
+            anchor.work_id,
+            citing_filter(anchor.work_id, FROM_DATE),
+            sample_seed=SAMPLE_SEED,
+        )
+        anchor_seeds, anchor_new = store_hits(works, origin, harvest_id, harvested_at, publish)
+        seeds += anchor_seeds
+        new_documents += anchor_new
+        skipped += anchor_skipped
     summary = HarvestSummary(
         harvest_id=harvest_id,
         harvested_at=harvested_at,
         hits=hits,
+        seeds=seeds,
         new_documents=new_documents,
         skipped=skipped,
         pages=client.pages,

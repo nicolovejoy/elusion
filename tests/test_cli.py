@@ -435,5 +435,8 @@ def test_harvest_command_runs_the_flow_and_prints_its_summary(monkeypatch) -> No
     monkeypatch.setattr(mod, "harvest", fake_flow)
     result = CliRunner().invoke(app, ["harvest", "--max-pages", "1"])
     assert result.exit_code == 0, result.output
-    assert seen == {"max_pages": 1}
+    assert seen == {"max_pages": 1, "seeds_only": False}
     assert "harvest summary" in result.output
+
+    assert CliRunner().invoke(app, ["harvest", "--seeds-only"]).exit_code == 0
+    assert seen == {"max_pages": None, "seeds_only": True}

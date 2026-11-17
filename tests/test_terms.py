@@ -1,6 +1,15 @@
 """The harvest's search terms: the owner's decision of 2026-11-16, as data."""
 
-from elusion.collect.terms import AGENT_PHRASES, FROM_DATE, OPENALEX_CORPUS, TERMS, Term
+from elusion.collect.terms import (
+    AGENT_PHRASES,
+    ANCHORS,
+    FROM_DATE,
+    OPENALEX_CORPUS,
+    SAMPLE_SEED,
+    SEEDS_PER_ANCHOR,
+    TERMS,
+    Term,
+)
 
 
 def test_sixteen_terms_nine_stemmed_and_seven_exact() -> None:
@@ -46,3 +55,16 @@ def test_the_window_and_the_openalex_corpus() -> None:
     assert FROM_DATE == "2025-01-01"
     assert OPENALEX_CORPUS == "core"
     assert Term("q", "exact").form == "exact"
+
+
+def test_five_anchors_one_per_strand_and_a_fixed_seed() -> None:
+    assert [a.work_id for a in ANCHORS] == [
+        "W2029075138",  # Cormack and Grossman 2014
+        "W4313371821",  # O'Mara-Eves and others 2015
+        "W3001807593",  # Raji and others 2020
+        "W7133239970",  # Zheng and others 2023
+        "W4399364360",  # Chan and others 2024
+    ]
+    assert all(a.label for a in ANCHORS)
+    assert SEEDS_PER_ANCHOR == 75
+    assert SAMPLE_SEED == 20261116

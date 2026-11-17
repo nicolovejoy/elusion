@@ -111,6 +111,11 @@ def search_filter(from_date: str) -> str:
     return f"from_publication_date:{from_date},has_abstract:true"
 
 
+def citing_filter(anchor_id: str, from_date: str) -> str:
+    """The filter for the works that cite `anchor_id`, in the same window as a search."""
+    return f"cites:{anchor_id},{search_filter(from_date)}"
+
+
 class OpenAlex:
     """A small client for the works endpoint. `pages` counts the requests answered."""
 
@@ -161,6 +166,29 @@ class OpenAlex:
             asked += 1
             yield from body["results"]
             cursor = body["meta"].get("next_cursor") if body["results"] else None
+
+    def citing_sample(self, anchor_id: str, from_date: str, n: int, seed: int) -> list[dict]:
+        """A seeded random sample of `n` works that cite `anchor_id`, published since
+        `from_date` and having an abstract; all of them when there are fewer than `n`.
+
+        The same seed returns the same works while the catalogue is unchanged (checked
+        2026-11-16). OpenAlex does not promise it afterwards, so the custody rows written
+        from this answer are the record of what was drawn.
+        """
+        if n > PER_PAGE:
+            raise ValueError(f"a sample is one page: at most {PER_PAGE} works, not {n}")
+        body = self._get(
+            "/works",
+            {
+                "filter": citing_filter(anchor_id, from_date),
+                "sample": str(n),
+                "seed": str(seed),
+                "corpus": OPENALEX_CORPUS,
+                "per_page": str(PER_PAGE),
+                "select": SELECT,
+            },
+        )
+        return body["results"]
 
     def _get(self, path: str, params: dict[str, str]) -> dict:
         problem = "no attempt made"

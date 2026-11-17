@@ -15,6 +15,7 @@ from elusion.collect.openalex import (
     OpenAlex,
     OpenAlexError,
     abstract_doc_id,
+    citing_filter,
     document_text,
     rebuild_abstract,
     search_filter,
@@ -261,3 +262,29 @@ def test_max_pages_stops_the_paging_early() -> None:
     client = OpenAlex("k-123", transport=httpx.MockTransport(handler))
     got = list(client.search(Term("x", "stemmed"), "2025-01-01", max_pages=2))
     assert len(got) == 2 and len(calls) == 2
+
+
+def test_citing_sample_asks_for_a_seeded_sample_of_the_works_that_cite_the_anchor() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return page([work(1), work(2)], None)
+
+    client = OpenAlex("k-123", transport=httpx.MockTransport(handler))
+    got = client.citing_sample("W42", "2025-01-01", n=75, seed=7)
+
+    assert [w["id"].rsplit("/", 1)[1] for w in got] == ["W1", "W2"]
+    (params,) = (r.url.params for r in seen)
+    assert params["filter"] == "cites:W42,from_publication_date:2025-01-01,has_abstract:true"
+    assert params["filter"] == citing_filter("W42", "2025-01-01")
+    assert (params["sample"], params["seed"], params["per_page"]) == ("75", "7", "100")
+    assert (params["corpus"], params["select"]) == ("core", SELECT)
+    assert "cursor" not in params  # a sample is one page; a cursor cannot be combined with it
+    assert not any(name.startswith("search") for name in params)
+
+
+def test_citing_sample_refuses_more_than_one_page() -> None:
+    client = OpenAlex("k-123", transport=httpx.MockTransport(lambda r: page([], None)))
+    with pytest.raises(ValueError, match="100"):
+        client.citing_sample("W42", "2025-01-01", n=101, seed=7)

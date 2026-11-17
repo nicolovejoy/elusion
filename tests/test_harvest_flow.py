@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from elusion.collect.custody import harvest_custody
 from elusion.collect.db import documents, make_engine
 from elusion.collect.openalex import OpenAlexError, to_work
-from elusion.collect.terms import Term
+from elusion.collect.terms import Anchor, Term
 from elusion.config import settings
 from elusion.review.corpus import load_texts
 from tests.conftest import requires_service
@@ -33,9 +33,17 @@ class FakeOpenAlex:
     pages = 0
     remaining_usd = None
 
-    def __init__(self, by_query: dict[str, list[dict]]) -> None:
+    def __init__(
+        self, by_query: dict[str, list[dict]], citing: dict[str, list[dict]] | None = None
+    ) -> None:
         self.by_query = by_query
+        self.citing = citing or {}
         self.asked: list[tuple[Term, str, int | None]] = []
+        self.sampled: list[tuple[str, str, int, int]] = []
+
+    def citing_sample(self, anchor_id: str, from_date: str, n: int, seed: int) -> list[dict]:
+        self.sampled.append((anchor_id, from_date, n, seed))
+        return self.citing[anchor_id]
 
     def search(self, term: Term, from_date: str, max_pages: int | None = None):
         self.asked.append((term, from_date, max_pages))
@@ -50,11 +58,12 @@ def env(monkeypatch, tmp_path):
     tag = uuid.uuid4().hex[:8]
     broad, narrow = Term(f'"{tag} broad"', "stemmed"), Term(f'"{tag} narrow"', "exact")
     monkeypatch.setattr(mod, "TERMS", (broad, narrow))
+    monkeypatch.setattr(mod, "ANCHORS", ())  # the citation tests name anchors of their own
     monkeypatch.setattr(mod, "settings", dataclasses.replace(settings, data_dir=tmp_path))
     engine = make_engine(settings.database_url)
     yield engine, broad, narrow, tmp_path
     with engine.begin() as conn:
-        mine = harvest_custody.c.query.in_([broad.query, narrow.query])
+        mine = harvest_custody.c.query.like(f"%{tag}%")  # this test's terms and anchors
         ids = conn.execute(sa.select(harvest_custody.c.doc_id).where(mine)).scalars().all()
         conn.execute(sa.delete(documents).where(documents.c.doc_id.in_(ids)))
         conn.execute(sa.delete(harvest_custody).where(mine))
@@ -219,4 +228,116 @@ def test_no_key_and_no_client_is_refused_before_anything_is_written(env, monkeyp
     monkeypatch.setattr(mod, "settings", dataclasses.replace(mod.settings, openalex_api_key=None))
     with pytest.raises(OpenAlexError, match="OPENALEX_API_KEY"):
         mod.harvest(publish=lambda m: None)
+    assert custody(engine, broad, narrow) == []
+
+
+def citation_rows(engine, *anchors: Anchor) -> list[dict]:
+    stmt = (
+        sa.select(harvest_custody)
+        .where(harvest_custody.c.query.in_([a.work_id for a in anchors]))
+        .order_by(harvest_custody.c.id)
+    )
+    with engine.connect() as conn:
+        return [dict(row._mapping) for row in conn.execute(stmt)]
+
+
+def anchors_for(env, monkeypatch) -> tuple[Anchor, Anchor]:
+    """Two anchors whose ids carry the test's tag, so the fixture's clean-up finds them."""
+    import elusion.flows.harvest as mod
+
+    tag = env[1].query.split()[0].strip('"')
+    pair = (Anchor(f"W{tag}1", "first anchor"), Anchor(f"W{tag}2", "second anchor"))
+    monkeypatch.setattr(mod, "ANCHORS", pair)
+    return pair
+
+
+def test_each_anchor_gives_a_seeded_sample_marked_citation(env, monkeypatch) -> None:
+    from elusion.flows.harvest import harvest
+
+    engine, broad, narrow, data_dir = env
+    first, second = anchors_for(env, monkeypatch)
+    a, b, c = (work(n) for n in numbers(3))
+    # b is found by a search term and is also a seed: one document, two routes
+    client = FakeOpenAlex(
+        {broad.query: [b], narrow.query: []}, {first.work_id: [a, b], second.work_id: [c]}
+    )
+    published: list[tuple[str, dict]] = []
+
+    summary = harvest(client=client, publish=published.extend)
+
+    assert client.sampled == [
+        (first.work_id, "2025-01-01", 75, 20261116),
+        (second.work_id, "2025-01-01", 75, 20261116),
+    ]
+    assert (summary.hits, summary.seeds, summary.new_documents) == (1, 3, 3)
+    rows = citation_rows(engine, first, second)
+    assert [(r["query"], r["work_id"]) for r in rows] == [
+        (first.work_id, to_work(a)["work_id"]),
+        (first.work_id, to_work(b)["work_id"]),
+        (second.work_id, to_work(c)["work_id"]),
+    ]
+    for row in rows:
+        assert (row["route"], row["search_form"], row["sample_seed"]) == (
+            "citation",
+            None,
+            20261116,
+        )
+        assert (
+            row["filter"]
+            == f"cites:{row['query']},from_publication_date:2025-01-01,has_abstract:true"
+        )
+        assert row["harvest_id"] == summary.harvest_id
+    assert sorted(key for key, _ in published) == sorted(to_work(w)["doc_id"] for w in (a, b, c))
+    assert len(load_texts(data_dir / "abstracts")) == 3
+    assert [r["route"] for r in custody(engine, broad, narrow)] == ["search"]
+
+
+def test_an_anchor_that_has_its_seeds_is_not_drawn_again(env, monkeypatch) -> None:
+    from elusion.flows.harvest import harvest
+
+    engine, broad, narrow, _ = env
+    first, second = anchors_for(env, monkeypatch)
+    a, b = (work(n) for n in numbers(2))
+    found = {broad.query: [], narrow.query: []}
+    harvest(
+        client=FakeOpenAlex(found, {first.work_id: [a], second.work_id: [b]}),
+        publish=lambda m: None,
+    )
+    again = FakeOpenAlex(found, {})  # asking it for a sample would be a KeyError
+
+    summary = harvest(client=again, publish=lambda m: None)
+
+    assert again.sampled == [] and summary.seeds == 0
+    assert len(citation_rows(engine, first, second)) == 2
+
+
+def test_only_the_anchor_without_seeds_is_drawn(env, monkeypatch) -> None:
+    import elusion.flows.harvest as mod
+
+    engine, broad, narrow, _ = env
+    first, second = anchors_for(env, monkeypatch)
+    a, b = (work(n) for n in numbers(2))
+    found = {broad.query: [], narrow.query: []}
+    monkeypatch.setattr(mod, "ANCHORS", (first,))
+    mod.harvest(client=FakeOpenAlex(found, {first.work_id: [a]}), publish=lambda m: None)
+    monkeypatch.setattr(mod, "ANCHORS", (first, second))
+    client = FakeOpenAlex(found, {second.work_id: [b]})
+
+    mod.harvest(client=client, publish=lambda m: None)
+
+    assert [s[0] for s in client.sampled] == [second.work_id]
+
+
+def test_seeds_only_draws_the_samples_and_asks_for_no_search(env, monkeypatch) -> None:
+    from elusion.flows.harvest import harvest
+
+    engine, broad, narrow, _ = env
+    first, second = anchors_for(env, monkeypatch)
+    a, b = (work(n) for n in numbers(2))
+    client = FakeOpenAlex({}, {first.work_id: [a], second.work_id: [b]})
+
+    summary = harvest(client=client, publish=lambda m: None, seeds_only=True)
+
+    assert client.asked == []
+    assert (summary.hits, summary.seeds) == (0, 2)
     assert custody(engine, broad, narrow) == []

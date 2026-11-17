@@ -52,11 +52,19 @@ def harvest(
         int | None,
         typer.Option(help="Stop after this many pages of 100 works per search term."),
     ] = None,
+    seeds_only: Annotated[
+        bool,
+        typer.Option(
+            "--seeds-only",
+            help="Skip the searches; draw only the citation samples not yet drawn.",
+        ),
+    ] = False,
 ) -> None:
-    """Fetch the abstracts the search terms return from OpenAlex; store and publish them."""
+    """Fetch the abstracts the search terms return from OpenAlex, and a sample of the
+    works citing each anchor paper; store and publish them."""
     from elusion.flows.harvest import harvest as harvest_flow
 
-    typer.echo(harvest_flow(max_pages=max_pages))
+    typer.echo(harvest_flow(max_pages=max_pages, seeds_only=seeds_only))
 
 
 @app.command()
