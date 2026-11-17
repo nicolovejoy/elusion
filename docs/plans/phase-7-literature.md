@@ -2,8 +2,9 @@
 
 Status: drafted 2026-11-16; the owner confirmed all fifteen calls as recommended the same
 day (`docs/DECISIONS.md`). Tasks 0 and 1 are done (results under each task). Next is
-task 2. One point is open for the owner: whether to add search terms for agent papers
-(under call 3). Read `docs/ARCHITECTURE.md`,
+task 2. Later the same day the owner widened the search to agent papers, moved the
+window to 2025-01-01 and added a fifth anchor ("Changed by the owner" under calls 3
+and 6); where an older line below says 2023 or nine terms, those blocks govern. Read `docs/ARCHITECTURE.md`,
 the Phase 7 checklist in `docs/PHASES.md`, `docs/FIELD-NOTES.md` (sections 2, 4 and 5)
 and the 2026-11-15 phase 7 line in `docs/DECISIONS.md` first. Hard rules in `CLAUDE.md`
 apply to every line below. The phase 6 spec (`docs/plans/phase-6-production.md`) is the
@@ -131,30 +132,53 @@ is still approved by the owner in task 4, before any call is paid for.
    "predictive coding" stays out (it is also a neuroscience theory). Recommended as
    listed. Dropping "audit trail" roughly halves the cost and the noise.
 
-   **Open (raised by the owner, 2026-11-16): terms for agent papers.** The nine terms
-   return 12,471 distinct works, not 16,000: many works match more than one term. They
-   reach a paper about auditing an AI agent only when it happens to use one of the nine
-   phrases. Of about 9,060 works matching the agent terms below, about 300 are already
-   in the harvest. Counts are of works the nine terms do not return, taken on
-   2026-11-16 with exact matching, and are approximate.
+   **Changed by the owner, 2026-11-16: agent terms, and a window from 2025.** The owner
+   asked how to reach other work on agents whose decisions can be audited. The nine
+   terms find such a paper only when it happens to use one of the nine phrases. Two
+   changes follow, and they replace the table above.
 
-   | Added terms | New works |
-   |---|---|
-   | agent phrases AND (audit, audits, auditing, auditable, auditability) | 3,900 |
-   | ... AND (accountability, accountable) | 1,500 more |
-   | ... AND traceability or provenance; "human oversight" or "human-in-the-loop"; logging or observability | 3,300 more |
-   | "AI audit", "algorithmic audit" and their variants; "decision provenance" | 1,300 more |
-   | language models AND (auditable, auditability); language models AND "human oversight"; contestability AND AI | 7,100 more |
+   *The window* is works published since 2025-01-01, not 2023-01-01. It removes little:
+   most of this literature is from 2025 and 2026 ("audit trail" has 230 works in 2023,
+   357 in 2024, 1,454 in 2025 and 4,708 so far in 2026).
 
-   The agent phrases are "AI agent", "LLM agent", "LLM-based agent", "agentic AI",
-   "agentic system", "agentic workflow" and "autonomous agent", each with its plural.
-   These terms need the `.exact` form of the search: stemmed, "agentic" becomes "agent"
-   (766,639 works) and "auditability" becomes "audit". The custody row would record
-   which form each term used. The options put to the owner: A, the first row only
-   (about 16,400 works, the size the cost estimate assumed); B, the first four rows
-   (about 22,500 works, about $2 more review and a larger judge run; recommended); C,
-   all five (about 29,600). None of the four anchors of call 6 is an agent paper, so
-   with A, B or C a fifth anchor is needed for harvest recall to test the new terms.
+   *The terms* are sixteen: the nine above, searched stemmed as before, and seven more,
+   searched with the `.exact` form. Stemmed, "agentic" becomes "agent" (766,639 works)
+   and "auditability" becomes "audit", so the new terms spell out their plurals and
+   turn stemming off. The custody row records which form each term used. Counts on
+   2026-11-16, since 2025-01-01, with an abstract, `corpus=core`:
+
+   | Term | Form | Works |
+   |---|---|---|
+   | "technology-assisted review" | stemmed | 31 |
+   | "high-recall retrieval" | stemmed | 19 |
+   | "citation screening" | stemmed | 131 |
+   | "e-discovery" OR "electronic discovery" | stemmed | 100 |
+   | "LLM-as-a-judge" | stemmed | 2,228 |
+   | "algorithmic accountability" | stemmed | 1,231 |
+   | "explainable AI" AND audit | stemmed | 1,383 |
+   | "automated decision-making" | stemmed | 2,803 |
+   | "audit trail" | stemmed | 6,162 |
+   | agent phrase AND (audit, audits, auditing, auditable, auditability) | exact | 4,142 |
+   | agent phrase AND (accountability, accountable) | exact | 2,175 |
+   | agent phrase AND (traceability, traceable, provenance) | exact | 2,409 |
+   | agent phrase AND ("human oversight", "human-in-the-loop") | exact | 2,116 |
+   | agent phrase AND (logging, observability, "audit log", "audit logs") | exact | 1,224 |
+   | "AI audit", "AI audits", "AI auditing", "algorithm audit", "algorithm audits", "algorithmic audit", "algorithmic audits", "algorithmic auditing" | exact | 1,276 |
+   | "decision provenance" | exact | 94 |
+
+   An *agent phrase* is any of "AI agent", "LLM agent", "LLM-based agent", "agentic AI",
+   "agentic system", "agentic workflow" and "autonomous agent", or the plural of one
+   ("agentic AI" has none). The exact strings are in `src/elusion/collect/terms.py`.
+
+   27,524 hits before duplicates are removed, and about 20,700 distinct works: the nine
+   terms return 10,977 between them and the seven add about 9,750. The second figure is
+   an estimate, because one request cannot mix the two forms; the harvest's own count
+   replaces it. All of it is reviewed.
+
+   Not taken: a fifth group, about 7,100 more works, of language-model papers that are
+   not about agents (language models AND auditable or auditability; language models AND
+   "human oversight"; contestability AND AI). It was the largest group and the least
+   about agents.
 
 4. **The reviewer.** gpt-6-luna, the champion's model, with a new `auditable-decisions/v1`
    prompt built on the structure of `cloud-concentration/v2`; judge `claude-opus-5-5`
@@ -181,6 +205,27 @@ is still approved by the owner in task 4, before any call is paid for.
    Recommended over a hand-made list, which would cost you an afternoon and be found
    mostly by the same words the terms use. Its limit, to be stated in the report: a seed
    the screen wrongly discards is never judged, so it is missing from the denominator.
+
+   **Changed by the owner, 2026-11-16: a fifth anchor, and the window from 2025.** The
+   new terms of call 3 are about agents and none of the four anchors is, so harvest
+   recall would not have tested them. The fifth anchor is Chan and others 2024,
+   "Visibility into AI Agents" (FAccT), OpenAlex `W4399364360`: a paper about
+   identifying, monitoring and logging what agents do. It was chosen over the two large
+   surveys of language-model agents (2,796 and 4,548 citing works in the 2023 window),
+   because few works that cite a general survey are about auditing. The citing works
+   are those published since 2025-01-01, the window of call 3, and harvest recall is
+   the fraction of relevant seeds that the sixteen terms also returned. Citing works
+   in that window, with an abstract, on 2026-11-16:
+
+   | Anchor | OpenAlex id | Citing since 2025-01-01 | Seeds |
+   |---|---|---|---|
+   | Cormack and Grossman 2014 | `W2029075138` | 23 | all 23 |
+   | O'Mara-Eves and others 2015 | `W4313371821` | 190 | 75 |
+   | Raji and others 2020 | `W3001807593` | 1,757 | 75 |
+   | Zheng and others 2023 | `W7133239970` | 10,632 | 75 |
+   | Chan and others 2024 | `W4399364360` | 231 | 75 |
+
+   323 seeds. The 44 and the 269 in the task 0 results below were for the 2023 window.
 
 7. **Keeping the corpora apart.** `documents` gains a `corpus` column (`edgar` for every
    existing row, `openalex` for the new ones); each corpus has its own topic
@@ -250,9 +295,9 @@ is still approved by the owner in task 4, before any call is paid for.
 ## Goal
 
 ```
-uv run elusion harvest --criterion criteria/auditable-decisions.md
+uv run elusion harvest
 uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 20000
-uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2023 --year 2024 --year 2025 --year 2026 --review-model gpt-6-luna
+uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna
 uv run elusion evaluate ...                      # the same flags; report gains the PRISMA counts and harvest recall
 uv run elusion index --criterion criteria/auditable-decisions.md --prompt-version v1 --review-model gpt-6-luna
 uv run elusion ask "How is recall estimated when a model does the first-pass review?"
@@ -476,15 +521,18 @@ Part B.
 Model spend, from the local ledgers: gpt-6-luna has cost $4.15 for 37,936 paragraphs,
 $0.00011 each. An abstract with its title is about twice a risk-factor paragraph.
 
-- review: about 16,300 abstracts at about $0.0002 = about $3.30
+- review: about 21,000 abstracts (the sixteen terms of call 3 and 323 seeds) at about
+  $0.0002 = about $4.20
 - judge: every flagged abstract plus 200 discards. Phase 6 paid $0.70 for 266
-  paragraphs; at 3% flagged this is about 700 abstracts of twice the length, about $3.50
+  paragraphs; at 3% flagged this is about 830 abstracts of twice the length, about
+  $4.40
 - grade: about $0.50
 - embeddings: cents
 - question drafting, 30 questions across three arms, groundedness judging: about $1
-- OpenAlex: about $0.17 of metered usage a harvest, inside the free $1 a day that a key
+- OpenAlex: about $0.29 of metered usage a harvest (about 285 search pages), inside the free $1 a day that a key
   carries, so nothing is paid (task 0 results)
 
-About $8, each run guarded at `ELUSION_MAX_RUN_USD`. The judge figure is the soft one: it
+About $10.50, where the calls of 2026-11-16 said $8 before the agent terms were added;
+the project would stand near $23 of its $40. Each run is guarded at `ELUSION_MAX_RUN_USD`. The judge figure is the soft one: it
 grows with the flagged pile, and the 200-abstract probe in task 5 is where a prompt that
 flags too much gets caught while it is still cheap.
