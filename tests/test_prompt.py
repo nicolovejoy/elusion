@@ -61,3 +61,22 @@ def test_loads_v3_with_exact_version_string_and_gap_rules() -> None:
         assert phrase in prompt.text
     assert "Generic IT outsourcing" in prompt.text  # unique to v3
     assert load_prompt("cloud-concentration", "v2").text != prompt.text
+
+
+def test_the_literature_criterion_has_its_three_prompts_and_its_file() -> None:
+    from pathlib import Path
+
+    from elusion.corpora import OPENALEX, corpus_for
+
+    for version, field in (
+        ("v1", "- score:"),
+        ("judge-v1", "- relevant:"),
+        ("grade-v1", "- sound:"),
+    ):
+        prompt = load_prompt("auditable-decisions", version)
+        assert prompt.version == f"auditable-decisions/{version}"
+        assert field in prompt.text and "- rationale:" in prompt.text
+        assert "title and abstract" in prompt.text
+    assert "- quote:" in load_prompt("auditable-decisions", "v1").text
+    assert corpus_for("auditable-decisions") is OPENALEX
+    assert (Path(__file__).parent.parent / "criteria" / "auditable-decisions.md").is_file()
