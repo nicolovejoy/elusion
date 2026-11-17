@@ -1,8 +1,9 @@
 # Phase 7 spec: the literature matter
 
 Status: drafted 2026-11-16; the owner confirmed all fifteen calls as recommended the same
-day (`docs/DECISIONS.md`). Tasks 0 and 1 are done (results under each task). Next is
-task 2. Later the same day the owner widened the search to agent papers, moved the
+day (`docs/DECISIONS.md`). Tasks 0 to 2 are done (results under each task). Task 3 is built
+and waits for one command from the owner; task 4 is drafted and waits for the owner's
+approval of the wording. Later the same day the owner widened the search to agent papers, moved the
 window to 2025-01-01 and added a fifth anchor ("Changed by the owner" under calls 3
 and 6); where an older line below says 2023 or nine terms, those blocks govern. Read `docs/ARCHITECTURE.md`,
 the Phase 7 checklist in `docs/PHASES.md`, `docs/FIELD-NOTES.md` (sections 2, 4 and 5)
@@ -448,10 +449,69 @@ Part A.
    topic messages. Safe to re-run: a known (work, hash) adds a custody row for the new
    harvest and nothing else. Network calls are retried; a test rebuilds an abstract
    from a recorded response, and no test calls the network.
+
+   **Results (2026-11-16).** `uv run elusion harvest`, run once with `--max-pages 1`
+   and then in full. 336 tests pass.
+
+   - The full harvest took 284 pages and nine minutes, with no error and no `429`, and
+     used $0.28 of the day's free $1.
+   - 27,524 hits, the sum of the sixteen counts in call 3 to the unit, and 23,246
+     distinct works: 5,253 published in 2025 and 17,993 in 2026. No work was returned
+     without an abstract or a year.
+   - 23,246 is more than the 20,700 estimated in call 3. The estimate took the nine
+     stemmed terms' union from one request that ORed them together, which returned
+     10,977; the harvest found 13,774 distinct works for the same nine terms, whose
+     counts sum to 14,088. So that request under-counted, and the nine terms overlap
+     far less than it suggested. Why is not established. The same holds for the
+     12,471 quoted for the 2023 window. The seven exact terms return 10,169 works, as
+     estimated, and 697 works are found by both groups.
+   - 20,080 works were found by one term, 2,323 by two, 843 by three or more.
+   - The four stores agree: 23,246 rows in `documents` under `openalex`, the same ids
+     in `data/abstracts/year=2025.parquet` and `year=2026.parquet` (20 MB), 23,246
+     messages on `abstracts.ingested`, and every document has a custody row. The
+     1,604,015 `edgar` rows are untouched.
+   - `harvest_custody` holds 28,968 rows: 27,524 for the full harvest and 1,444 for
+     the one-page run before it, which the full run found again as known documents.
+     The PRISMA counts must count distinct works per term, not rows.
+   - The command takes no `--criterion`: the terms belong to the corpus, and there is
+     one harvest. The terms, the window and the anchors are in
+     `src/elusion/collect/terms.py`.
+   - A document id is 16 hex characters, a hash of the work id and the hash of the
+     text, so every table and file keyed by `doc_id` takes an abstract unchanged. The
+     custody table maps a document id to its work id.
+   - The text is the title, a blank line and the abstract. The median is 226 words,
+     against the "twice a risk-factor paragraph" the cost estimate assumed.
+   - The "recorded response" in the tests is made up, in the shape the API returned,
+     because a real one would put an abstract in git.
+   - Seen in the data and left alone, since all of it is reviewed: 855 abstracts are
+     not in English by OpenAlex's detection; 793 works are of type `dataset` and 635
+     of type `software`, records from data repositories whose "abstract" is a
+     description; 92 texts are under 30 words.
 3. **Citation route.** Call 6: the seeded sample of citing works per anchor, through
    the same flow, marked `citation`.
+
+   **Results (2026-11-16): built and tested, not yet drawn.** After the search terms,
+   `harvest` asks OpenAlex for `sample=75` with seed 20261116 of the works that cite
+   each anchor, and stores them with the route `citation`, the anchor's id as the
+   query and the seed in the custody row. An anchor that has `citation` rows is not
+   drawn again. `--seeds-only` skips the searches. Checked without a key: a sample of
+   75 from the 23 works citing Cormack and Grossman returns all 23. The draw itself
+   has not run, because 1Password would not release the key with the owner away:
+   `op run --env-file=.env.tpl -- uv run elusion harvest --seeds-only`, five requests.
+   It must not run at the same time as another harvest, since both rewrite the same
+   Parquet files.
 4. **Criterion and prompts.** `criteria/auditable-decisions.md`, review `v1`, `judge-v1`,
    `grade-v1`. The owner approves the wording before any call is paid for.
+
+   **Results (2026-11-16): drafted, not approved.** The four files exist. The criterion
+   is call 2's statement with agents made explicit in the audit-trail shape
+   (identifying, monitoring and logging the actions of AI agents), after the owner's
+   widening of call 3. The review scale: 0 not about an automated decision system; 1
+   builds or applies one and reports accuracy; 2 mentions auditing or oversight with
+   no method of its own; 3 a method, mechanism or measurement as one part of the
+   paper; 4 as its main contribution. Flagged is 3 and above, as for the 10-K
+   criterion. Until the first paid call these files may be edited; after it, a change
+   is a new version.
 5. **Owner: the paid runs.** Review 200, read the flags together, then review the rest;
    judge; label (call 5); grade; evaluate. Each is guarded at `ELUSION_MAX_RUN_USD` and
    run one at a time.
@@ -521,18 +581,18 @@ Part B.
 Model spend, from the local ledgers: gpt-6-luna has cost $4.15 for 37,936 paragraphs,
 $0.00011 each. An abstract with its title is about twice a risk-factor paragraph.
 
-- review: about 21,000 abstracts (the sixteen terms of call 3 and 323 seeds) at about
-  $0.0002 = about $4.20
+- review: about 23,500 abstracts (the 23,246 harvested and up to 323 seeds) at about
+  $0.0002 = about $4.70
 - judge: every flagged abstract plus 200 discards. Phase 6 paid $0.70 for 266
-  paragraphs; at 3% flagged this is about 830 abstracts of twice the length, about
-  $4.40
+  paragraphs; at 3% flagged this is about 900 abstracts of twice the length, about
+  $4.75
 - grade: about $0.50
 - embeddings: cents
 - question drafting, 30 questions across three arms, groundedness judging: about $1
-- OpenAlex: about $0.29 of metered usage a harvest (about 285 search pages), inside the free $1 a day that a key
+- OpenAlex: $0.28 of metered usage a harvest (284 search pages), inside the free $1 a day that a key
   carries, so nothing is paid (task 0 results)
 
-About $10.50, where the calls of 2026-11-16 said $8 before the agent terms were added;
+About $11.50, where the calls of 2026-11-16 said $8 before the agent terms were added;
 the project would stand near $23 of its $40. Each run is guarded at `ELUSION_MAX_RUN_USD`. The judge figure is the soft one: it
 grows with the flagged pile, and the 200-abstract probe in task 5 is where a prompt that
 flags too much gets caught while it is still cheap.
