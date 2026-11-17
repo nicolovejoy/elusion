@@ -8,6 +8,11 @@ other, and how our statement of them changes as we learn. A batch of papers is c
 question, each paper is read once on its own, and then the owner and Claude work the
 results over together, in conversation, as many times as it takes.
 
+What it is for (the owner, 2026-11-17): both the owner's own grasp of the field and a
+record that can be audited. In the owner's words it is "a thought experiment in what more
+advanced e-discovery of concepts might look like". How the board is audited is not designed
+yet.
+
 ## The process
 
 ```mermaid
