@@ -558,6 +558,15 @@ Part A.
    together, then review the rest;
    judge; label (call 5); grade; evaluate. Each is guarded at `ELUSION_MAX_RUN_USD` and
    run one at a time.
+
+   **2026-11-18: the probe was started and failed at its first call, at $0.00.** OpenAI
+   answered 401, "Incorrect API key provided", for the key in the 1Password item
+   `OpenAI elusion` (vault `dev-secrets`). Job `b4d6b947` is marked failed with no
+   documents scored, there are no scores for `auditable-decisions`, and the criterion is
+   not yet frozen as `v1`. Not known: why the key is rejected. The cluster's own key was
+   due to be revoked after the Azure day (`infra/README.md`, step 14), so the laptop's key
+   may have been deleted with it or in its place. The probe waits for a working key in
+   that item; the command is the first `review` line under "Goal".
 6. **Report.** `evaluate` adds, for an `openalex` population: the PRISMA counts
    (identified per term and per route, duplicates removed, screened, excluded,
    included), harvest recall with its interval and its stated limit, and the vocabulary
