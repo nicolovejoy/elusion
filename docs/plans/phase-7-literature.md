@@ -1,8 +1,10 @@
 # Phase 7 spec: the literature matter
 
-**On hold from task 4 onward, 2026-11-17.** The owner is reconsidering what phase 7 does with
-the abstracts (`phase-7-concept-board-map.md`; `docs/DECISIONS.md`, 2026-11-17). Run no paid
-review, judge or grade for `auditable-decisions` until that is settled. Tasks 0 to 3 stand.
+**The hold of 2026-11-17 was lifted the same day.** The owner settled what phase 7 does with
+the abstracts: the concept board (`phase-7-concept-board-map.md`) is built after tasks 4 to
+9 and does not replace them (`docs/DECISIONS.md`, 2026-11-17). Task 4 still waits for the
+owner's approval of the criterion's wording: run no paid review, judge or grade for
+`auditable-decisions` before it.
 
 Status: drafted 2026-11-16; the owner confirmed all fifteen calls as recommended the same
 day (`docs/DECISIONS.md`). Tasks 0 to 3 are done (results under each task); task 4 is drafted

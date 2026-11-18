@@ -1,7 +1,8 @@
 # Concept board: component map
 
-Status: second sketch, 2026-11-17. A draft to iterate on. It changes nothing yet: the phase 7
-spec (`phase-7-literature.md`) stands until the owner decides otherwise.
+Status: second sketch, 2026-11-17, with the proposals the owner agreed the same day ("Agreed
+with the owner" below). Still a draft, and nothing here is built. The phase 7 spec
+(`phase-7-literature.md`) stands, and the board comes after its tasks 4 to 9.
 
 The aim: understand the key concepts in the harvested papers, how they relate to each
 other, and how our statement of them changes as we learn. A batch of papers is chosen for a
@@ -10,8 +11,8 @@ results over together, in conversation, as many times as it takes.
 
 What it is for (the owner, 2026-11-17): both the owner's own grasp of the field and a
 record that can be audited. In the owner's words it is "a thought experiment in what more
-advanced e-discovery of concepts might look like". How the board is audited is not designed
-yet.
+advanced e-discovery of concepts might look like". How the board is audited is agreed in
+outline (proposals 2 to 4 under "Agreed with the owner") and not built.
 
 ## The process
 
@@ -100,7 +101,8 @@ Five things are modelled:
 ## The parts
 
 - **A question.** What we want to understand. It decides which papers are worth reading.
-- **1. Choose a batch.** Picks the papers to process for that question.
+- **1. Choose a batch.** Picks the papers to process for that question: a word search
+  inside what the screen kept (agreed 2026-11-17, proposal 5 below).
 - **2. First read.** One paper at a time, with no knowledge of the others: what are this
   paper's core concepts, and how does the paper itself connect them?
 - **Paper notes.** What the first read produces, kept per paper.
@@ -122,8 +124,10 @@ Five things are modelled:
 ## A first pass by hand: stopping rules (2026-11-17)
 
 One concept taken once round the loop, to see what the record has to hold. Claude read the
-abstracts in the session, not a pinned model, so the reading is not repeatable; a logged
-entry for it would have to say so.
+abstracts in the session, not a pinned model, so the reading carries no model snapshot and
+no prompt version; a logged entry for it would have to say so. The owner has not audited
+the counts below: until he has, "12 of 31" is Claude's count and not a precision figure.
+The wording of the concept is Claude's first draft and is not settled either.
 
 The batch: the 31 abstracts whose text contains "stopping rule", "stopping criterion" or
 "stopping method", found by a word search over `data/abstracts/`.
@@ -161,6 +165,20 @@ Quotes, each checked by code to be verbatim in the stored abstract:
 - Rejected, a pre-registered study, `W7172121649`: "tests, stopping rules, or failure
   rules."
 - Rejected, an agent loop, `W7204885888`: "under explicit stopping conditions"
+- `W7203824153`: "predefined stopping rules: (1) more than 10% of the dataset to be
+  screened; and (2) 50 consecutive irrelevant titles and abstracts"
+- `W7125413801`: "15 statistical or rule-based (heuristic) stopping methods"
+- `W7165025403`: "monitor whether screened documents contain enough information to make a
+  decision"
+- `W4408528803`: "estimates the prevalence of relevant documents in the dataset"
+
+Suggested by Claude on 2026-11-17, after the owner asked whether the concept is solid and
+whether it can be a set of rules; not agreed. Hold the concept as a question, "when may
+the review stop?", with each paper's rule as one answer to it. The abstracts give at
+least four answers: a target recall has been reached; an estimate says few relevant
+papers are left; a run of irrelevant papers in a row has been seen; enough has been read
+to make the decision. An answer can be a set of rules: `W7203824153` applies two, and its
+abstract does not say whether both must be met. `W7125413801` compares 15 methods.
 
 Open, and the owner's to decide: are "stop once enough has been found" and "stop once more
 review would not change the decision" two concepts, or one concept with two rival
@@ -168,30 +186,65 @@ definitions? Asked 2026-11-17. The owner is not sure, and could be persuaded tha
 both are necessary. Claude leans to one concept, because the papers argue with each other
 under a single name.
 
-## Proposed by Claude, not agreed (2026-11-17)
+## Agreed with the owner (2026-11-17 and 2026-11-18)
+
+Proposed by Claude on 2026-11-17 and agreed by the owner, taken two at a time: 1 to 6 the
+same day and 7 the next. The wording below is what was agreed, which for most of them is
+more exact than what was first proposed; the first wording is in git.
 
 1. The board sits on top of the screen and does not replace it. A systematic review runs
-   screening, then data extraction (the first read), then synthesis (step 3); phase 7 part
-   A built the first stage. Once a concept is stated precisely the statement is a
-   criterion, so precision and elusion can be measured for that concept by sampling.
-2. Two trails, different in kind. A machine's reading is reproducible: pinned model, prompt
-   version, and a quote checked verbatim by code. A decision by the owner and Claude
-   (reword, split, collapse, drop) is not reproducible, so it is logged: who, when, what
-   changed, why, and the evidence on the table. `docs/FIELD-NOTES.md` section 2 already has
-   the shape: a concept version is immutable (its option A), a paper carries its history
-   against a concept (B), and each change of wording is an approved, logged event (C).
-3. The record is an append-only log, and the board is a view computed from it. Versions,
-   collapses and drops then come out of the log.
-4. The test of "auditable": any statement on the board walks back to a verbatim quote or to
-   a logged decision.
-5. Step 1 needs a gate, because the corpus is mostly noise (5,941 abstracts mention "audit
-   trail" and 1,696 mention blockchain): either the drafted screen, which is measured, or a
-   search, which is cheap and not measured.
-6. "Done" could be saturation, the word qualitative researchers use for the point where a
-   new batch of papers yields no new concepts. It can be counted.
-7. "Not decided yet" item 1 may settle itself: the harvest is 2025 and 2026 only (17,993 of
-   the 23,246 harvested works are from 2026), so the field's change over time is not in
-   this corpus.
+   screening, then data extraction (the first read), then synthesis (step 3). Tasks 4 to 9
+   of the phase 7 spec stand and the board is built after them: a longer phase, not a
+   different one. Once a concept is stated precisely the statement is a criterion, so
+   precision and elusion can be measured for that concept by sampling. One criterion is
+   one sieve: a question the criterion does not cover will find its papers in the discard
+   pile.
+2. Two kinds of entry, checked differently. A machine's reading is stored with its model
+   snapshot and prompt version, and its quote is checked by code to be verbatim in the
+   stored abstract; it is not promised to come out the same if run again. A decision by
+   the owner and Claude (reword, split, collapse, drop) is stored with who, when, what
+   changed, why and the evidence on the table; a person checks it by reading it. The pin
+   works like a lot number on a part: it does not remake a reading, it finds every reading
+   one model made. `docs/FIELD-NOTES.md` section 2 already has the shape: a concept
+   version is immutable (its option A), a paper carries its history against a concept (B),
+   and each change of wording is an approved, logged event (C).
+3. The record is one append-only log holding both kinds of entry, and the board is a view
+   computed from it. Versions, collapses and drops then come out of the log. The log is a
+   Postgres table that takes only inserts. It is not a Kafka topic: the topic is the to-do
+   list of work waiting to be done (`docs/ARCHITECTURE.md`), and a log of what was decided
+   has to be asked questions, such as every line about one concept.
+4. The test of "auditable" is "says who?". Every statement on the board has one of two
+   answers: the paper says so, with a verbatim quote, or we decided so, with the logged
+   decision and its reason. The board has no other source, so a statement with neither is
+   refused, and code can check the whole board. The test catches a statement with no
+   source, not a quote that was misread; that takes a person reading a sample ("Not
+   decided yet", item 5).
+5. Step 1 is two steps, because the corpus is mostly noise (5,941 abstracts mention "audit
+   trail" and 1,696 mention blockchain): the screen once, for the subject, then a word
+   search inside what the screen kept, once per question. The smaller pile is also what
+   lets a search's misses be measured. With 300 abstracts read at random and none found,
+   the Clopper-Pearson upper bound is 1.2%: up to about 290 still hiding among 23,490
+   abstracts, and about 24 among 2,000 (a guess at what the screen keeps; it has not run).
+6. "Done" is saturation, the word qualitative researchers use for the point where a new
+   batch of papers yields no new concepts. It is counted per question, and it cannot be
+   counted until the size of a concept is decided ("Not decided yet", item 2).
+
+7. The board shows both histories. Ours comes from the log. The field's comes from each
+   paper's publication date, which is already stored: for any concept, when the papers
+   that hold it appeared. The corpus holds 2025 and 2026 only, and earlier years are not
+   harvested for now. A paper dated January 1 is placed by its year alone, because that
+   date usually means the month is not known: 1,857 of the 23,521 abstracts carry it, and
+   January 2025 holds 709 abstracts where February holds 157. Looking up the actual date
+   is tracked in https://github.com/nicolovejoy/elusion/issues/6. A concept's share of a
+   month's papers says more than its count, since the corpus grows from about 200
+   abstracts a month in early 2025 to about 2,000 in late 2026, partly from the search
+   terms and from OpenAlex's indexing.
+
+   As first proposed this said the field's change over time is not in the corpus. The
+   owner said it should be tracked, and the dates were already there. An illustration from
+   the first pass, in Claude's unaudited grouping and not a finding: the three fully dated
+   papers that stop on a recall target or an estimate are from 2025-03, 2025-07 and
+   2026-05, and the two that reject it are both from 2026-07.
 
 ## Next to draw
 
@@ -202,9 +255,9 @@ concepts. It is step 3 of the process diagram, opened up.
 
 ## Not decided yet
 
-1. Which "change over time" we mean. The record above keeps the history of *our*
-   understanding (versions, collapses). The history of the *field's* thinking, by
-   publication date, is a different thing and is not on this map yet.
+1. Settled 2026-11-18 (agreed proposal 7): both. The history of *our* understanding comes
+   from the log, and the history of the *field's* thinking from each paper's publication
+   date. Neither is on the diagrams above yet.
 2. How big one concept is: a problem, a technique, a named theory, a school of thought.
 3. Who does the first read: a pinned model through the pipeline, or Claude in the session.
 4. How step 3c searches: by the words of the paper notes, or by rereading the abstracts.
