@@ -4,9 +4,9 @@
 > agent) can be checked or defended afterwards: measuring what it got right and what it
 > missed, recording what it did and why, or having a person review or override it.
 
-The documents are paper abstracts, each read with its title. An abstract counts when the
-paper presents or evaluates a way of checking, recording or overseeing what an automated
-system decided. Four typical shapes:
+The documents relating to our auditable decisions are essentially paper abstracts. An
+abstract counts when the paper presents or evaluates a way of checking, recording or
+overseeing what an automated system decided. Four typical shapes:
 
 - It validates automated document review or citation screening: recall, elusion, sampling
   the discarded documents, or a rule for when to stop reviewing.

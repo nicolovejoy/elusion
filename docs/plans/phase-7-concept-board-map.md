@@ -173,18 +173,19 @@ Quotes, each checked by code to be verbatim in the stored abstract:
 - `W4408528803`: "estimates the prevalence of relevant documents in the dataset"
 
 Suggested by Claude on 2026-11-17, after the owner asked whether the concept is solid and
-whether it can be a set of rules; not agreed. Hold the concept as a question, "when may
+whether it can be a set of rules. Hold the concept as a question, "when may
 the review stop?", with each paper's rule as one answer to it. The abstracts give at
 least four answers: a target recall has been reached; an estimate says few relevant
 papers are left; a run of irrelevant papers in a row has been seen; enough has been read
 to make the decision. An answer can be a set of rules: `W7203824153` applies two, and its
 abstract does not say whether both must be met. `W7125413801` compares 15 methods.
 
-Open, and the owner's to decide: are "stop once enough has been found" and "stop once more
-review would not change the decision" two concepts, or one concept with two rival
-definitions? Asked 2026-11-17. The owner is not sure, and could be persuaded that one or
-both are necessary. Claude leans to one concept, because the papers argue with each other
-under a single name.
+Settled for now (the owner, 2026-11-18): one concept. "Stop once enough has been found" and
+"stop once more review would not change the decision" are rival answers to the one
+question. That is Claude's call, kept by the owner: the papers argue with each other under
+a single name. On 2026-11-17 the owner was not sure and could be persuaded that one or
+both are necessary, so it is looked at again in December 2026
+(https://github.com/nicolovejoy/elusion/issues/7).
 
 ## Agreed with the owner (2026-11-17 and 2026-11-18)
 
@@ -246,12 +247,61 @@ more exact than what was first proposed; the first wording is in git.
    papers that stop on a recall target or an estimate are from 2025-03, 2025-07 and
    2026-05, and the two that reject it are both from 2026-07.
 
-## Next to draw
+## How one concept is reviewed
 
-A third diagram, asked for by the owner on 2026-11-17: how one concept is reviewed
-iteratively. It should show three things going round together: the definition and
-description of the concept, how each paper characterises it, and how it relates to other
-concepts. It is step 3 of the process diagram, opened up.
+Asked for by the owner on 2026-11-17 and drawn on 2026-11-18: step 3 of the process
+diagram, opened up for one concept. Three things are kept about a concept and they go
+round together: its wording, how each paper characterises it, and how it relates to other
+concepts.
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"lineColor": "#f0f6fc", "textColor": "#f0f6fc", "edgeLabelBackground": "#30363d", "clusterBkg": "#161b22", "clusterBorder": "#8b949e", "titleColor": "#f0f6fc", "primaryColor": "#1f4e79", "primaryTextColor": "#ffffff", "primaryBorderColor": "#79b8ff"}}}%%
+flowchart TD
+    subgraph concept["One concept: three things kept about it"]
+        wording["The wording<br/>the concept stated precisely,<br/>as a question the papers try to answer"]
+        papers["The papers<br/>for each one: holds it or not, its quote,<br/>and the answer that paper gives"]
+        links["The links<br/>what the papers tie it to:<br/>needs, is different from"]
+    end
+
+    talk["Talk it over<br/>the three laid side by side"]
+    log[("The log<br/>every reading and every decision,<br/>added and never changed")]
+
+    wording -->|"read each search hit against it"| papers
+    papers -->|"what else each paper ties it to"| links
+    papers -->|"a paper that does not fit"| talk
+    links -->|"a link that splits it or joins it to another"| talk
+    talk -->|"reword, split, collapse, drop"| wording
+
+    papers -.->|"each reading, quote checked by code"| log
+    links -.->|"each link, quote checked by code"| log
+    talk -.->|"each decision, with its reason"| log
+
+    classDef model fill:#1f4e79,stroke:#79b8ff,color:#ffffff,stroke-width:2px
+    classDef both fill:#7a4b00,stroke:#ffcc66,color:#ffffff,stroke-width:2px
+    classDef kept fill:#4b2a7a,stroke:#d2a8ff,color:#ffffff,stroke-width:2px
+    class papers,links model
+    class wording,talk both
+    class log kept
+    linkStyle default stroke:#f0f6fc,stroke-width:2px
+```
+
+Colours as in the first diagram: blue is a model reading alone, amber is the owner and
+Claude together, purple is kept on disk. Solid arrows are the loop. Dotted arrows are what
+is written to the log.
+
+The three go round together because each can upset the others. A paper that does not fit
+says the wording is wrong. A link can show that one concept is really two, or that two are
+one. A new wording means the papers are checked against it again.
+
+The stopping concept, as far as the first pass took it:
+
+- **The wording:** "when may the review stop?", Claude's first draft.
+- **The papers:** 31 contain the words and, by Claude's unaudited count, 12 hold the
+  concept. They give at least four answers.
+- **The links:** it needs recall estimation (`W7162694654`), and it is a different thing
+  from validation (`W7223334133`).
+- **One turn of the loop:** the papers about ending an experiment did not fit, and that put
+  "of a document review" into the wording.
 
 ## Not decided yet
 

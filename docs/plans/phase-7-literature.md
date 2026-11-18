@@ -2,13 +2,13 @@
 
 **The hold of 2026-11-17 was lifted the same day.** The owner settled what phase 7 does with
 the abstracts: the concept board (`phase-7-concept-board-map.md`) is built after tasks 4 to
-9 and does not replace them (`docs/DECISIONS.md`, 2026-11-17). Task 4 still waits for the
-owner's approval of the criterion's wording: run no paid review, judge or grade for
-`auditable-decisions` before it.
+9 and does not replace them (`docs/DECISIONS.md`, 2026-11-17). The owner approved the
+criterion's wording on 2026-11-18 (task 4). Task 5, the paid runs, is next and is the
+owner's to start.
 
 Status: drafted 2026-11-16; the owner confirmed all fifteen calls as recommended the same
-day (`docs/DECISIONS.md`). Tasks 0 to 3 are done (results under each task); task 4 is drafted
-and waits for the owner's approval of the wording, and task 5, the paid runs, follows it.
+day (`docs/DECISIONS.md`). Tasks 0 to 4 are done (results under each task); the owner approved
+the criterion's wording on 2026-11-18, and task 5, the paid runs, is next.
 Later on 2026-11-16 the owner widened the search to agent papers, moved the
 window to 2025-01-01 and added a fifth anchor ("Changed by the owner" under calls 3
 and 6); where an older line below says 2023 or nine terms, those blocks govern. On 2026-11-17
@@ -550,6 +550,10 @@ Part A.
    paper; 4 as its main contribution. Flagged is 3 and above, as for the 10-K
    criterion. Until the first paid call these files may be edited; after it, a change
    is a new version.
+
+   **Approved by the owner, 2026-11-18,** with one edit of his own: the sentence that
+   introduces the documents now reads "The documents relating to our auditable decisions
+   are essentially paper abstracts." and no longer says each is read with its title.
 5. **Owner: the paid runs.** Review 1,500 (call 4, changed 2026-11-17), read the flags
    together, then review the rest;
    judge; label (call 5); grade; evaluate. Each is guarded at `ELUSION_MAX_RUN_USD` and
