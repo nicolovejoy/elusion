@@ -567,6 +567,14 @@ Part A.
    due to be revoked after the Azure day (`infra/README.md`, step 14), so the laptop's key
    may have been deleted with it or in its place. The probe waits for a working key in
    that item; the command is the first `review` line under "Goal".
+
+   **Later on 2026-11-18: the cause found and the key replaced.** The OpenAI keys page
+   lists both keys as revoked: the cluster's (`elusion-aks`) and the laptop's (`OpenAI
+   elusion`, created 2026-11-06). The laptop's key was revoked along with the cluster's
+   after the Azure day, so the 401 was correct. The owner created a new key,
+   `elusion_phase_7`, and put it in the same 1Password item, so `.env.tpl` does not
+   change. A free call that lists models answered 200 with it. The probe has not been
+   re-run.
 6. **Report.** `evaluate` adds, for an `openalex` population: the PRISMA counts
    (identified per term and per route, duplicates removed, screened, excluded,
    included), harvest recall with its interval and its stated limit, and the vocabulary
