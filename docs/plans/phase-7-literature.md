@@ -573,8 +573,16 @@ Part A.
    elusion`, created 2026-11-06). The laptop's key was revoked along with the cluster's
    after the Azure day, so the 401 was correct. The owner created a new key,
    `elusion_phase_7`, and put it in the same 1Password item, so `.env.tpl` does not
-   change. A free call that lists models answered 200 with it. The probe has not been
-   re-run.
+   change. A free call that lists models answered 200 with it.
+
+   **The probe ran, 2026-11-18.** Job `5b44f6fe`: 1,500 pulled, 1,500 scored, none
+   failed, $0.35 ($0.000231 an abstract; the flow projected $0.29 from its first
+   documents). The criterion and the review prompt are now frozen as
+   `auditable-decisions/v1`. Scores: 0, 183; 1, 178; 2, 308; 3, 237; 4, 594. Flagged (3
+   and above): 831 of 1,500, 55%. This is not a richness figure: the 1,500 are the first
+   ids on the topic, in harvest order, and not a random sample. At the same price the
+   remaining 22,021 abstracts cost about $5.09. Next: the owner and Claude read the flags
+   together before the rest is reviewed.
 6. **Report.** `evaluate` adds, for an `openalex` population: the PRISMA counts
    (identified per term and per route, duplicates removed, screened, excluded,
    included), harvest recall with its interval and its stated limit, and the vocabulary
