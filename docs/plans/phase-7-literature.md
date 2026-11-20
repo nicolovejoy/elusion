@@ -613,6 +613,8 @@ Part A.
    **The judge pass, 2026-11-20: a sample of each pile, and the judge checked against the
    owner first.** The owner chose the order (C below) and approved the whole of this
    block, sizes and the rule of step 5 included, on 2026-11-20. Not yet built.
+   The implementation plan is `docs/superpowers/plans/2026-11-20-phase-7-judge-sample.md`,
+   approved the same day: six tasks, test-first, to be built in a later session.
 
    *Why it changes.* The judge reads every flagged abstract plus 200 discards, priced for
    about 900 abstracts at 3% flagged. The probe flagged 55%. At that rate the flagged
