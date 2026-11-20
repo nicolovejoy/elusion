@@ -397,6 +397,26 @@ def test_grade_cli_passes_flagged_n_and_seed(monkeypatch, tmp_path) -> None:
     assert (seen["flagged_n"], seen["seed"]) == (400, 11)
 
 
+def test_grade_refusal_exits_1_without_traceback(monkeypatch, tmp_path) -> None:
+    import elusion.flows.grade as mod
+    from elusion.flows.evaluate import ReviewStillRunning
+
+    seen = {}
+
+    def flow(criterion, **kw):
+        seen.update(kw)
+        if not kw["force"]:
+            raise ReviewStillRunning("review job(s) job-abc still running")
+        return "ok"
+
+    monkeypatch.setattr(mod, "grade", flow)
+    args = ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--flagged-n", "400"])
+    assert r.exit_code == 1 and "error: review job(s) job-abc" in r.stderr
+    assert "Traceback" not in r.output
+    assert CliRunner().invoke(app, [*args, "--flagged-n", "400", "--force"]).exit_code == 0
+
+
 def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
     import elusion.flows.grade as mod
     from elusion.evaluate.gold import DEFAULT_SEED
@@ -418,6 +438,7 @@ def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
         "max_run_usd": None,
         "flagged_n": None,
         "seed": DEFAULT_SEED,
+        "force": False,
     }
     assert "grade ok" in r.output
     seen.clear()

@@ -300,3 +300,51 @@ def test_cli_label_force_draws_despite_an_unfinished_review_job(monkeypatch, tmp
     r = CliRunner().invoke(app, [*args, "--force"])
     assert r.exit_code == 0, r.output
     assert seen["force"] is True and len(sessions) == 2
+
+
+def test_a_second_sitting_resumes_the_same_pick(tmp_path):
+    """Quit part-way, run the same command again: the unanswered ones, not a fresh pick."""
+    p = tmp_path / "g.csv"
+    first = select_for_audit(p, n=6, seed=1, candidates=_cands())
+    answered = first[:2]
+    append_rows(p, [GoldRow(d, 1, pile, "human", "", "", "t") for d, pile in answered])
+    second = select_for_audit(p, n=6, seed=1, candidates=_cands())
+    assert len(second) == 4
+    assert set(second) == set(first) - set(answered)
+
+
+def test_a_larger_n_keeps_the_abstracts_a_smaller_n_picked(tmp_path):
+    p = tmp_path / "g.csv"
+    small = select_for_audit(p, n=6, seed=1, candidates=_cands())
+    large = select_for_audit(p, n=10, seed=1, candidates=_cands())
+    assert set(small) < set(large) and len(large) == 10
+
+
+def test_label_says_how_many_of_the_pick_are_left(monkeypatch, tmp_path, capsys):
+    import elusion.evaluate.label as mod
+
+    _label_env(monkeypatch, tmp_path)
+    first = select_for_audit(tmp_path / "gold" / "c.csv", n=6, seed=1, candidates=_cands())
+    append_rows(
+        tmp_path / "gold" / "c.csv",
+        [GoldRow(d, 1, pile, "human", "", "", "t") for d, pile in first[:2]],
+    )
+    mod.label("c", 6, seed=1, candidates=_cands())
+    assert "note: 4 of the 6 picked are still to label" in capsys.readouterr().out
+    append_rows(
+        tmp_path / "gold" / "c.csv",
+        [GoldRow(d, 1, pile, "human", "", "", "t") for d, pile in first[2:]],
+    )
+    out = mod.label("c", 6, seed=1, candidates=_cands())
+    assert out == "nothing to label: all 6 picked are labelled; raise --n to label more"
+
+
+def test_cli_label_seed_reaches_the_draw(monkeypatch, tmp_path):
+    import elusion.flows.evaluate as flows
+
+    crit, _ = _label_env(monkeypatch, tmp_path)
+    seen = {}
+    monkeypatch.setattr(flows, "draw_gold", lambda c, v, **kw: seen.update(kw) or _cands(3, 3))
+    args = ["label", "--criterion", crit, *DRAW_ARGS, "--n", "6", "--seed", "11"]
+    assert CliRunner().invoke(app, args).exit_code == 0
+    assert seen["seed"] == 11

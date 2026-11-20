@@ -38,6 +38,25 @@ from elusion.evaluate.gold import (
 PROMPT = "[y]es / [n]o / [s]kip / [q]uit: "
 
 
+def pick_from_draw(
+    candidates: Sequence[tuple[str, str]], n: int, seed: int, exclude: Collection[str] = ()
+) -> list[tuple[str, str]]:
+    """The owner's pick from the drawn gold ids: n//2 of each pile, shuffled together.
+
+    It does not depend on what has been labeled, so a second sitting gets the same pick
+    back. Each pile's ids are sorted, shuffled with the seeded generator and cut at
+    n//2, so a larger `n` keeps every abstract a smaller `n` picked and adds to them.
+    """
+    rng = random.Random(seed)
+    picked: list[tuple[str, str]] = []
+    for pile in ("flagged", "discard"):
+        ids = sorted({d for d, p in candidates if p == pile} - set(exclude))
+        rng.shuffle(ids)
+        picked += [(d, pile) for d in ids[: n // 2]]
+    rng.shuffle(picked)
+    return picked
+
+
 def select_for_audit(
     path: Path,
     n: int,
@@ -45,24 +64,27 @@ def select_for_audit(
     candidates: Sequence[tuple[str, str]] | None = None,
     exclude: Collection[str] = (),
 ) -> list[tuple[str, str]]:
-    """(doc_id, pile) pairs: n//2 flagged and n//2 discard, shuffled together.
+    """(doc_id, pile) pairs still to label: n//2 flagged and n//2 discard, shuffled together.
 
-    Picked from `candidates` when given (the judge's rows are then never read), otherwise
-    from the judge's rows. Already-audited docs and the ids in `exclude` are skipped
-    either way. The shuffle (same seeded rng) keeps the pile from being guessable from
-    the position in the session.
+    The shuffle (same seeded rng) keeps the pile from being guessable from the position
+    in the session. The ids in `exclude` are never selected.
 
-    Candidates are sorted before the seeded draw so the pick depends only on the
-    candidates, the CSV and the seed. A pile with fewer candidates than n//2 is taken
-    whole.
+    With `candidates` (the judge's rows are then never read) the pick is `pick_from_draw`
+    less what the owner has already labeled: quitting part-way and running the same
+    command again shows the ones not yet answered, not a fresh pick.
+
+    Without, it is a fresh pick each time among the judge's rows the owner has not
+    labeled, sorted before the seeded draw so it depends only on the CSV and the seed. A
+    pile with fewer candidates than n//2 is taken whole.
     """
-    done = labeled_ids(path, HUMAN) | set(exclude)
+    done = labeled_ids(path, HUMAN)
+    if candidates is not None:
+        return [(d, p) for d, p in pick_from_draw(candidates, n, seed, exclude) if d not in done]
     rng = random.Random(seed)
-    if candidates is None:
-        candidates = [(r.doc_id, r.pile) for r in judge_rows(path)]
+    judged = judge_rows(path)
     picked: list[tuple[str, str]] = []
     for pile in ("flagged", "discard"):
-        ids = sorted({d for d, p in candidates if p == pile} - done)
+        ids = sorted({r.doc_id for r in judged if r.pile == pile} - done - set(exclude))
         take = min(n // 2, len(ids))
         picked += [(d, pile) for d in rng.sample(ids, take)]
     rng.shuffle(picked)
@@ -130,13 +152,20 @@ def label(
 
     path = gold_path(criterion, settings.data_dir)
     selection = select_for_audit(path, n, seed, candidates, exclude)
-    if not selection:
-        if candidates is not None:
+    if candidates is not None:
+        picked = len(pick_from_draw(candidates, n, seed, exclude))
+        if not picked:
             return "nothing to label: every drawn abstract is labelled or excluded"
+        if not selection:
+            return f"nothing to label: all {picked} picked are labelled; raise --n to label more"
+        if len(selection) < picked:
+            typer.echo(f"note: {len(selection)} of the {picked} picked are still to label")
+    elif not selection:
         return "nothing to label: no unlabeled judge rows (run `elusion judge` first?)"
-    for pile in ("flagged", "discard"):
-        if sum(1 for _, p in selection if p == pile) < n // 2:
-            typer.echo(f"note: fewer than {n // 2} unlabeled '{pile}' paragraphs; taking all")
+    else:
+        for pile in ("flagged", "discard"):
+            if sum(1 for _, p in selection if p == pile) < n // 2:
+                typer.echo(f"note: fewer than {n // 2} unlabeled '{pile}' paragraphs; taking all")
     texts = load_texts(corpus_for(criterion).text_dir(settings.data_dir))
     s = run_session(path, texts, selection)
     return f"answered {s['answered']}, skipped {s['skipped']}, remaining {s['remaining']}"

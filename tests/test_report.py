@@ -199,13 +199,22 @@ def test_render_review_cost_is_the_populations_own_scores() -> None:
     assert "A billed call that left no score" in md and "is not in this sum" in md
 
 
+# A population whose flagged pile (9000) is larger than the sample of 400 drawn from it.
+SAMPLED = dict(
+    flagged_n=400,
+    n_flagged=9000,
+    n_discard=3906,
+    precision=Estimate(0.8, 0.7574, 0.8381, 320, 400),
+)
+
+
 def test_flagged_sample_line_and_by_score_lines_render() -> None:
     by_score = {3: Estimate(0.25, 0.0866, 0.4910, 5, 20), 4: Estimate(0.9, 0.683, 0.988, 18, 20)}
-    md = render(make_report(threshold=3, flagged_n=400, precision_by_score=by_score))
+    md = render(make_report(threshold=3, **SAMPLED, precision_by_score=by_score))
     lines = md.splitlines()
     sample = (
         "- flagged sample: 400 drawn with seed 20261104 from the pair's flagged pile; "
-        "117 labeled by the judge"
+        "400 labeled by the judge"
     )
     assert sample in lines
     assert lines[lines.index(sample) + 1].startswith("- discard sample: ")
@@ -225,3 +234,25 @@ def test_flagged_sample_line_and_by_score_lines_render() -> None:
 def test_render_is_unchanged_without_a_flagged_limit() -> None:
     md = render(make_report())
     assert "flagged sample" not in md and "score 3" not in md and "by score" not in md
+
+
+def test_a_flagged_pile_no_larger_than_the_limit_is_reported_as_taken_whole() -> None:
+    md = render(make_report(flagged_n=400))  # the fixture's flagged pile holds 117
+    assert (
+        "- flagged sample: the whole flagged pile, 117, which is no larger than the 400 "
+        "asked for; 117 labeled by the judge" in md
+    )
+    assert "400 drawn" not in md
+
+
+def test_with_a_flagged_sample_the_prose_says_sample_not_pile() -> None:
+    md = render(make_report(**SAMPLED, **GRADED))
+    assert "read each paragraph of the flagged sample with the reviewer's" in md
+    assert "against the judge's label, over the flagged sample:" in md
+    assert "Companies of the paragraphs of the flagged sample the judge labeled relevant" in md
+    for whole_pile in ("read each flagged paragraph", "over the flagged paragraphs:"):
+        assert whole_pile not in md
+    plain = render(make_report(**GRADED))
+    assert "read each flagged paragraph with the reviewer's" in plain
+    assert "over the flagged paragraphs:" in plain
+    assert "Companies of the flagged paragraphs the judge labeled relevant" in plain

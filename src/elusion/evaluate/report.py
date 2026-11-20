@@ -96,8 +96,29 @@ def _envs(envs: dict[str, int]) -> str:
     return ", ".join(parts)
 
 
+def _flagged_sample(r: RunReport) -> list[str]:
+    """The flagged-sample line; nothing when precision was measured on the whole pile."""
+    if r.flagged_n is None:
+        return []
+    labeled = f"{r.precision.n} labeled by the judge"
+    if r.n_flagged <= r.flagged_n:
+        return [
+            f"- flagged sample: the whole flagged pile, {r.n_flagged}, which is no larger "
+            f"than the {r.flagged_n} asked for; {labeled}"
+        ]
+    return [
+        f"- flagged sample: {r.flagged_n} drawn with seed {r.seed} from the pair's "
+        f"flagged pile; {labeled}"
+    ]
+
+
 def render(r: RunReport) -> str:
     years = years_label(r.years)
+    # What precision, the grades and the list of what was found were measured on.
+    sampled = r.flagged_n is not None and r.n_flagged > r.flagged_n
+    each = "paragraph of the flagged sample" if sampled else "flagged paragraph"
+    over = "the flagged sample" if sampled else "the flagged paragraphs"
+    of = "paragraphs of the flagged sample" if sampled else "flagged paragraphs"
     lines = [
         f"# Review report: {r.criterion}",
         "",
@@ -121,14 +142,7 @@ def render(r: RunReport) -> str:
         f"- flagged (score >= {r.threshold}): {r.n_flagged}",
         f"- discard (score < {r.threshold}): {r.n_discard}",
         f"- threshold: {r.threshold}",
-        *(
-            [
-                f"- flagged sample: {r.flagged_n} drawn with seed {r.seed} from the pair's "
-                f"flagged pile; {r.precision.n} labeled by the judge"
-            ]
-            if r.flagged_n is not None
-            else []
-        ),
+        *_flagged_sample(r),
         f"- discard sample: {r.discard_n} drawn with seed {r.seed} from the pair's discard pile; "
         f"{r.elusion.n} labeled by the judge",
         "",
@@ -179,7 +193,7 @@ def render(r: RunReport) -> str:
     else:
         by = r.sound_by_label
         lines += [
-            f"The grader ({r.grader_model}) read each flagged paragraph with the reviewer's",
+            f"The grader ({r.grader_model}) read each {each} with the reviewer's",
             "rationale and quote and said whether the rationale is a faithful reading. The",
             "quote check is mechanical: does the quote occur in the paragraph.",
             "",
@@ -187,7 +201,7 @@ def render(r: RunReport) -> str:
             metric_line("rationale sound", r.rationale_sound),
             metric_line("quote verbatim", r.quote_verbatim),
             "",
-            "Rationale soundness against the judge's label, over the flagged paragraphs:",
+            f"Rationale soundness against the judge's label, over {over}:",
             "",
             f"- sound and relevant: {by.get((1, 1), 0)}",
             f"- sound and not relevant: {by.get((1, 0), 0)}",
@@ -230,7 +244,7 @@ def render(r: RunReport) -> str:
         "",
         "## Companies found",
         "",
-        "Companies of the flagged paragraphs the judge labeled relevant, with paragraph counts.",
+        f"Companies of the {of} the judge labeled relevant, with paragraph counts.",
         "",
     ]
     if r.companies:

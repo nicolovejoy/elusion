@@ -53,7 +53,7 @@ from elusion.flows.review import (
 )
 from elusion.review import db
 from elusion.review.corpus import load_texts
-from elusion.review.db import scores_for, verdicts_for
+from elusion.review.db import jobs_summary, scores_for, verdicts_for
 from elusion.review.prompt import load_prompt
 from elusion.review.providers import AnthropicProvider, Grader, Verdict
 
@@ -107,6 +107,7 @@ def grade(
     grades_csv: Path | None = None,
     flagged_n: int | None = None,
     seed: int = DEFAULT_SEED,
+    force: bool = False,
 ) -> GradeSummary:
     """Grade the flagged rationales of the review run (`review_model`, `prompt_version`)
     for the paragraphs filed in `years`.
@@ -117,7 +118,10 @@ def grade(
     from Postgres; `grades_csv` to data/grades/<criterion>.csv. Tests pass their own.
     With `flagged_n`, only the verdicts of the seeded flagged sample are graded: the same
     `split_piles` draw the judge labeled, recomputed here from the scores and `seed`, so
-    every graded rationale has a judge label to be read against. The
+    every graded rationale has a judge label to be read against. That draw depends on
+    the whole flagged pile, so with `flagged_n` an unfinished review job is refused
+    (ReviewStillRunning) unless `force`, as in the judge flow: drawn from partial scores,
+    it would pay to grade abstracts that fall out of the final sample. The
     spend guard is the judge flow's: above `max_run_usd` (default ELUSION_MAX_RUN_USD)
     the flow raises BudgetExceeded before any concurrent spend, and a probe without a
     single usable grade raises RuntimeError.
@@ -138,6 +142,20 @@ def grade(
                 f"no flagged scores for ({review_model}, {review_version}) filed in {years}"
             )
         if flagged_n is not None:
+            jobs = jobs_summary(engine, review_model, review_version, years)
+            if jobs["unfinished"]:
+                ids = ", ".join(jobs["unfinished_ids"])
+                msg = (
+                    f"review job(s) {ids} for ({review_model}, {review_version}) still "
+                    "running (no finished_at)"
+                )
+                if not force:
+                    from elusion.flows.evaluate import ReviewStillRunning
+
+                    raise ReviewStillRunning(
+                        f"{msg}; wait for it to finish, or pass --force if it was killed"
+                    )
+                log.warning("%s; continuing because force=True", msg)
             scores = scores_for(engine, review_model, review_version, years)
             drawn = {d for d, _ in split_piles(scores, threshold, 0, seed, flagged_n)}
             verdicts = {d: v for d, v in verdicts.items() if d in drawn}

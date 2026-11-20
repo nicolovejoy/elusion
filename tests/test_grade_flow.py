@@ -249,6 +249,7 @@ def pair(monkeypatch):
     monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
     monkeypatch.setattr(mod, "verdicts_for", lambda *a: dict(verdicts))
     monkeypatch.setattr(mod, "scores_for", lambda engine, model, version, years: scores)
+    monkeypatch.setattr(mod, "jobs_summary", lambda *a: {"unfinished": False, "unfinished_ids": []})
     return scores
 
 
@@ -287,3 +288,41 @@ def test_no_flagged_limit_grades_every_flagged_verdict(env, pair) -> None:
 def test_verdicts_passed_in_are_not_narrowed(env) -> None:
     path, _ = env
     assert run(path, verdicts_of(6), FakeGrader(), flagged_n=2).graded == 6
+
+
+@pytest.fixture
+def unfinished(pair, monkeypatch):
+    import elusion.flows.grade as mod
+
+    seen = []
+    monkeypatch.setattr(
+        mod,
+        "jobs_summary",
+        lambda engine, model, version, years: (
+            seen.append(years) or {"unfinished": True, "unfinished_ids": ["job-abc"]}
+        ),
+    )
+    return seen
+
+
+def test_flagged_limit_refuses_while_a_review_job_is_unfinished(env, unfinished) -> None:
+    """The sample depends on the whole flagged pile: drawn early, it grades ids that
+    fall out of the final sample."""
+    import elusion.flows.grade as mod
+    from elusion.flows.evaluate import ReviewStillRunning
+
+    path, _ = env
+    g = FakeGrader()
+    with pytest.raises(ReviewStillRunning, match=r"job-abc.*--force"):
+        mod.grade("c", "v2", years=[2018], grader=g, grades_csv=path, flagged_n=4)
+    assert g.calls == [] and read_rows(path) == []
+    s = mod.grade("c", "v2", years=[2018], grader=g, grades_csv=path, flagged_n=4, force=True)
+    assert s.graded == 4
+
+
+def test_without_a_flagged_limit_an_unfinished_review_is_not_looked_at(env, unfinished) -> None:
+    import elusion.flows.grade as mod
+
+    path, _ = env
+    assert mod.grade("c", "v2", years=[2018], grader=FakeGrader(), grades_csv=path).graded == 10
+    assert unfinished == []

@@ -294,14 +294,22 @@ def grade(
     seed: Annotated[
         int, typer.Option(help="Seed the flagged sample was drawn with.")
     ] = DEFAULT_SEED,
+    force: Annotated[
+        bool,
+        typer.Option(
+            help="With --flagged-n: grade even though a review job for the pair has no "
+            "finished_at (only for a job whose process was killed)."
+        ),
+    ] = False,
 ) -> None:
     """Have the grader model judge whether each flagged rationale is a sound reading."""
+    from elusion.flows.evaluate import ReviewStillRunning
     from elusion.flows.grade import grade as grade_flow
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
-    typer.echo(
-        grade_flow(
+    try:
+        summary = grade_flow(
             criterion.stem,
             prompt_version=prompt_version,
             years=sorted(set(year)),
@@ -310,8 +318,12 @@ def grade(
             max_run_usd=max_run_usd,
             flagged_n=flagged_n,
             seed=seed,
+            force=force,
         )
-    )
+    except ReviewStillRunning as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(summary)
 
 
 @app.command()
@@ -389,6 +401,44 @@ def label(
     typer.echo(
         label_session(criterion.stem, n, seed, candidates=candidates, exclude=set(exclude or ()))
     )
+
+
+@app.command()
+def agreement(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+    judge_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned judge model to compare with; default ELUSION_JUDGE_MODEL."),
+    ] = None,
+) -> None:
+    """Count how often the judge matched your blind labels, and print each disagreement.
+
+    Reads the gold CSV only: no model call, nothing written. Run it after `judge
+    --only-labeled`, before the judge labels the rest.
+    """
+    import shutil
+
+    from elusion.config import settings
+    from elusion.corpora import corpus_for
+    from elusion.evaluate.agreement import compare, render
+    from elusion.evaluate.gold import gold_path
+    from elusion.review.corpus import load_texts
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    judge_model = judge_model or settings.judge_model
+    try:
+        comparison = compare(gold_path(criterion.stem, settings.data_dir), judge_model)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from None
+    texts = {}
+    if comparison.disagreements:
+        texts = load_texts(corpus_for(criterion.stem).text_dir(settings.data_dir))
+    width = shutil.get_terminal_size((80, 24)).columns
+    typer.echo(render(comparison, judge_model, texts, width), nl=False)
 
 
 @app.command()
