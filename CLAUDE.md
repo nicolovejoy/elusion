@@ -60,7 +60,7 @@ infra/terraform/  infra/helm/elusion/  infra/pulumi/
 docs/  data/ (gitignored)  tests/
 ```
 
-## Commands (fill in as they exist)
+## Commands
 
 ```
 docker compose up -d          # postgres, redpanda, mlflow, prefect server
@@ -68,6 +68,7 @@ uv sync                       # install
 uv run pytest                 # tests
 uv run elusion collect --year 2019
 op run --env-file=.env.tpl -- uv run elusion harvest [--max-pages 1]   # phase 7: abstracts from OpenAlex for the terms in src/elusion/collect/terms.py; free, metered, safe to re-run
+uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 25000   # phase 7: SAMPLE is an upper limit; scored ids are skipped
 uv run elusion review --criterion criteria/cloud-concentration.md --sample 20000
 uv run elusion review --criterion criteria/cloud-concentration.md --prompt-version v2 --sample 20000 --provider openai --model gpt-6-luna
 uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019 [--review-model gpt-6-luna]
@@ -75,13 +76,10 @@ uv run elusion grade --criterion criteria/cloud-concentration.md --prompt-versio
 uv run elusion evaluate --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019 [--review-model gpt-6-luna]   # report + one MLflow run
 uv run elusion promote --run <mlflow run id>   # register that run's reviewer, alias champion
 uv run elusion review --criterion criteria/cloud-concentration.md --reviewer elusion-reviewer@champion --sample 50
-infra/check-image.sh elusion:dev     # phase 6 checks, no Azure needed: image (build it first; PLATFORM=linux/amd64 for the AKS image)
-infra/check-chart.sh                 # the Helm chart renders and validates (needs helm, docker, uv, and kubectl pointed at a running cluster such as OrbStack's)
-infra/check-terraform.sh             # Terraform fmt, validate, provider pinned, no GUID or email in the .tf files
-infra/export.sh                      # on the Azure day: scores and review_jobs out of the cluster's Postgres into data/exports/
 ```
 
-`infra/README.md` is the Azure-day runbook: every command, in order, for the one cluster run.
+Phase 6 (closed): `infra/README.md` is the Azure-day runbook and lists the checks that need
+no Azure (`infra/check-*.sh`) and `infra/export.sh`.
 
 `--year` is required on judge, grade and evaluate and names the population by filing year:
 `--year 2018 --year 2019` is the laptop's, `--year 2020` the AKS run's (gpt-6-luna, v2 only).
