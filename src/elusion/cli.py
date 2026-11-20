@@ -354,6 +354,13 @@ def label(
         list[str] | None,
         typer.Option(help="Document id never to show (already seen); repeat for several."),
     ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            help="With --year: draw even though a review job for the pair has no "
+            "finished_at (only for a job whose process was killed)."
+        ),
+    ] = False,
 ) -> None:
     """Label paragraphs yourself, blind: before the judge (--year) or as its audit."""
     from elusion.evaluate.label import label as label_session
@@ -374,6 +381,7 @@ def label(
                 seed=seed,
                 review_model=review_model,
                 flagged_n=flagged_n,
+                force=force,
             )
         except ReviewStillRunning as exc:
             typer.echo(f"error: {exc}", err=True)

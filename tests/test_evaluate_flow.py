@@ -534,7 +534,7 @@ def test_missing_label_in_the_flagged_draw_names_the_flag(sampled) -> None:
 def test_evaluate_without_the_judges_flagged_limit_says_how_many_are_missing(sampled) -> None:
     from elusion.flows.evaluate import MissingLabels
 
-    with pytest.raises(MissingLabels, match=r"14 flagged paragraphs have no"):
+    with pytest.raises(MissingLabels, match=r"14 flagged paragraphs have no.*--flagged-n"):
         sampled()
 
 

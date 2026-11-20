@@ -73,7 +73,10 @@ def test_flagged_limit_samples_the_flagged_pile():
     assert len(flagged) == 20 and len(set(flagged)) == 20
     assert all(d.startswith("f") for d in flagged)
     assert got == split_piles(dict(reversed(SMALL.items())), 3, 10, seed=7, flagged_n=20)
-    assert flagged != sorted(SMALL)[:20]  # a draw, not the first twenty
+    whole = sorted(d for d in SMALL if d.startswith("f"))
+    assert flagged != whole[:20]  # a draw, not the first twenty
+    other = [d for d, p in split_piles(SMALL, 3, 10, seed=8, flagged_n=20) if p == "flagged"]
+    assert other != flagged  # and another seed draws another twenty
 
 
 def test_flagged_limit_does_not_move_the_discard_draw():

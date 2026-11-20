@@ -240,6 +240,17 @@ def judge(
             gold = with_seeds(gold, scores, threshold, seed_ids)
     if only_human:
         by_owner = labeled_ids(path, HUMAN)
+        outside = by_owner - {d for d, _ in gold}
+        if outside:
+            # Not an error: a gold file can hold the owner's labels from another draw.
+            msg = (
+                f"{len(outside)} of the {len(by_owner)} human labels in {path} are not "
+                "among the drawn gold ids and are left out; if that is unexpected, check "
+                "that --flagged-n, --discard-n and the seed are the ones `elusion label` "
+                "was given"
+            )
+            print(f"WARNING: {msg}", file=sys.stderr)
+            log.warning(msg)
         gold = [(d, p) for d, p in gold if d in by_owner]
         if not gold:
             raise RuntimeError(
@@ -462,7 +473,8 @@ def evaluate(
     if missing:
         raise MissingLabels(
             f"{len(missing)} flagged paragraphs have no {judge_model} label in {csv}, "
-            f"e.g. {min(missing)}; re-run `elusion judge` to fill them"
+            f"e.g. {min(missing)}; re-run `elusion judge` to fill them, or, if the judge "
+            "was given --flagged-n, pass the same value here"
         )
     flagged_rows = [judged[d] for d in sorted(flagged)]
     draw = {d for d, pile in piles if pile == "discard"}

@@ -286,3 +286,17 @@ def test_label_from_the_draw_says_why_nothing_is_left(monkeypatch, tmp_path):
     _label_env(monkeypatch, tmp_path)
     out = mod.label("c", 2, candidates=[("f00", "flagged")], exclude={"f00"})
     assert out == "nothing to label: every drawn abstract is labelled or excluded"
+
+
+def test_cli_label_force_draws_despite_an_unfinished_review_job(monkeypatch, tmp_path):
+    """A killed review job never gets a finished_at; --force is the way past it, as on judge."""
+    import elusion.flows.evaluate as flows
+
+    crit, sessions = _label_env(monkeypatch, tmp_path)
+    seen = {}
+    monkeypatch.setattr(flows, "draw_gold", lambda c, v, **kw: seen.update(kw) or _cands(3, 3))
+    args = ["label", "--criterion", crit, *DRAW_ARGS, "--n", "6"]
+    assert CliRunner().invoke(app, args).exit_code == 0 and seen["force"] is False
+    r = CliRunner().invoke(app, [*args, "--force"])
+    assert r.exit_code == 0, r.output
+    assert seen["force"] is True and len(sessions) == 2

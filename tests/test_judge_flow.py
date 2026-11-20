@@ -499,3 +499,26 @@ def test_seeds_is_refused_for_a_criterion_without_citation_seeds(env, scored) ->
     with pytest.raises(RuntimeError, match="no citation seeds"):
         judge("cloud-concentration", years=YEARS, provider=j, gold_csv=path, seeds=True)
     assert j.calls == []
+
+
+def test_only_human_warns_about_human_labels_outside_the_draw(env, capsys) -> None:
+    """Sizes or a seed that differ from `label`'s would otherwise shrink the 40 silently."""
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    append_rows(path, [human("d000", "flagged"), human("d030", "flagged"), human("d031", "x")])
+    s = judge(
+        "c", years=YEARS, gold=gold_of(6), provider=FakeJudge(), gold_csv=path, only_human=True
+    )
+    assert s.labeled == 1
+    err = capsys.readouterr().err
+    assert "WARNING: 2 of the 3 human labels" in err and "--flagged-n" in err
+
+
+def test_only_human_is_quiet_when_every_human_label_is_in_the_draw(env, capsys) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    append_rows(path, [human("d000", "flagged")])
+    judge("c", years=YEARS, gold=gold_of(6), provider=FakeJudge(), gold_csv=path, only_human=True)
+    assert "WARNING" not in capsys.readouterr().err
