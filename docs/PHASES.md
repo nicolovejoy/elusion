@@ -62,7 +62,7 @@ Work in order. A phase is done when every box is ticked and `docs/notes/phase-N.
 - [x] Terraform: resource group, AKS (1–2 small nodes), container registry, blob container
 - [x] Helm chart: review service + Prefect worker; secrets from Kubernetes secrets, not the chart
 - [x] One real review run on the cluster against the 20k sample; report notes the cluster name
-- [ ] `terraform destroy` the same day; confirm the bill
+- [x] `terraform destroy` the same day; confirm the bill ($0.93, confirmed 2026-11-20)
 - [ ] Optional: Pulumi (Python) rewrite of the Terraform module; note the differences
 - [ ] Note: AWS-to-Azure mapping; what Helm did for us; what it cost
 

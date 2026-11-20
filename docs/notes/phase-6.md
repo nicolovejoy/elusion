@@ -1,6 +1,6 @@
 # Phase 6: Production in Azure
 
-<!-- Nico's draft. One figure is still to fill in: the Azure bill, under "What we learned". -->
+<!-- Nico's draft. The Azure bill was filled in on 2026-11-20. -->
 
 ## What we built
 
@@ -71,8 +71,10 @@ Model spend was $3.16 against a projection of about $3.40: review $2.19 (project
 $2.20), judge $0.70 (about $1), grade $0.27 (about $0.20). Azure was projected at about
 $2 for an 8-hour day, and the cluster ran for under four.
 
-**To fill in, 2026-11-17.** Azure bill: $__ for `rg-elusion`, $__ for
-`MC_rg-elusion_aks-elusion_westus2`.
+Azure bill, read from Cost Management on 2026-11-20: $0.93 in all. $0.03 for
+`rg-elusion` (the container registry) and $0.90 for `MC_rg-elusion_aks-elusion_westus2`
+(virtual machines $0.56, their disks $0.20, the load balancer $0.12, the virtual network
+$0.02). Only `NetworkWatcherRG` is left in the subscription, and it costs nothing.
 
 ## Results
 
