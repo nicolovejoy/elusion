@@ -20,6 +20,7 @@ from elusion.evaluate.gold import (
     read_rows,
     select_gold,
     split_piles,
+    with_seeds,
 )
 from tests.conftest import requires_service
 
@@ -90,6 +91,19 @@ def test_no_flagged_limit_is_todays_result():
 def test_flagged_pile_smaller_than_the_limit_is_taken_whole():
     got = split_piles(SMALL, 3, 10, seed=7, flagged_n=500)
     assert sum(1 for _, p in got if p == "flagged") == 50
+
+
+def test_with_seeds_adds_flagged_seeds_outside_the_draw():
+    gold = [("f1", "flagged"), ("d1", "discard")]
+    scores = {"f1": 4, "f2": 3, "f3": 4, "d1": 0, "d2": 1}
+    got = with_seeds(gold, scores, 3, seed_doc_ids={"f1", "f3", "d2", "zz"})
+    assert got == [("f1", "flagged"), ("d1", "discard"), ("f3", "seed")]
+
+
+def test_with_seeds_appends_in_id_order():
+    scores = {"s2": 3, "s1": 4, "f1": 4}
+    got = with_seeds([("f1", "flagged")], scores, 3, seed_doc_ids={"s2", "s1"})
+    assert got == [("f1", "flagged"), ("s1", "seed"), ("s2", "seed")]
 
 
 def row(doc_id, labeler="claude-opus-5-5", label=1, pile="flagged"):

@@ -3,7 +3,7 @@ from scratch, because a harvest only ever brings what is new."""
 
 import pyarrow.parquet as pq
 
-from elusion.collect.abstracts import add_works
+from elusion.collect.abstracts import add_works, doc_ids_by_work
 from elusion.collect.openalex import to_work
 from elusion.review.corpus import load_texts
 from tests.test_openalex import work
@@ -57,3 +57,22 @@ def test_a_work_listed_twice_in_one_batch_is_written_once(tmp_path) -> None:
 def test_no_temporary_file_is_left_behind(tmp_path) -> None:
     add_works(tmp_path, works(1))
     assert [p.name for p in tmp_path.iterdir()] == ["year=2026.parquet"]
+
+
+def test_doc_ids_by_work_reads_every_year_file(tmp_path) -> None:
+    batch = works(1, 2) + works(3, year=2025)
+    add_works(tmp_path, batch)
+    assert doc_ids_by_work(tmp_path) == {w["work_id"]: {w["doc_id"]} for w in batch}
+    assert set(doc_ids_by_work(tmp_path)) == {"W1", "W2", "W3"}
+
+
+def test_doc_ids_by_work_keeps_every_document_of_a_work(tmp_path) -> None:
+    """A work whose abstract changed between two harvests is stored as two documents."""
+    (old,) = works(1)
+    new = {**old, "doc_id": "another-doc", "text": "A changed abstract."}
+    add_works(tmp_path, [old, new])
+    assert doc_ids_by_work(tmp_path) == {"W1": {old["doc_id"], "another-doc"}}
+
+
+def test_doc_ids_by_work_of_a_missing_directory_is_empty(tmp_path) -> None:
+    assert doc_ids_by_work(tmp_path / "nope") == {}

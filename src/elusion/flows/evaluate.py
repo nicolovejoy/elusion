@@ -46,9 +46,11 @@ from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
 from sqlalchemy.engine import Engine
 
+from elusion.collect.abstracts import doc_ids_by_work
+from elusion.collect.custody import seed_works
 from elusion.collect.db import company_counts, count_documents
 from elusion.config import settings
-from elusion.corpora import corpus_for
+from elusion.corpora import OPENALEX, corpus_for
 from elusion.evaluate import metrics
 from elusion.evaluate.gold import (
     DEFAULT_SEED,
@@ -65,6 +67,7 @@ from elusion.evaluate.gold import (
     labeled_ids,
     select_gold,
     split_piles,
+    with_seeds,
 )
 from elusion.evaluate.grades import grade_cost_usd, grade_runs_path, grades_path, rows_for
 from elusion.evaluate.report import RunReport, render, years_label
@@ -174,6 +177,7 @@ def judge(
     force: bool = False,
     flagged_n: int | None = None,
     only_human: bool = False,
+    seeds: bool = False,
 ) -> JudgeSummary:
     """Label the gold set of the review run (`review_model`, `prompt_version`) for the
     paragraphs filed in `years`.
@@ -190,7 +194,9 @@ def judge(
     `split_piles`); without it every flagged paragraph is labeled. `only_human` narrows
     the gold to the ids the owner has already labeled by hand, so the judge can be
     measured against the owner on a few dozen before it is paid for the rest; a later
-    run without it skips those ids and labels the others.
+    run without it skips those ids and labels the others. `seeds` adds, after the draw,
+    every flagged citation seed the draw left out (pile "seed", see `with_seeds`); it
+    applies only to a criterion over the abstracts corpus, the one with citation seeds.
 
     While a review job that scored the population is unfinished the scores may be
     partial: the discard sample would be drawn from them, and once the review finishes,
@@ -211,6 +217,10 @@ def judge(
     provider = provider or AnthropicProvider(settings.judge_model)
     path = gold_csv or gold_path(criterion, settings.data_dir)
     if gold is None:
+        corpus = corpus_for(criterion)
+        if seeds and corpus is not OPENALEX:
+            raise RuntimeError(f"{criterion} is reviewed over '{corpus.name}': no citation seeds")
+        engine = db.make_engine(settings.database_url)
         gold = draw_gold(
             criterion,
             prompt_version,
@@ -221,7 +231,13 @@ def judge(
             review_model=review_model,
             flagged_n=flagged_n,
             force=force,
+            engine=engine,
         )
+        if seeds:
+            by_work = doc_ids_by_work(corpus.text_dir(settings.data_dir))
+            seed_ids = {d for w in seed_works(engine) for d in by_work.get(w, ())}
+            scores = scores_for(engine, review_model, f"{criterion}/{prompt_version}", years)
+            gold = with_seeds(gold, scores, threshold, seed_ids)
     if only_human:
         by_owner = labeled_ids(path, HUMAN)
         gold = [(d, p) for d, p in gold if d in by_owner]

@@ -22,7 +22,7 @@ from __future__ import annotations
 import csv
 import json
 import random
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import astuple, dataclass, fields
 from pathlib import Path
 from typing import Literal
@@ -31,7 +31,9 @@ from sqlalchemy.engine import Engine
 
 from elusion.review.db import scores_for
 
-Pile = Literal["flagged", "discard"]
+# "seed": a flagged document found on the citation route (phase 7) that the flagged draw
+# left out. It is judged for harvest recall and never counts in precision.
+Pile = Literal["flagged", "discard", "seed"]
 
 HUMAN = "human"  # the `labeler` value for the owner's own labels
 DEFAULT_SEED = 20261104  # fixed default for the discard sample; written into the report
@@ -41,7 +43,7 @@ DEFAULT_SEED = 20261104  # fixed default for the discard sample; written into th
 class GoldRow:
     doc_id: str
     label: int  # 1 = meets the criterion, 0 = does not
-    pile: str  # "flagged" | "discard": the pile when labeled (informational)
+    pile: str  # "flagged" | "discard" | "seed": the pile when labeled (informational)
     labeler: str  # the judge's pinned model id, or HUMAN
     prompt_version: str  # the judge prompt version; empty for HUMAN rows
     rationale: str
@@ -159,6 +161,26 @@ def split_piles(
     discard = sorted(d for d, s in scores.items() if s < threshold)
     sample = random.Random(seed).sample(discard, min(discard_n, len(discard)))
     return [(d, "flagged") for d in flagged] + [(d, "discard") for d in sample]
+
+
+def with_seeds(
+    gold: list[tuple[str, Pile]],
+    scores: Mapping[str, int],
+    threshold: int,
+    seed_doc_ids: Collection[str],
+) -> list[tuple[str, Pile]]:
+    """`gold`, then (doc_id, "seed") for each flagged seed document the draw left out.
+
+    A *seed* here is a paper found by following citations from an anchor paper, not by
+    a search term; whether the searches also returned it is how harvest recall is
+    estimated, and only for seeds the judge calls relevant, so each flagged seed needs a
+    label even when the random sample of the flagged pile did not draw it. A seed
+    already in `gold` keeps its pile, a discarded seed is not judged, and an id with no
+    score is ignored. Added ids are sorted.
+    """
+    have = {d for d, _ in gold}
+    extra = sorted(d for d in seed_doc_ids if scores.get(d, -1) >= threshold and d not in have)
+    return gold + [(d, "seed") for d in extra]
 
 
 def select_gold(

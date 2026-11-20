@@ -59,3 +59,19 @@ def add_works(abstracts_dir: Path, works: Iterable[Work]) -> int:
         os.replace(tmp, path)
         added += len(new)
     return added
+
+
+def doc_ids_by_work(abstracts_dir: Path) -> dict[str, set[str]]:
+    """Every `doc_id` stored for each OpenAlex `work_id`, over every year file.
+
+    A document id is derived from the abstract's text, so a work whose abstract changed
+    between two harvests is stored as two documents; that is why the value is a set.
+    """
+    by_work: dict[str, set[str]] = {}
+    for path in sorted(abstracts_dir.glob("year=*.parquet")):
+        table = pq.read_table(path, columns=["doc_id", "work_id"])
+        for doc_id, work_id in zip(
+            table["doc_id"].to_pylist(), table["work_id"].to_pylist(), strict=True
+        ):
+            by_work.setdefault(work_id, set()).add(doc_id)
+    return by_work

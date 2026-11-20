@@ -439,3 +439,63 @@ def test_draw_gold_with_no_scores_is_an_error(monkeypatch) -> None:
     )
     with pytest.raises(RuntimeError, match="no scores"):
         draw_gold("c", "v2", years=YEARS, engine="engine")
+
+
+def test_seed_rows_carry_the_seed_pile(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    gold = [("d000", "flagged"), ("d001", "discard"), ("d002", "seed")]
+    judge("c", years=YEARS, gold=gold, provider=FakeJudge(), gold_csv=path)
+    assert {r.doc_id: r.pile for r in judge_rows(path)} == dict(gold)
+
+
+@pytest.fixture
+def scored(monkeypatch):
+    """judge() without `gold`: 4 flagged and 4 discard scores, the review finished, and
+    two citation seeds: W1 flagged (d001, d003 its two documents), W2 discarded (d005)."""
+    import elusion.evaluate.gold as gold_mod
+    import elusion.flows.evaluate as mod
+
+    scores = {f"d{i:03d}": (4 if i < 4 else 0) for i in range(8)}
+    monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(gold_mod, "scores_for", lambda engine, model, version, years: scores)
+    monkeypatch.setattr(mod, "scores_for", lambda engine, model, version, years: scores)
+    monkeypatch.setattr(
+        mod, "jobs_summary", lambda *a: {"jobs": 1, "unfinished": False, "unfinished_ids": []}
+    )
+    monkeypatch.setattr(mod, "seed_works", lambda engine: {"W1": object(), "W2": object()})
+    monkeypatch.setattr(
+        mod,
+        "doc_ids_by_work",
+        lambda d: {"W1": {"d001", "d003"}, "W2": {"d005"}, "W9": {"d002"}},
+    )
+    return scores
+
+
+def test_seeds_adds_the_flagged_seeds_the_draw_left_out(env, scored) -> None:
+    from elusion.evaluate.gold import split_piles
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    kw = dict(years=YEARS, discard_n=2, flagged_n=1, seed=7, gold_csv=path)
+    drawn = {d for d, p in split_piles(scored, 3, 2, 7, flagged_n=1) if p == "flagged"}
+    s = judge("auditable-decisions", "v1", provider=FakeJudge(), seeds=True, **kw)
+    piles = {r.doc_id: r.pile for r in judge_rows(path)}
+    assert {d for d, p in piles.items() if p == "flagged"} == drawn
+    assert {d for d, p in piles.items() if p == "seed"} == {"d001", "d003"} - drawn
+    assert "d005" not in piles  # a discarded seed is not judged; d002 is not a seed
+    assert s.labeled == len(piles)
+    # Without --seeds the same draw has no seed rows to add; nothing is paid twice.
+    again = judge("auditable-decisions", "v1", provider=FakeJudge(), **kw)
+    assert again.labeled == 0
+
+
+def test_seeds_is_refused_for_a_criterion_without_citation_seeds(env, scored) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    j = FakeJudge()
+    with pytest.raises(RuntimeError, match="no citation seeds"):
+        judge("cloud-concentration", years=YEARS, provider=j, gold_csv=path, seeds=True)
+    assert j.calls == []

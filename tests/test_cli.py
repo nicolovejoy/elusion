@@ -94,6 +94,7 @@ def test_judge_command_passes_criterion_name_and_defaults(monkeypatch) -> None:
         "force": False,
         "flagged_n": None,
         "only_human": False,
+        "seeds": False,
     }
     assert "judge summary" in result.output
 
@@ -172,6 +173,29 @@ def test_judge_cli_passes_flagged_n_and_only_labeled(monkeypatch, tmp_path) -> N
     r = CliRunner().invoke(app, [*args, "--flagged-n", "400", "--only-labeled"])
     assert r.exit_code == 0, r.output
     assert (seen["flagged_n"], seen["only_human"]) == (400, True)
+
+
+def test_judge_cli_passes_seeds(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "judge", lambda criterion, **kw: seen.update(kw) or "ok")
+    args = ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--seeds"])
+    assert r.exit_code == 0, r.output
+    assert seen["seeds"] is True
+
+
+def test_judge_cli_rejects_seeds_with_only_labeled(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    called = []
+    monkeypatch.setattr(mod, "judge", lambda criterion, **kw: called.append(kw) or "ok")
+    args = ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--seeds", "--only-labeled"])
+    assert r.exit_code == 2
+    assert "--seeds" in r.output and "--only-labeled" in r.output
+    assert called == []
 
 
 def test_judge_refusal_exits_1_without_traceback(monkeypatch, tmp_path) -> None:

@@ -222,6 +222,14 @@ def judge(
             "`elusion label`.",
         ),
     ] = False,
+    seeds: Annotated[
+        bool,
+        typer.Option(
+            "--seeds",
+            help="Also label the flagged citation seeds the flagged sample left out "
+            "(abstracts only; they feed harvest recall, never precision).",
+        ),
+    ] = False,
 ) -> None:
     """Have the judge model label the gold set (flagged pile + discard sample) to a CSV."""
     from elusion.flows.evaluate import ReviewStillRunning
@@ -229,6 +237,13 @@ def judge(
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+
+    if seeds and only_labeled:
+        raise typer.BadParameter(
+            "--seeds cannot be combined with --only-labeled: the seeds are not among "
+            "the paragraphs the owner labels",
+            param_hint="--seeds",
+        )
 
     try:
         summary = judge_flow(
@@ -243,6 +258,7 @@ def judge(
             force=force,
             flagged_n=flagged_n,
             only_human=only_labeled,
+            seeds=seeds,
         )
     except ReviewStillRunning as exc:
         typer.echo(f"error: {exc}", err=True)
