@@ -284,6 +284,16 @@ def grade(
         float | None,
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
     ] = None,
+    flagged_n: Annotated[
+        int | None,
+        typer.Option(
+            help="Grade only the seeded flagged sample of this size, as given to `judge`; "
+            "default: the whole flagged pile."
+        ),
+    ] = None,
+    seed: Annotated[
+        int, typer.Option(help="Seed the flagged sample was drawn with.")
+    ] = DEFAULT_SEED,
 ) -> None:
     """Have the grader model judge whether each flagged rationale is a sound reading."""
     from elusion.flows.grade import grade as grade_flow
@@ -298,6 +308,8 @@ def grade(
             review_model=review_model,
             threshold=threshold,
             max_run_usd=max_run_usd,
+            flagged_n=flagged_n,
+            seed=seed,
         )
     )
 

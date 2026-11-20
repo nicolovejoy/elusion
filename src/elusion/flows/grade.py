@@ -33,6 +33,7 @@ from prefect.cache_policies import NO_CACHE
 
 from elusion.config import settings
 from elusion.corpora import corpus_for
+from elusion.evaluate.gold import DEFAULT_SEED, split_piles
 from elusion.evaluate.grades import (
     GradeRow,
     append_grade_run,
@@ -52,7 +53,7 @@ from elusion.flows.review import (
 )
 from elusion.review import db
 from elusion.review.corpus import load_texts
-from elusion.review.db import verdicts_for
+from elusion.review.db import scores_for, verdicts_for
 from elusion.review.prompt import load_prompt
 from elusion.review.providers import AnthropicProvider, Grader, Verdict
 
@@ -104,6 +105,8 @@ def grade(
     grader: Grader | None = None,
     verdicts: dict[str, Verdict] | None = None,
     grades_csv: Path | None = None,
+    flagged_n: int | None = None,
+    seed: int = DEFAULT_SEED,
 ) -> GradeSummary:
     """Grade the flagged rationales of the review run (`review_model`, `prompt_version`)
     for the paragraphs filed in `years`.
@@ -111,7 +114,10 @@ def grade(
     `years` has no default: one pair can hold several populations (2018-2019 scored on
     the laptop, 2020 on the cluster) and a run must say which one it grades. `verdicts`
     defaults to every verdict of the pair for those years scoring >= `threshold`, read
-    from Postgres; `grades_csv` to data/grades/<criterion>.csv. Tests pass their own. The
+    from Postgres; `grades_csv` to data/grades/<criterion>.csv. Tests pass their own.
+    With `flagged_n`, only the verdicts of the seeded flagged sample are graded: the same
+    `split_piles` draw the judge labeled, recomputed here from the scores and `seed`, so
+    every graded rationale has a judge label to be read against. The
     spend guard is the judge flow's: above `max_run_usd` (default ELUSION_MAX_RUN_USD)
     the flow raises BudgetExceeded before any concurrent spend, and a probe without a
     single usable grade raises RuntimeError.
@@ -131,6 +137,10 @@ def grade(
             raise RuntimeError(
                 f"no flagged scores for ({review_model}, {review_version}) filed in {years}"
             )
+        if flagged_n is not None:
+            scores = scores_for(engine, review_model, review_version, years)
+            drawn = {d for d, _ in split_piles(scores, threshold, 0, seed, flagged_n)}
+            verdicts = {d: v for d, v in verdicts.items() if d in drawn}
     done = graded_ids(path, review_model, review_version, grader.model)
     todo = sorted(d for d in verdicts if d not in done)
     summary = GradeSummary(skipped=len(verdicts) - len(todo))

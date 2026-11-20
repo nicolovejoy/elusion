@@ -369,8 +369,20 @@ def test_promote_command_prints_version_alias_and_registry_url(monkeypatch) -> N
     assert (seen["name"], seen["alias"]) == ("other", "challenger")
 
 
+def test_grade_cli_passes_flagged_n_and_seed(monkeypatch, tmp_path) -> None:
+    import elusion.flows.grade as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "grade", lambda criterion, **kw: seen.update(kw) or "ok")
+    args = ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--flagged-n", "400", "--seed", "11"])
+    assert r.exit_code == 0, r.output
+    assert (seen["flagged_n"], seen["seed"]) == (400, 11)
+
+
 def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
     import elusion.flows.grade as mod
+    from elusion.evaluate.gold import DEFAULT_SEED
 
     seen = {}
     monkeypatch.setattr(
@@ -387,6 +399,8 @@ def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
         "review_model": None,
         "threshold": 3,
         "max_run_usd": None,
+        "flagged_n": None,
+        "seed": DEFAULT_SEED,
     }
     assert "grade ok" in r.output
     seen.clear()

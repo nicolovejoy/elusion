@@ -237,3 +237,53 @@ def test_grade_reads_the_texts_of_the_criterions_corpus(env, monkeypatch) -> Non
             grades_csv=path.with_name(f"{criterion}.csv"),
         )  # fmt: skip
     assert seen == [settings.data_dir / "corpus", settings.data_dir / "abstracts"]
+
+
+@pytest.fixture
+def pair(monkeypatch):
+    """The Postgres readers stubbed: 10 flagged verdicts and 30 discard scores."""
+    import elusion.flows.grade as mod
+
+    verdicts = verdicts_of(10)
+    scores = {d: 3 for d in verdicts} | {f"d{i:03d}": 0 for i in range(10, 40)}
+    monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(mod, "verdicts_for", lambda *a: dict(verdicts))
+    monkeypatch.setattr(mod, "scores_for", lambda engine, model, version, years: scores)
+    return scores
+
+
+def test_flagged_limit_grades_only_the_drawn_ids(env, pair) -> None:
+    import elusion.flows.grade as mod
+    from elusion.evaluate.gold import split_piles
+
+    path, _ = env
+    s = mod.grade(
+        "c", "v2", years=[2018], grader=FakeGrader(), grades_csv=path, flagged_n=4, seed=7
+    )
+    drawn = {d for d, p in split_piles(pair, 3, 0, 7, flagged_n=4) if p == "flagged"}
+    assert len(drawn) == 4 and s.graded == 4
+    assert {r.doc_id for r in read_rows(path)} == drawn
+
+
+def test_flagged_limit_draws_the_ids_the_judge_draws(env, pair) -> None:
+    """The discard sample size must not change which flagged ids are graded."""
+    import elusion.flows.grade as mod
+    from elusion.evaluate.gold import DEFAULT_SEED, split_piles
+
+    path, _ = env
+    mod.grade("c", "v2", years=[2018], grader=FakeGrader(), grades_csv=path, flagged_n=4)
+    judged = {d for d, p in split_piles(pair, 3, 20, DEFAULT_SEED, flagged_n=4) if p == "flagged"}
+    assert {r.doc_id for r in read_rows(path)} == judged
+
+
+def test_no_flagged_limit_grades_every_flagged_verdict(env, pair) -> None:
+    import elusion.flows.grade as mod
+
+    path, _ = env
+    s = mod.grade("c", "v2", years=[2018], grader=FakeGrader(), grades_csv=path)
+    assert s.graded == 10
+
+
+def test_verdicts_passed_in_are_not_narrowed(env) -> None:
+    path, _ = env
+    assert run(path, verdicts_of(6), FakeGrader(), flagged_n=2).graded == 6
