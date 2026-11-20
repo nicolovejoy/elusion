@@ -348,7 +348,8 @@ def judge(
 
 
 class MissingLabels(RuntimeError):
-    """Some flagged paragraph has no judge label, so precision cannot be computed."""
+    """Some flagged paragraph (of the flagged draw, when there is one) has no judge label,
+    so precision cannot be computed."""
 
 
 class MissingDiscardLabels(MissingLabels):
@@ -397,6 +398,7 @@ def evaluate(
     judge_model: str | None = None,
     today: str | None = None,
     log_mlflow: bool = True,
+    flagged_n: int | None = None,
 ) -> EvalResult:
     """Compute the metrics of the review run (review_model, `prompt_version`) over the
     paragraphs filed in `years`, from the judge's labels; write the Markdown report and
@@ -413,6 +415,14 @@ def evaluate(
     by `judge_model`, otherwise MissingDiscardLabels. Labels for docs outside the draw
     (e.g. flagged by another review run) are never counted, so elusion stays a uniform
     sample. Tests pass a fake `engine` and their own paths.
+
+    With `flagged_n` (the value `elusion judge` was given), precision is measured on the
+    seeded sample of the flagged pile instead of the whole pile: only the drawn ids need
+    a label, and only they are counted, in precision, in the rationale grades and in the
+    list of what was found. A label outside the draw (a citation seed, say) is ignored
+    here. Recall and richness still weight the two rates by the sizes of the whole piles,
+    because the sample estimates the rate of the pile it was drawn from. The report also
+    splits precision by score, as a description of the same sample.
 
     An unfinished review job that scored the population only warns (on stderr): the report is still
     written, and its wall-clock line says a job has not finished.
@@ -438,16 +448,24 @@ def evaluate(
     scores = scores_for(engine, review_model, version, years)
     if not scores:
         raise RuntimeError(f"no scores for ({review_model}, {version}) filed in {years}")
-    flagged = {d for d, s in scores.items() if s >= threshold}
+    n_flagged = sum(1 for s in scores.values() if s >= threshold)
+    piles = split_piles(scores, threshold, discard_n, seed, flagged_n)  # both draws, one call
+    flagged = {d for d, pile in piles if pile == "flagged"}  # the whole pile without a limit
     judged = {r.doc_id: r for r in judge_rows(csv) if r.labeler == judge_model}
     missing = flagged - judged.keys()
+    if missing and flagged_n is not None:
+        raise MissingLabels(
+            f"{len(missing)} flagged paragraphs of the draw have no {judge_model} label in "
+            f"{csv}, e.g. {min(missing)}; re-run `elusion judge` with the same --flagged-n "
+            "and seed"
+        )
     if missing:
         raise MissingLabels(
             f"{len(missing)} flagged paragraphs have no {judge_model} label in {csv}, "
             f"e.g. {min(missing)}; re-run `elusion judge` to fill them"
         )
     flagged_rows = [judged[d] for d in sorted(flagged)]
-    draw = {d for d, pile in split_piles(scores, threshold, discard_n, seed) if pile == "discard"}
+    draw = {d for d, pile in piles if pile == "discard"}
     missing_d = draw - judged.keys()
     if missing_d:
         raise MissingDiscardLabels(
@@ -455,9 +473,16 @@ def evaluate(
             "re-run `elusion judge` with the same seed"
         )
     discard_rows = [judged[d] for d in sorted(draw)]
-    n_flagged, n_discard = len(flagged), len(scores) - len(flagged)
+    n_discard = len(scores) - n_flagged
 
     precision = metrics.precision(flagged_rows)
+    precision_by_score = None
+    if flagged_n is not None:
+        precision_by_score = {}
+        for s in range(threshold, 5):
+            labels = [r.label for r in flagged_rows if scores[r.doc_id] == s]
+            if labels:  # a score nothing was drawn at has no rate to report
+                precision_by_score[s] = metrics.proportion(sum(labels), len(labels))
     elusion = metrics.elusion(discard_rows)
     humans = human_rows(csv)
     shared = [h for h in humans if h.doc_id in judged]
@@ -500,6 +525,8 @@ def evaluate(
         date=today or report_date(datetime.now(UTC)),
         seed=seed,
         discard_n=discard_n,
+        flagged_n=flagged_n,
+        precision_by_score=precision_by_score,
         threshold=threshold,
         years=tuple(years),
         filed=sum(count_documents(engine, y, corpus_for(criterion).name) for y in years),

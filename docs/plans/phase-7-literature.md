@@ -319,7 +319,9 @@ is still approved by the owner in task 4, before any call is paid for.
 uv run elusion harvest
 uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 1500    # the probe
 uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 25000   # the rest: SAMPLE is an upper limit, and scored ids are skipped
-uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna
+uv run elusion label --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --n 40 --exclude b5a579121f7c0f6a --exclude 4839dd2f05549e59 --exclude 11e01572681982b3 --exclude 7e84529379fbbf14 --exclude cb52fb2ee7bc1a71 --exclude c70aa5cfcdacaff1
+uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --only-labeled   # the owner's 40 first
+uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --seeds          # then the rest
 uv run elusion evaluate ...                      # the same flags; report gains the PRISMA counts and harvest recall
 uv run elusion index --criterion criteria/auditable-decisions.md --prompt-version v1 --review-model gpt-6-luna
 uv run elusion ask "How is recall estimated when a model does the first-pass review?"
@@ -612,9 +614,20 @@ Part A.
 
    **The judge pass, 2026-11-20: a sample of each pile, and the judge checked against the
    owner first.** The owner chose the order (C below) and approved the whole of this
-   block, sizes and the rule of step 5 included, on 2026-11-20. Not yet built.
+   block, sizes and the rule of step 5 included, on 2026-11-20.
    The implementation plan is `docs/superpowers/plans/2026-11-20-phase-7-judge-sample.md`,
-   approved the same day: six tasks, test-first, to be built in a later session.
+   approved the same day: six tasks, test-first.
+
+   *Result, 2026-11-20: built, not yet run.* `split_piles` takes `flagged_n` and draws
+   the flagged sample with its own generator, so the discard draw (and the
+   `cloud-concentration` gold set) is unchanged. `judge` has `--flagged-n`,
+   `--only-labeled` and `--seeds`; `label` given `--year` picks from the draw before the
+   judge has run, and takes `--exclude`; `grade` and `evaluate` take `--flagged-n` and
+   read the same sample. The report prints the flagged-sample line and precision by
+   score; recall and richness still use the sizes of the whole piles. Nothing stores the
+   draw: every command recomputes it from the scores and the seed, so all of them must be
+   given the same `--flagged-n`, `--discard-n` and seed. No paid call was made. Steps 3
+   to 7 above are the owner's to start, once the review job has finished.
 
    *Why it changes.* The judge reads every flagged abstract plus 200 discards, priced for
    about 900 abstracts at 3% flagged. The probe flagged 55%. At that rate the flagged

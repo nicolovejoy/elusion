@@ -60,6 +60,10 @@ class RunReport:
     grade_cost_usd: float = 0.0
     # review_jobs rows per environment they ran in ("local", or a cluster's name).
     review_envs: dict[str, int] = field(default_factory=dict)
+    # Set when precision was measured on a seeded sample of the flagged pile: the size
+    # asked for, and precision split by score over that same sample.
+    flagged_n: int | None = None
+    precision_by_score: dict[int, Estimate] | None = None
 
 
 def years_label(years: Iterable[int]) -> str:
@@ -117,6 +121,14 @@ def render(r: RunReport) -> str:
         f"- flagged (score >= {r.threshold}): {r.n_flagged}",
         f"- discard (score < {r.threshold}): {r.n_discard}",
         f"- threshold: {r.threshold}",
+        *(
+            [
+                f"- flagged sample: {r.flagged_n} drawn with seed {r.seed} from the pair's "
+                f"flagged pile; {r.precision.n} labeled by the judge"
+            ]
+            if r.flagged_n is not None
+            else []
+        ),
         f"- discard sample: {r.discard_n} drawn with seed {r.seed} from the pair's discard pile; "
         f"{r.elusion.n} labeled by the judge",
         "",
@@ -140,6 +152,16 @@ def render(r: RunReport) -> str:
         "interval covers the true value with probability at least about 90% (0.95 × 0.95),",
         "not 95%.",
         "",
+    ]
+    if r.precision_by_score:
+        lines += [
+            "Precision by score, from the same flagged sample; a description, not a separate",
+            "estimate of the population.",
+            "",
+            *(metric_line(f"score {s}", e) for s, e in sorted(r.precision_by_score.items())),
+            "",
+        ]
+    lines += [
         "## Judge agreement with the owner",
         "",
     ]

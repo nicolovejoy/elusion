@@ -403,6 +403,13 @@ def evaluate(
         str | None,
         typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
     ] = None,
+    flagged_n: Annotated[
+        int | None,
+        typer.Option(
+            help="Size of the flagged sample, as given to `judge`; default: the whole "
+            "flagged pile was labeled."
+        ),
+    ] = None,
 ) -> None:
     """Compute recall, precision, elusion and richness from the judge labels; write the report."""
     from elusion.flows.evaluate import MissingLabels  # MissingDiscardLabels subclasses it
@@ -419,6 +426,7 @@ def evaluate(
             seed=seed,
             discard_n=discard_n,
             review_model=review_model,
+            flagged_n=flagged_n,
         )
     except (MissingLabels, ValueError) as exc:
         # metrics raises ValueError("no labeled rows in the <pile> pile") for an empty

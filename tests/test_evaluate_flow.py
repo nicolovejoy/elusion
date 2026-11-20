@@ -467,3 +467,114 @@ def test_filed_counts_only_documents_of_the_criterions_corpus(env) -> None:
     tmp_path, seen = env
     run(tmp_path)
     assert seen["count_documents"] == [(2018, "edgar"), (2019, "edgar")]
+
+
+# The flagged sample: 20 flagged (h00-h19) and 16 discard (g00-g15); a draw of 5 flagged.
+BIG = {**{f"h{i:02d}": 4 for i in range(20)}, **{f"g{i:02d}": 0 for i in range(16)}}
+DRAWN = sorted(d for d, p in split_piles(BIG, 3, 10, DEFAULT_SEED, flagged_n=5) if p == "flagged")
+OUTSIDE = sorted(set(BIG) - set(DRAWN) - {d for d in BIG if d.startswith("g")})[0]
+
+
+@pytest.fixture
+def sampled(env, monkeypatch):
+    """`evaluate` over BIG with its own gold CSV; returns (run, reports seen, readers seen).
+
+    The judge labeled the five drawn flagged ids (the first three relevant), the seeded
+    discard draw of 10 (none relevant) and one flagged citation seed outside the draw.
+    """
+    import elusion.flows.evaluate as mod
+
+    tmp_path, seen = env
+    data_dir = tmp_path / "sampled"
+    scores = dict(BIG)
+    reports = []
+    real_render = mod.render
+    monkeypatch.setattr(mod, "scores_for", lambda e, m, p, y: dict(scores))
+    monkeypatch.setattr(mod, "render", lambda r: reports.append(r) or real_render(r))
+    rows = [row(d, int(i < 3)) for i, d in enumerate(DRAWN)]
+    rows += [row(d, 0, pile="discard") for d in sorted(seeded_draw(BIG, 10))]
+    rows += [row(OUTSIDE, 1, pile="seed")]
+    append_rows(gold_path("c", data_dir), rows)
+
+    def go(**kw):
+        run(tmp_path, data_dir=data_dir, **kw)
+        return reports[-1]
+
+    go.scores, go.data_dir, go.seen = scores, data_dir, seen
+    return go
+
+
+def test_precision_comes_from_the_flagged_draw_only(sampled) -> None:
+    report = sampled(flagged_n=5)
+    assert (report.precision.k, report.precision.n) == (3, 5)
+    assert (report.n_flagged, report.n_discard) == (20, 16)  # the whole piles' sizes
+    assert report.recall == metrics.recall(report.precision, report.elusion, 20, 16)
+    assert report.richness == metrics.richness(report.precision, report.elusion, 20, 16)
+    assert report.flagged_n == 5
+    # the relevant seed outside the draw is in neither precision nor the works found
+    assert sampled.seen["company_ids"] == DRAWN[:3]
+
+
+def test_flagged_limit_does_not_move_the_discard_sample(sampled) -> None:
+    with_limit = sampled(flagged_n=5).elusion
+    # without a limit every flagged id needs a label: give the other fourteen one
+    rest = [d for d in BIG if d.startswith("h") and d not in DRAWN and d != OUTSIDE]
+    append_rows(gold_path("c", sampled.data_dir), [row(d, 0) for d in rest])
+    assert sampled().elusion == with_limit  # and no MissingDiscardLabels: the same draw
+
+
+def test_missing_label_in_the_flagged_draw_names_the_flag(sampled) -> None:
+    from elusion.flows.evaluate import MissingLabels
+
+    # a draw of 6 holds an id the judge, given 5, never labeled
+    with pytest.raises(MissingLabels, match=r"of the draw have no .*--flagged-n"):
+        sampled(flagged_n=6)
+
+
+def test_evaluate_without_the_judges_flagged_limit_says_how_many_are_missing(sampled) -> None:
+    from elusion.flows.evaluate import MissingLabels
+
+    with pytest.raises(MissingLabels, match=r"14 flagged paragraphs have no"):
+        sampled()
+
+
+def test_precision_by_score_splits_the_same_sample(sampled) -> None:
+    # of the five drawn: the first two score 3 (both relevant), the other three score 4
+    # (one relevant)
+    for d in DRAWN[:2]:
+        sampled.scores[d] = 3
+    report = sampled(flagged_n=5)
+    assert {s: (e.k, e.n) for s, e in report.precision_by_score.items()} == {3: (2, 2), 4: (1, 3)}
+
+
+def test_precision_by_score_leaves_out_a_score_nothing_was_drawn_at(sampled) -> None:
+    assert set(sampled(flagged_n=5).precision_by_score) == {4}
+
+
+def test_without_a_flagged_limit_nothing_changes(env) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+    reports = []
+    real_render = mod.render
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(mod, "render", lambda r: reports.append(r) or real_render(r))
+        run(tmp_path)
+    (report,) = reports
+    assert report.flagged_n is None and report.precision_by_score is None
+
+
+def test_grades_outside_the_flagged_draw_are_not_counted(sampled) -> None:
+    from elusion.evaluate.grades import GradeRow, grades_path
+    from elusion.evaluate.grades import append_rows as append_grades
+
+    def g(doc, sound):
+        return GradeRow(doc, "rev-model", "c/v2", 4, JUDGE, "c/grade-v1", sound, 1, "r", "t")
+
+    not_judged = sorted(set(BIG) - set(DRAWN) - {OUTSIDE} - {d for d in BIG if d[0] == "g"})[0]
+    append_grades(
+        grades_path("c", sampled.data_dir),
+        [g(d, 1) for d in DRAWN] + [g(OUTSIDE, 0), g(not_judged, 0)],
+    )
+    report = sampled(flagged_n=5)
+    assert (report.rationale_sound.k, report.rationale_sound.n) == (5, 5)

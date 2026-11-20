@@ -140,10 +140,27 @@ def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> 
         "seed": DEFAULT_SEED,
         "review_model": None,
         "discard_n": 200,
+        "flagged_n": None,
     }
     assert "docs/reports/cloud-concentration-m-v2.md" in result.output
     assert f"mlflow run {'a' * 32}" in result.output
     assert "/#/experiments" in result.output
+
+
+def test_evaluate_cli_passes_flagged_n(monkeypatch, tmp_path) -> None:
+    from pathlib import Path
+
+    import elusion.flows.evaluate as mod
+    from elusion.flows.evaluate import EvalResult
+
+    seen = {}
+    monkeypatch.setattr(
+        mod, "evaluate", lambda criterion, **kw: seen.update(kw) or EvalResult(Path("r.md"), None)
+    )
+    args = ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--flagged-n", "400"])
+    assert r.exit_code == 0, r.output
+    assert seen["flagged_n"] == 400
 
 
 def _crit(tmp_path):

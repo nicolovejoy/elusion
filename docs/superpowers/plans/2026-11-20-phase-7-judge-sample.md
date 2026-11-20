@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, `uv`, `pytest`, `ruff`, Prefect 3 flows, Typer CLI, SQLAlchemy. No new dependency.
 
-**Status:** approved by the owner on 2026-11-20, not started. To be built natively (one session implements every task, then one fresh reviewer checks the branch), in a later session. Every publication year in the corpus is 2025 or 2026 (checked 2026-11-20), so `--year 2025 --year 2026` names the whole population.
+**Status:** approved by the owner on 2026-11-20; built the same day, one session for every task, then one fresh reviewer for the branch. Every publication year in the corpus is 2025 or 2026 (checked 2026-11-20), so `--year 2025 --year 2026` names the whole population.
 
 **Spec:** `docs/plans/phase-7-literature.md`, task 5, the block "The judge pass, 2026-11-20". Decisions: `docs/DECISIONS.md`, the two lines dated 2026-11-20.
 

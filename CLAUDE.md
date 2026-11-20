@@ -69,6 +69,9 @@ uv run pytest                 # tests
 uv run elusion collect --year 2019
 op run --env-file=.env.tpl -- uv run elusion harvest [--max-pages 1]   # phase 7: abstracts from OpenAlex for the terms in src/elusion/collect/terms.py; free, metered, safe to re-run
 uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 25000   # phase 7: SAMPLE is an upper limit; scored ids are skipped
+uv run elusion label --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --n 40 --exclude b5a579121f7c0f6a --exclude 4839dd2f05549e59 --exclude 11e01572681982b3 --exclude 7e84529379fbbf14 --exclude cb52fb2ee7bc1a71 --exclude c70aa5cfcdacaff1
+uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --only-labeled   # the owner's 40 first
+uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --seeds          # then the rest
 uv run elusion review --criterion criteria/cloud-concentration.md --sample 20000
 uv run elusion review --criterion criteria/cloud-concentration.md --prompt-version v2 --sample 20000 --provider openai --model gpt-6-luna
 uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019 [--review-model gpt-6-luna]

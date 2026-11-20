@@ -197,3 +197,31 @@ def test_render_review_cost_is_the_populations_own_scores() -> None:
     md = " ".join(render(make_report()).split())
     assert "- review run: $0.8340 (the cost of this population's scores, summed)" in md
     assert "A billed call that left no score" in md and "is not in this sum" in md
+
+
+def test_flagged_sample_line_and_by_score_lines_render() -> None:
+    by_score = {3: Estimate(0.25, 0.0866, 0.4910, 5, 20), 4: Estimate(0.9, 0.683, 0.988, 18, 20)}
+    md = render(make_report(threshold=3, flagged_n=400, precision_by_score=by_score))
+    lines = md.splitlines()
+    sample = (
+        "- flagged sample: 400 drawn with seed 20261104 from the pair's flagged pile; "
+        "117 labeled by the judge"
+    )
+    assert sample in lines
+    assert lines[lines.index(sample) + 1].startswith("- discard sample: ")
+    note = lines.index(
+        "Precision by score, from the same flagged sample; a description, not a separate"
+    )
+    assert lines[note + 1] == "estimate of the population."
+    assert lines[note + 3 : note + 5] == [
+        "- score 3: 0.250 [0.087, 0.491] (k/n = 5/20)",
+        "- score 4: 0.900 [0.683, 0.988] (k/n = 18/20)",
+    ]
+    assert note > lines.index("## Metrics") and note < lines.index(
+        "## Judge agreement with the owner"
+    )
+
+
+def test_render_is_unchanged_without_a_flagged_limit() -> None:
+    md = render(make_report())
+    assert "flagged sample" not in md and "score 3" not in md and "by score" not in md
