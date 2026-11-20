@@ -33,6 +33,7 @@ cluster), and each keeps its own piles, discard draw, report file and MLflow run
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
 from collections.abc import Sequence
@@ -51,6 +52,7 @@ from elusion.corpora import corpus_for
 from elusion.evaluate import metrics
 from elusion.evaluate.gold import (
     DEFAULT_SEED,
+    HUMAN,
     GoldRow,
     Pile,
     append_judge_run,
@@ -113,6 +115,46 @@ def _unfinished_msg(jobs: dict, model: str, version: str) -> str:
     return f"review job(s) {ids} for ({model}, {version}) still running (no finished_at)"
 
 
+def draw_gold(
+    criterion: str,
+    prompt_version: str,
+    *,
+    years: list[int],
+    threshold: int = 3,
+    discard_n: int = 200,
+    seed: int = DEFAULT_SEED,
+    review_model: str | None = None,
+    flagged_n: int | None = None,
+    force: bool = False,
+    engine: Engine | None = None,
+) -> list[tuple[str, Pile]]:
+    """The gold ids of the review run (`review_model`, `prompt_version`) over `years`.
+
+    Nothing stores the draw: `judge` and `label` each call this with the same sizes and
+    seed and get the same ids, because the draw depends only on the scores and the seed.
+    That is also why an unfinished review job is refused (ReviewStillRunning) unless
+    `force`: a draw from partial scores is not the draw the finished pile will give.
+    Raises RuntimeError when the pair has no scores for those years.
+    """
+    review_model = review_model or settings.review_model
+    review_version = f"{criterion}/{prompt_version}"
+    engine = engine or db.make_engine(settings.database_url)
+    jobs = jobs_summary(engine, review_model, review_version, years)
+    if jobs["unfinished"]:
+        msg = _unfinished_msg(jobs, review_model, review_version)
+        if not force:
+            raise ReviewStillRunning(
+                f"{msg}; wait for it to finish, or pass --force if it was killed"
+            )
+        logging.getLogger(__name__).warning("%s; continuing because force=True", msg)
+    gold = select_gold(
+        engine, review_model, review_version, threshold, discard_n, seed, years, flagged_n=flagged_n
+    )
+    if not gold:
+        raise RuntimeError(f"no scores for ({review_model}, {review_version}) filed in {years}")
+    return gold
+
+
 @flow(name="judge")
 def judge(
     criterion: str,
@@ -130,6 +172,8 @@ def judge(
     gold: list[tuple[str, Pile]] | None = None,
     gold_csv: Path | None = None,
     force: bool = False,
+    flagged_n: int | None = None,
+    only_human: bool = False,
 ) -> JudgeSummary:
     """Label the gold set of the review run (`review_model`, `prompt_version`) for the
     paragraphs filed in `years`.
@@ -141,6 +185,12 @@ def judge(
     piles; the judge's own prompt is always JUDGE_PROMPT_VERSION. `gold` and `gold_csv`
     default to `select_gold` over Postgres and data/gold/<criterion>.csv; tests pass
     their own.
+
+    `flagged_n` limits the flagged pile to a seeded random sample of that size (see
+    `split_piles`); without it every flagged paragraph is labeled. `only_human` narrows
+    the gold to the ids the owner has already labeled by hand, so the judge can be
+    measured against the owner on a few dozen before it is paid for the rest; a later
+    run without it skips those ids and labels the others.
 
     While a review job that scored the population is unfinished the scores may be
     partial: the discard sample would be drawn from them, and once the review finishes,
@@ -161,19 +211,24 @@ def judge(
     provider = provider or AnthropicProvider(settings.judge_model)
     path = gold_csv or gold_path(criterion, settings.data_dir)
     if gold is None:
-        review_version = f"{criterion}/{prompt_version}"
-        engine = db.make_engine(settings.database_url)
-        jobs = jobs_summary(engine, review_model, review_version, years)
-        if jobs["unfinished"]:
-            msg = _unfinished_msg(jobs, review_model, review_version)
-            if not force:
-                raise ReviewStillRunning(
-                    f"{msg}; wait for it to finish, or pass --force if it was killed"
-                )
-            log.warning("%s; continuing because force=True", msg)
-        gold = select_gold(engine, review_model, review_version, threshold, discard_n, seed, years)
+        gold = draw_gold(
+            criterion,
+            prompt_version,
+            years=years,
+            threshold=threshold,
+            discard_n=discard_n,
+            seed=seed,
+            review_model=review_model,
+            flagged_n=flagged_n,
+            force=force,
+        )
+    if only_human:
+        by_owner = labeled_ids(path, HUMAN)
+        gold = [(d, p) for d, p in gold if d in by_owner]
         if not gold:
-            raise RuntimeError(f"no scores for ({review_model}, {review_version}) filed in {years}")
+            raise RuntimeError(
+                f"no human labels in {path} among the drawn gold ids; run `elusion label` first"
+            )
     pile = dict(gold)
     done = labeled_ids(path, provider.model)
     todo = [d for d in pile if d not in done]

@@ -9,7 +9,16 @@ import json
 import pytest
 from prefect.testing.utilities import prefect_test_harness
 
-from elusion.evaluate.gold import human_rows, judge_cost_usd, judge_rows, judge_runs_path
+from elusion.evaluate.gold import (
+    HUMAN,
+    GoldRow,
+    append_rows,
+    human_rows,
+    judge_cost_usd,
+    judge_rows,
+    judge_runs_path,
+    labeled_ids,
+)
 from elusion.review.prompt import Prompt
 from elusion.review.providers import Judgement, ReviewError
 from tests.fakes import FakeJudge
@@ -260,7 +269,7 @@ def running_review(monkeypatch):
     import elusion.flows.evaluate as mod
 
     monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
-    monkeypatch.setattr(mod, "select_gold", lambda *a: gold_of(5))
+    monkeypatch.setattr(mod, "select_gold", lambda *a, **kw: gold_of(5))
     monkeypatch.setattr(
         mod,
         "jobs_summary",
@@ -297,7 +306,7 @@ def test_review_model_and_years_select_the_population(env, monkeypatch) -> None:
     seen = {}
     monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
 
-    def select(engine, model, version, threshold, discard_n, seed, years):
+    def select(engine, model, version, threshold, discard_n, seed, years, **kw):
         seen["select"] = (model, years)
         return gold_of(5)
 
@@ -345,3 +354,88 @@ def test_judge_reads_the_texts_of_the_criterions_corpus(env, monkeypatch) -> Non
         gold_csv=path.with_name("a.csv"),
     )
     assert seen == [settings.data_dir / "corpus", settings.data_dir / "abstracts"]
+
+
+def human(doc_id: str, pile: str) -> GoldRow:
+    return GoldRow(doc_id, 1, pile, HUMAN, "", "", "2026-11-20T12:00:00+00:00")
+
+
+def test_only_human_labels_just_the_ids_the_owner_labelled(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    gold = gold_of(6, flagged=3)
+    append_rows(path, [human("d000", "flagged"), human("d003", "discard")])
+    j = FakeJudge()
+    s = judge("c", years=YEARS, gold=gold, provider=j, gold_csv=path, only_human=True)
+    assert s.labeled == 2
+    assert labeled_ids(path, j.model) == {"d000", "d003"}
+
+
+def test_only_human_with_no_human_labels_is_an_error(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    j = FakeJudge()
+    with pytest.raises(RuntimeError, match="no human labels"):
+        judge("c", years=YEARS, gold=gold_of(6), provider=j, gold_csv=path, only_human=True)
+    assert j.calls == []
+
+
+def test_only_human_ignores_human_labels_outside_the_draw(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    append_rows(path, [human("d030", "flagged")])  # labelled once, but not in this draw
+    with pytest.raises(RuntimeError, match="no human labels"):
+        judge(
+            "c", years=YEARS, gold=gold_of(6), provider=FakeJudge(), gold_csv=path, only_human=True
+        )
+
+
+def test_full_run_after_only_human_does_not_pay_twice(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    gold = gold_of(6, flagged=3)
+    append_rows(path, [human("d000", "flagged"), human("d003", "discard")])
+    judge("c", years=YEARS, gold=gold, provider=FakeJudge(), gold_csv=path, only_human=True)
+    j = FakeJudge()
+    second = judge("c", years=YEARS, gold=gold, provider=j, gold_csv=path)
+    assert second.skipped == 2 and second.labeled == 4
+    assert len(j.calls) == 4
+
+
+def test_draw_gold_refuses_an_unfinished_review(running_review) -> None:
+    from elusion.flows.evaluate import ReviewStillRunning, draw_gold
+
+    with pytest.raises(ReviewStillRunning, match=r"job-abc.*--force"):
+        draw_gold("c", "v2", years=YEARS)
+    assert draw_gold("c", "v2", years=YEARS, force=True) == gold_of(5)
+
+
+def test_draw_gold_passes_the_flagged_limit(monkeypatch) -> None:
+    import elusion.evaluate.gold as gold_mod
+    import elusion.flows.evaluate as mod
+    from elusion.flows.evaluate import draw_gold
+
+    scores = {f"f{i}": 4 for i in range(5)} | {f"d{i}": 0 for i in range(5)}
+    monkeypatch.setattr(gold_mod, "scores_for", lambda engine, model, version, years: scores)
+    monkeypatch.setattr(
+        mod, "jobs_summary", lambda *a: {"jobs": 1, "unfinished": False, "unfinished_ids": []}
+    )
+    got = draw_gold("c", "v2", years=YEARS, discard_n=2, flagged_n=1, engine="engine")
+    assert [p for _, p in got] == ["flagged", "discard", "discard"]
+
+
+def test_draw_gold_with_no_scores_is_an_error(monkeypatch) -> None:
+    import elusion.evaluate.gold as gold_mod
+    import elusion.flows.evaluate as mod
+    from elusion.flows.evaluate import draw_gold
+
+    monkeypatch.setattr(gold_mod, "scores_for", lambda engine, model, version, years: {})
+    monkeypatch.setattr(
+        mod, "jobs_summary", lambda *a: {"jobs": 0, "unfinished": False, "unfinished_ids": []}
+    )
+    with pytest.raises(RuntimeError, match="no scores"):
+        draw_gold("c", "v2", years=YEARS, engine="engine")

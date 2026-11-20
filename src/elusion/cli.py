@@ -207,6 +207,21 @@ def judge(
             "(only for a job whose process was killed)."
         ),
     ] = False,
+    flagged_n: Annotated[
+        int | None,
+        typer.Option(
+            help="Label a seeded random sample of this many flagged paragraphs; "
+            "default: the whole flagged pile."
+        ),
+    ] = None,
+    only_labeled: Annotated[
+        bool,
+        typer.Option(
+            "--only-labeled",
+            help="Label only the drawn paragraphs the owner has already labeled with "
+            "`elusion label`.",
+        ),
+    ] = False,
 ) -> None:
     """Have the judge model label the gold set (flagged pile + discard sample) to a CSV."""
     from elusion.flows.evaluate import ReviewStillRunning
@@ -226,6 +241,8 @@ def judge(
             review_model=review_model,
             max_run_usd=max_run_usd,
             force=force,
+            flagged_n=flagged_n,
+            only_human=only_labeled,
         )
     except ReviewStillRunning as exc:
         typer.echo(f"error: {exc}", err=True)
