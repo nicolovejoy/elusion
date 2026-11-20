@@ -95,7 +95,9 @@ def test_cli_label_wires_selection_and_session(tmp_path, monkeypatch):
     crit.write_text("x")
     seen = {}
     monkeypatch.setattr(
-        mod, "label", lambda criterion, n, seed: seen.update(c=criterion, n=n, s=seed) or "done"
+        mod,
+        "label",
+        lambda criterion, n, seed, **kw: seen.update(c=criterion, n=n, s=seed) or "done",
     )
     r = CliRunner().invoke(
         app,
@@ -141,7 +143,7 @@ def test_label_rounds_odd_n_down_with_a_note(tmp_path, monkeypatch, capsys):
 
     seen = {}
 
-    def fake_select(path, n, seed):
+    def fake_select(path, n, seed, *a):
         seen["n"] = n
         return []
 
@@ -160,7 +162,7 @@ def test_label_reads_the_texts_of_the_criterions_corpus(monkeypatch, tmp_path):
 
     seen = []
     monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path))
-    monkeypatch.setattr(mod, "select_for_audit", lambda path, n, seed: [("f00", "flagged")] * n)
+    monkeypatch.setattr(mod, "select_for_audit", lambda path, n, seed, *a: [("f00", "flagged")] * n)
     monkeypatch.setattr(corpus_mod, "load_texts", lambda text_dir: seen.append(text_dir) or {})
     monkeypatch.setattr(
         mod, "run_session", lambda path, texts, sel: {"answered": 0, "skipped": 0, "remaining": 0}
@@ -168,3 +170,119 @@ def test_label_reads_the_texts_of_the_criterions_corpus(monkeypatch, tmp_path):
     mod.label("cloud-concentration", 2)
     mod.label("auditable-decisions", 2)
     assert seen == [tmp_path / "corpus", tmp_path / "abstracts"]
+
+
+def _cands(flagged: int = 10, discard: int = 10) -> list[tuple[str, str]]:
+    return [(f"f{i:02}", "flagged") for i in range(flagged)] + [
+        (f"d{i:02}", "discard") for i in range(discard)
+    ]
+
+
+def test_selection_from_candidates_needs_no_judge_rows(tmp_path):
+    p = tmp_path / "g.csv"  # does not exist
+    cands = _cands()
+    sel = select_for_audit(p, n=6, seed=1, candidates=cands)
+    assert sum(1 for _, pile in sel if pile == "flagged") == 3
+    assert sum(1 for _, pile in sel if pile == "discard") == 3
+    assert sel == select_for_audit(p, n=6, seed=1, candidates=list(reversed(cands)))
+
+
+def test_selection_from_candidates_ignores_the_judges_rows(tmp_path):
+    p = tmp_path / "g.csv"
+    append_rows(p, [_judge("zz", "flagged")])  # judged, but not in the draw
+    sel = select_for_audit(p, n=20, seed=1, candidates=_cands(2, 2))
+    assert {d for d, _ in sel} == {"f00", "f01", "d00", "d01"}
+
+
+def test_excluded_ids_are_never_selected(tmp_path):
+    p = tmp_path / "g.csv"
+    cands = [("f00", "flagged"), ("f01", "flagged"), ("d00", "discard"), ("d01", "discard")]
+    sel = select_for_audit(p, n=4, seed=1, candidates=cands, exclude={"f00", "d01"})
+    assert {d for d, _ in sel} == {"f01", "d00"}
+
+
+def test_excluded_ids_are_never_selected_from_judge_rows_either(tmp_path):
+    p = tmp_path / "g.csv"
+    _seed_gold(p, 2, 2)
+    sel = select_for_audit(p, n=4, seed=1, exclude={"f00", "d01"})
+    assert {d for d, _ in sel} == {"f01", "d00"}
+
+
+def test_candidates_already_labelled_by_the_owner_are_skipped(tmp_path):
+    p = tmp_path / "g.csv"
+    append_rows(p, [GoldRow("f00", 1, "flagged", "human", "", "", "t")])
+    sel = select_for_audit(p, n=20, seed=1, candidates=_cands(3, 3))
+    assert "f00" not in {d for d, _ in sel}
+    assert len(sel) == 5
+
+
+def _label_env(monkeypatch, tmp_path):
+    """Real `label`, with the texts, the data dir and the terminal session replaced."""
+    import dataclasses
+
+    import elusion.config as config
+    import elusion.evaluate.label as mod
+    import elusion.review.corpus as corpus_mod
+
+    sessions = []
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path))
+    monkeypatch.setattr(corpus_mod, "load_texts", lambda text_dir: {})
+    monkeypatch.setattr(
+        mod,
+        "run_session",
+        lambda path, texts, sel: (
+            sessions.append(sel) or {"answered": 0, "skipped": 0, "remaining": 0}
+        ),
+    )
+    crit = tmp_path / "c.md"
+    crit.write_text("x")
+    return str(crit), sessions
+
+
+DRAW_ARGS = ["--prompt-version", "v1", "--year", "2026", "--year", "2025"]
+DRAW_ARGS += ["--review-model", "gpt-6-luna", "--flagged-n", "400", "--discard-n", "400"]
+
+
+def test_cli_label_with_year_draws_from_the_piles(monkeypatch, tmp_path):
+    import elusion.flows.evaluate as flows
+
+    crit, sessions = _label_env(monkeypatch, tmp_path)
+    seen = {}
+
+    def fake_draw(criterion, prompt_version, **kw):
+        seen.update(criterion=criterion, prompt_version=prompt_version, **kw)
+        return _cands(3, 3)
+
+    monkeypatch.setattr(flows, "draw_gold", fake_draw)
+    args = ["label", "--criterion", crit, *DRAW_ARGS, "--n", "6"]
+    r = CliRunner().invoke(app, [*args, "--exclude", "f00", "--exclude", "d02"])
+    assert r.exit_code == 0, r.output
+    assert (seen["criterion"], seen["prompt_version"]) == ("c", "v1")
+    assert (seen["flagged_n"], seen["discard_n"], seen["years"]) == (400, 400, [2025, 2026])
+    assert (seen["review_model"], seen["threshold"]) == ("gpt-6-luna", 3)
+    (session,) = sessions
+    assert {d for d, _ in session} == {"f01", "f02", "d00", "d01"}
+
+
+def test_cli_label_refuses_while_the_review_runs(monkeypatch, tmp_path):
+    import elusion.flows.evaluate as flows
+
+    crit, sessions = _label_env(monkeypatch, tmp_path)
+
+    def refuse(*a, **kw):
+        raise flows.ReviewStillRunning("review job(s) job-abc still running")
+
+    monkeypatch.setattr(flows, "draw_gold", refuse)
+    r = CliRunner().invoke(app, ["label", "--criterion", crit, *DRAW_ARGS, "--n", "6"])
+    assert r.exit_code == 1
+    assert "error: review job(s) job-abc still running" in r.stderr
+    assert "Traceback" not in r.output
+    assert sessions == []
+
+
+def test_label_from_the_draw_says_why_nothing_is_left(monkeypatch, tmp_path):
+    import elusion.evaluate.label as mod
+
+    _label_env(monkeypatch, tmp_path)
+    out = mod.label("c", 2, candidates=[("f00", "flagged")], exclude={"f00"})
+    assert out == "nothing to label: every drawn abstract is labelled or excluded"

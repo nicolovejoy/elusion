@@ -294,19 +294,65 @@ def label(
     prompt_version: Annotated[
         str,
         typer.Option(
-            help="Accepted for symmetry with judge/evaluate; unused here, since the judge "
-            "rows already carry the judge prompt version."
+            help="Review prompt version whose scores define the two piles; read only "
+            "when --year is given."
         ),
     ],
     n: Annotated[int, typer.Option(help="Paragraphs to label: n/2 flagged, n/2 discard.")] = 20,
-    seed: Annotated[int, typer.Option(help="Seed for the random pick.")] = DEFAULT_SEED,
+    seed: Annotated[
+        int,
+        typer.Option(help="Seed for the random pick and, with --year, for the draw."),
+    ] = DEFAULT_SEED,
+    year: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--year",
+            help="Pick from the draw of the population filed in these years, before the "
+            "judge has labeled it; give the same --flagged-n, --discard-n and --seed to "
+            "`judge` later. Without --year, pick among the judge's labels.",
+        ),
+    ] = None,
+    review_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
+    ] = None,
+    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
+    flagged_n: Annotated[
+        int | None,
+        typer.Option(help="Size of the flagged sample; default: the whole flagged pile."),
+    ] = None,
+    discard_n: Annotated[int, typer.Option(help="Size of the discard sample.")] = 200,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(help="Document id never to show (already seen); repeat for several."),
+    ] = None,
 ) -> None:
-    """Label judge-labeled paragraphs yourself, blind, for the human audit."""
+    """Label paragraphs yourself, blind: before the judge (--year) or as its audit."""
     from elusion.evaluate.label import label as label_session
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
-    typer.echo(label_session(criterion.stem, n, seed))
+    candidates = None
+    if year:
+        from elusion.flows.evaluate import ReviewStillRunning, draw_gold
+
+        try:
+            candidates = draw_gold(
+                criterion.stem,
+                prompt_version,
+                years=sorted(set(year)),
+                threshold=threshold,
+                discard_n=discard_n,
+                seed=seed,
+                review_model=review_model,
+                flagged_n=flagged_n,
+            )
+        except ReviewStillRunning as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from None
+    typer.echo(
+        label_session(criterion.stem, n, seed, candidates=candidates, exclude=set(exclude or ()))
+    )
 
 
 @app.command()
