@@ -611,8 +611,8 @@ Part A.
    `--concurrency 16`.
 
    **The judge pass, 2026-11-20: a sample of each pile, and the judge checked against the
-   owner first.** Draft; the owner has chosen the order (C below) and has not yet
-   confirmed the sizes.
+   owner first.** The owner chose the order (C below) and approved the whole of this
+   block, sizes and the rule of step 5 included, on 2026-11-20. Not yet built.
 
    *Why it changes.* The judge reads every flagged abstract plus 200 discards, priced for
    about 900 abstracts at 3% flagged. The probe flagged 55%. At that rate the flagged
@@ -644,7 +644,7 @@ Part A.
    4. The judge as written labels those 40 only, about $0.20. `judge` gains a way to label
       only the ids the owner has labelled.
    5. Agreement is counted, with its interval, and every disagreement is read with the
-      owner. Claude's call, for the owner to change: at 36 or more of 40 the judge stands
+      owner. Claude's call, approved by the owner: at 36 or more of 40 the judge stands
       (A). Below that, B is taken if the disagreements are mostly abstracts he kept as
       proposals, arguments or doubtful cases and the judge refused.
    6. Under A, the judge labels the other 760. Its 40 labels are not paid for twice, and
@@ -655,7 +655,7 @@ Part A.
       the report, because the prompt was changed after reading the first 40; the first 40
       are reported as the set the change was made on.
 
-   *Also proposed, not yet confirmed by the owner.*
+   *Also approved by the owner, as proposed by Claude.*
 
    - 400 from each pile gives precision to within about 5 points either way. The discard
      sample grows from 200 to 400 because about half the corpus is discarded, so the
