@@ -606,6 +606,73 @@ Part A.
    Next: the full review under `v1`. The probe ran at 104 abstracts a minute with 8
    requests in flight, so the rest takes about 3.5 hours, or about half that with
    `--concurrency 16` if the key's rate limit allows.
+
+   **The full review started, 2026-11-20.** Job `259b3152`, by the owner, with
+   `--concurrency 16`.
+
+   **The judge pass, 2026-11-20: a sample of each pile, and the judge checked against the
+   owner first.** Draft; the owner has chosen the order (C below) and has not yet
+   confirmed the sizes.
+
+   *Why it changes.* The judge reads every flagged abstract plus 200 discards, priced for
+   about 900 abstracts at 3% flagged. The probe flagged 55%. At that rate the flagged
+   pile is near 10,000 and judging all of it costs $40 or more. `grade` has the same
+   shape: it grades every flagged rationale.
+
+   *Whose standard.* `judge-v1` has not run. It excludes "commentary with no method and no
+   measurement" and a paper that "merely mentions" oversight, and it has no rule for an
+   abstract the reader is unsure of. The owner's rule of 2026-11-19 keeps tools, proposals
+   and arguments, and keeps when unsure. Not tested: this is read off the prompt, and the
+   judge has labelled nothing yet. Three ways were put to the owner:
+
+   - A. The judge as written. The gold set is the approved criterion text; the owner's
+     labels show where he and the judge differ.
+   - B. The judge rewritten to the owner's rule before it runs. The gold set matches him,
+     and the judge and the frozen criterion text then differ.
+   - C. Measure first, then choose A or B. **Chosen by the owner, 2026-11-20.**
+
+   *The order under C.*
+
+   1. The review finishes. The piles are drawn only then: the draw depends on the whole
+      pile, and `judge` already refuses to run while a review job is unfinished.
+   2. The gold ids are drawn with the seed: 400 of the flagged pile and 400 of the discard
+      pile, both at random. `split_piles` gains a limit on the flagged pile.
+   3. The owner labels 40 of them blind, 20 from each pile, with `elusion label`. Today
+      `label` picks from abstracts the judge has already labelled; it must pick from the
+      drawn gold ids instead. The six abstracts he judged on 2026-11-19 are left out. This
+      replaces the 20 labels of call 5.
+   4. The judge as written labels those 40 only, about $0.20. `judge` gains a way to label
+      only the ids the owner has labelled.
+   5. Agreement is counted, with its interval, and every disagreement is read with the
+      owner. Claude's call, for the owner to change: at 36 or more of 40 the judge stands
+      (A). Below that, B is taken if the disagreements are mostly abstracts he kept as
+      proposals, arguments or doubtful cases and the judge refused.
+   6. Under A, the judge labels the other 760. Its 40 labels are not paid for twice, and
+      the owner's 40 are the agreement figure in the report.
+   7. Under B, the judge prompt becomes `judge-v2`, written from the owner's rule in
+      words. No abstract he labelled goes into it (the gold set is never in a prompt).
+      `judge-v2` labels all 800. The owner labels a fresh 40 for the agreement figure in
+      the report, because the prompt was changed after reading the first 40; the first 40
+      are reported as the set the change was made on.
+
+   *Also proposed, not yet confirmed by the owner.*
+
+   - 400 from each pile gives precision to within about 5 points either way. The discard
+     sample grows from 200 to 400 because about half the corpus is discarded, so the
+     elusion sample moves the recall interval as much as the flagged one does.
+   - Every flagged citation seed is judged as well, for harvest recall only. Precision is
+     computed from the random 400 alone; adding the seeds would bias it.
+   - `grade` grades the same 400 flagged abstracts, not the whole flagged pile.
+   - The report gives precision for score 3 and score 4 separately, from the same sample.
+     It is a description, not a fifth metric, and shows whether flagging at 4 only would
+     help.
+   - Cost: 800 abstracts and the flagged seeds, about 950 calls. Phase 6 paid $0.0026 a
+     paragraph; if an abstract costs twice that, about $5. The judge's own first calls
+     project the real figure against `ELUSION_MAX_RUN_USD` before the rest is spent.
+
+   Not affected: the index of task 7 takes every abstract the review flagged and nothing
+   from the judge. "Works kept" in the report is then a list of thousands; how it is shown
+   belongs to task 6.
 6. **Report.** `evaluate` adds, for an `openalex` population: the PRISMA counts
    (identified per term and per route, duplicates removed, screened, excluded,
    included), harvest recall with its interval and its stated limit, and the vocabulary
