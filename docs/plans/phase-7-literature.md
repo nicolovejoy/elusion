@@ -583,6 +583,29 @@ Part A.
    ids on the topic, in harvest order, and not a random sample. At the same price the
    remaining 22,021 abstracts cost about $5.09. Next: the owner and Claude read the flags
    together before the rest is reviewed.
+
+   **The flags read, 2026-11-19: `v1` stands.** Claude read 81 abstracts, sampled by
+   search term and score, and judged about half the 4s and nearly all the 3s off the
+   criterion. The owner then judged six of them, keep or discard, and agreed with the
+   model on four. Kept: `b5a579121f7c0f6a` (texanshootR, 4), `4839dd2f05549e59` (a
+   proposed accountability framework, 4), `11e01572681982b3` (PROVISO, a controller that
+   vets an agent's actions, 4), `7e84529379fbbf14` (the Cognitive Control Gap, 3).
+   Discarded: `cb52fb2ee7bc1a71` (a systematic review of cancer-prognosis models, 4),
+   `c70aa5cfcdacaff1` (a fraud detector with explanations, 3). His rule as applied: a
+   paper about the topic is kept, whether a tool, a proposal or an argument, and kept
+   when unsure; a paper mainly about something else is discarded. Claude's reading was
+   narrower than his, and both changes Claude proposed for a `v2` (proposals with nothing
+   built score 2; controls with no reviewer and no record score 2) would have discarded
+   papers he wants. The score does not separate his keeps from his discards, so flagging
+   at 4 only is not a fix. The six were picked as likely mistakes and are not a
+   measurement. They are excluded from the owner's blind labels, since he has seen their
+   scores. By type, datasets are flagged at 61% and software at 72% (19 of 31, 26 of 36).
+   Not yet decided: the judge reads every flagged abstract in this plan, priced for
+   about 700; with 831 flagged in the probe alone it must read a random sample of the
+   flagged pile, and `split_piles` in `evaluate/gold.py` takes every flagged id today.
+   Next: the full review under `v1`. The probe ran at 104 abstracts a minute with 8
+   requests in flight, so the rest takes about 3.5 hours, or about half that with
+   `--concurrency 16` if the key's rate limit allows.
 6. **Report.** `evaluate` adds, for an `openalex` population: the PRISMA counts
    (identified per term and per route, duplicates removed, screened, excluded,
    included), harvest recall with its interval and its stated limit, and the vocabulary
