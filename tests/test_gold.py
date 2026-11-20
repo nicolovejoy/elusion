@@ -62,6 +62,36 @@ def test_split_piles_takes_whole_discard_pile_when_small():
     ]
 
 
+# 50 flagged and 100 discard, for the flagged-limit tests.
+SMALL = {f"f{i:03}": 4 for i in range(50)} | {f"d{i:03}": 1 for i in range(100)}
+
+
+def test_flagged_limit_samples_the_flagged_pile():
+    got = split_piles(SMALL, 3, 10, seed=7, flagged_n=20)
+    flagged = [d for d, p in got if p == "flagged"]
+    assert len(flagged) == 20 and len(set(flagged)) == 20
+    assert all(d.startswith("f") for d in flagged)
+    assert got == split_piles(dict(reversed(SMALL.items())), 3, 10, seed=7, flagged_n=20)
+    assert flagged != sorted(SMALL)[:20]  # a draw, not the first twenty
+
+
+def test_flagged_limit_does_not_move_the_discard_draw():
+    def discards(**kw):
+        return [d for d, p in split_piles(SMALL, 3, 10, seed=7, **kw) if p == "discard"]
+
+    assert discards() == discards(flagged_n=20) == discards(flagged_n=5)
+
+
+def test_no_flagged_limit_is_todays_result():
+    got = split_piles(SMALL, 3, 10, seed=7)
+    assert [d for d, p in got if p == "flagged"] == sorted(d for d in SMALL if d.startswith("f"))
+
+
+def test_flagged_pile_smaller_than_the_limit_is_taken_whole():
+    got = split_piles(SMALL, 3, 10, seed=7, flagged_n=500)
+    assert sum(1 for _, p in got if p == "flagged") == 50
+
+
 def row(doc_id, labeler="claude-opus-5-5", label=1, pile="flagged"):
     return GoldRow(
         doc_id=doc_id,
@@ -147,6 +177,42 @@ def test_select_gold_reads_scores_for_the_pair():
         assert len([d for d, p in gold if p == "discard"]) == 3
         assert f"{pre}x" not in {d for d, _ in gold}  # other model's scores ignored
         assert gold == select_gold(engine, "m", version, threshold=2, discard_n=3, seed=5)
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sa.delete(scores).where(scores.c.prompt_version == version))
+
+
+@requires_service("localhost", 5433, "postgres")
+def test_select_gold_passes_the_flagged_limit():
+    from elusion.config import settings
+    from elusion.review.db import ensure_schema, insert_scores, make_engine, scores
+
+    engine = make_engine(settings.database_url)
+    ensure_schema(engine)
+    version = f"test/{uuid.uuid4().hex[:8]}"
+    pre = uuid.uuid4().hex[:8]
+    rows = [
+        {
+            "doc_id": f"{pre}{i}",
+            "model": "m",
+            "prompt_version": version,
+            "score": i % 5,
+            "rationale": "",
+            "quote": "",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cost_usd": 0,
+            "provider": "fake",
+        }  # fmt: skip
+        for i in range(20)
+    ]
+    insert_scores(engine, rows)
+    try:
+        gold = select_gold(engine, "m", version, threshold=2, discard_n=3, seed=5, flagged_n=1)
+        assert len([d for d, p in gold if p == "flagged"]) == 1
+        assert len([d for d, p in gold if p == "discard"]) == 3
     finally:
         with engine.begin() as conn:
             conn.execute(sa.delete(scores).where(scores.c.prompt_version == version))

@@ -8,8 +8,9 @@ git, and never fed into any prompt), appended to as labels arrive; a (doc_id, la
 pair appears at most once, which is what makes re-running the judge free.
 
 Which paragraphs get labeled is decided by `select_gold`: every paragraph the review
-flagged (score >= threshold), plus a uniform random sample of the discard pile drawn
-with a seeded random number generator, so the same seed always picks the same sample.
+flagged (score >= threshold), or a seeded random sample of them when a limit is given,
+plus a uniform random sample of the discard pile drawn with a seeded random number
+generator, so the same seed always picks the same sample.
 
 Next to the CSV, data/gold/<criterion>.judge-runs.jsonl keeps one JSON line per judge
 run (labels written, failures, dollars spent), because the evaluate step runs later in
@@ -136,15 +137,25 @@ def judge_cost_usd(path: Path) -> float:
 
 
 def split_piles(
-    scores: Mapping[str, int], threshold: int, discard_n: int, seed: int
+    scores: Mapping[str, int],
+    threshold: int,
+    discard_n: int,
+    seed: int,
+    flagged_n: int | None = None,
 ) -> list[tuple[str, Pile]]:
     """Every doc with score >= threshold, then `discard_n` of the rest drawn at random.
 
     Ids are sorted before sampling so the result depends only on the scores and the seed,
     not on the order the database returned rows in. A discard pile smaller than
     `discard_n` is taken whole.
+
+    With `flagged_n`, the flagged pile is sampled too (taken whole if it is smaller) and
+    the drawn ids are returned sorted. Each pile has its own generator started from the
+    same seed, so a limit on one pile never changes which ids are drawn from the other.
     """
     flagged = sorted(d for d, s in scores.items() if s >= threshold)
+    if flagged_n is not None:
+        flagged = sorted(random.Random(seed).sample(flagged, min(flagged_n, len(flagged))))
     discard = sorted(d for d, s in scores.items() if s < threshold)
     sample = random.Random(seed).sample(discard, min(discard_n, len(discard)))
     return [(d, "flagged") for d in flagged] + [(d, "discard") for d in sample]
@@ -158,6 +169,7 @@ def select_gold(
     discard_n: int = 200,
     seed: int = DEFAULT_SEED,
     years: Sequence[int] | None = None,
+    flagged_n: int | None = None,
 ) -> list[tuple[str, Pile]]:
     """The gold ids for one review run, i.e. the (review model, prompt version) pair.
 
@@ -166,4 +178,4 @@ def select_gold(
     otherwise change the sample and the judge would be paid to label a new one.
     """
     scores = scores_for(engine, model, prompt_version, years)
-    return split_piles(scores, threshold, discard_n, seed)
+    return split_piles(scores, threshold, discard_n, seed, flagged_n)
