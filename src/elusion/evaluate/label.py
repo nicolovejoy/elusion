@@ -35,7 +35,19 @@ from elusion.evaluate.gold import (
     labeled_ids,
 )
 
-PROMPT = "[y]es / [n]o / [s]kip / [q]uit: "
+PROMPT = "y = yes, it is   n = no, it is not   s = skip for now   q = stop here (answers saved): "
+QUESTION = "Is this text about that topic?"
+
+
+def criterion_summary(path: Path) -> str:
+    """The criterion's one-paragraph statement of the topic: its `>` lines, joined.
+
+    It is what the owner is asked about in the session. The lists of what counts and what
+    does not are left out on purpose: they are the review prompt's and the judge's reading
+    of the topic, and the owner's labels are there to check that reading, not to repeat it.
+    """
+    lines = [ln.lstrip("> ").strip() for ln in path.read_text().splitlines() if ln.startswith(">")]
+    return " ".join(ln for ln in lines if ln)
 
 
 def pick_from_draw(
@@ -97,13 +109,21 @@ def run_session(
     selection: list[tuple[str, str]],
     reader: Callable[[], str] = lambda: input(PROMPT),
     writer: Callable[[str], None] = typer.echo,
+    topic: str = "",
 ) -> dict[str, int]:
-    """Show each paragraph, read y/n/s/q, append a human row per y/n. Returns the counts."""
+    """Show each paragraph, read y/n/s/q, append a human row per y/n. Returns the counts.
+
+    With `topic` (the criterion's summary) the question is spelled out under each
+    paragraph, so the owner never answers a bare yes/no.
+    """
     width = shutil.get_terminal_size((80, 24)).columns
+    asked = f"{textwrap.fill('Topic: ' + topic, width=width)}\n{QUESTION}" if topic else ""
     answered = skipped = 0
     total = len(selection)
     for i, (doc_id, pile) in enumerate(selection, 1):
         writer(f"\n--- {i}/{total} ---\n{textwrap.fill(texts[doc_id], width=width)}\n")
+        if asked:
+            writer(asked)
         while True:
             try:
                 key = reader().strip().lower()
@@ -130,10 +150,11 @@ def label(
     *,
     candidates: Sequence[tuple[str, str]] | None = None,
     exclude: Collection[str] = (),
+    topic: str = "",
 ) -> str:
     """Select, load paragraph text, run the session; returns the summary line.
 
-    `candidates` and `exclude` are passed to `select_for_audit`.
+    `candidates` and `exclude` are passed to `select_for_audit`, `topic` to `run_session`.
 
     `n` is split evenly between the piles, so it must be at least 2; an odd n is rounded
     down (with a note) rather than silently labeling one fewer than asked.
@@ -167,5 +188,5 @@ def label(
             if sum(1 for _, p in selection if p == pile) < n // 2:
                 typer.echo(f"note: fewer than {n // 2} unlabeled '{pile}' paragraphs; taking all")
     texts = load_texts(corpus_for(criterion).text_dir(settings.data_dir))
-    s = run_session(path, texts, selection)
+    s = run_session(path, texts, selection, topic=topic)
     return f"answered {s['answered']}, skipped {s['skipped']}, remaining {s['remaining']}"

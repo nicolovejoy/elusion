@@ -375,6 +375,7 @@ def label(
     ] = False,
 ) -> None:
     """Label paragraphs yourself, blind: before the judge (--year) or as its audit."""
+    from elusion.evaluate.label import criterion_summary
     from elusion.evaluate.label import label as label_session
 
     if not criterion.is_file():
@@ -399,7 +400,14 @@ def label(
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from None
     typer.echo(
-        label_session(criterion.stem, n, seed, candidates=candidates, exclude=set(exclude or ()))
+        label_session(
+            criterion.stem,
+            n,
+            seed,
+            candidates=candidates,
+            exclude=set(exclude or ()),
+            topic=criterion_summary(criterion),
+        )
     )
 
 

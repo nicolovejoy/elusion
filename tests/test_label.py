@@ -4,7 +4,7 @@ from typer.testing import CliRunner
 
 from elusion.cli import app
 from elusion.evaluate.gold import GoldRow, append_rows, human_rows
-from elusion.evaluate.label import run_session, select_for_audit
+from elusion.evaluate.label import criterion_summary, run_session, select_for_audit
 
 JUDGE = "claude-opus-x"
 
@@ -165,7 +165,9 @@ def test_label_reads_the_texts_of_the_criterions_corpus(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "select_for_audit", lambda path, n, seed, *a: [("f00", "flagged")] * n)
     monkeypatch.setattr(corpus_mod, "load_texts", lambda text_dir: seen.append(text_dir) or {})
     monkeypatch.setattr(
-        mod, "run_session", lambda path, texts, sel: {"answered": 0, "skipped": 0, "remaining": 0}
+        mod,
+        "run_session",
+        lambda path, texts, sel, **kw: {"answered": 0, "skipped": 0, "remaining": 0},
     )
     mod.label("cloud-concentration", 2)
     mod.label("auditable-decisions", 2)
@@ -230,7 +232,7 @@ def _label_env(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mod,
         "run_session",
-        lambda path, texts, sel: (
+        lambda path, texts, sel, **kw: (
             sessions.append(sel) or {"answered": 0, "skipped": 0, "remaining": 0}
         ),
     )
@@ -348,3 +350,39 @@ def test_cli_label_seed_reaches_the_draw(monkeypatch, tmp_path):
     args = ["label", "--criterion", crit, *DRAW_ARGS, "--n", "6", "--seed", "11"]
     assert CliRunner().invoke(app, args).exit_code == 0
     assert seen["seed"] == 11
+
+
+def test_criterion_summary_is_the_quoted_paragraph_only(tmp_path):
+    crit = tmp_path / "c.md"
+    crit.write_text(
+        "# T\n\n> Studies how a thing\n> is checked.\n\nIt counts when:\n- a list item\n"
+    )
+    assert criterion_summary(crit) == "Studies how a thing is checked."
+
+
+def test_session_asks_the_question_in_words_under_each_text(tmp_path):
+    p = tmp_path / "g.csv"
+    _seed_gold(p, 2, 0)
+    out: list[str] = []
+    run_session(
+        p,
+        {"f00": "one", "f01": "two"},
+        [("f00", "flagged"), ("f01", "flagged")],
+        reader=_feed(["y", "n"]),
+        writer=out.append,
+        topic="Studies how a thing is checked.",
+    )
+    shown = "\n".join(out)
+    assert shown.count("Topic: Studies how a thing is checked.") == 2
+    assert shown.count("Is this text about that topic?") == 2
+
+
+def test_cli_label_passes_the_criterions_summary_as_the_topic(tmp_path, monkeypatch):
+    import elusion.evaluate.label as mod
+
+    crit = tmp_path / "c.md"
+    crit.write_text("# T\n\n> About a thing.\n")
+    seen = {}
+    monkeypatch.setattr(mod, "label", lambda criterion, n, seed, **kw: seen.update(kw) or "done")
+    r = CliRunner().invoke(app, ["label", "--criterion", str(crit), "--prompt-version", "v2"])
+    assert r.exit_code == 0 and seen["topic"] == "About a thing."
