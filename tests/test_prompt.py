@@ -86,7 +86,7 @@ def test_latest_judge_version_is_the_highest_on_disk_and_v1_without_files() -> N
     from elusion.review.prompt import latest_judge_version
 
     assert latest_judge_version("cloud-concentration") == "judge-v1"
-    assert latest_judge_version("auditable-decisions") == "judge-v2"
+    assert latest_judge_version("auditable-decisions") == "judge-v3"
     assert latest_judge_version("no-such-criterion") == "judge-v1"
 
 
@@ -96,3 +96,10 @@ def test_judge_v2_of_the_literature_criterion_keeps_theory_and_the_answer_format
     for phrase in ("mental model", "Theory,", "in passing", "If you are unsure, keep"):
         assert phrase in prompt.text
     assert "- relevant:" in prompt.text and "- rationale:" in prompt.text
+
+
+def test_judge_v3_is_judge_v2_without_the_keep_if_unsure_clause() -> None:
+    v2 = load_prompt("auditable-decisions", "judge-v2").text
+    v3 = load_prompt("auditable-decisions", "judge-v3").text
+    assert v3 == v2.replace("If you are unsure, keep the paper: answer relevant.\n\n", "")
+    assert "unsure" not in v3
