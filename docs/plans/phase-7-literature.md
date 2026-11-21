@@ -319,8 +319,8 @@ is still approved by the owner in task 4, before any call is paid for.
 uv run elusion harvest
 uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 1500    # the probe
 uv run elusion review --criterion criteria/auditable-decisions.md --provider openai --model gpt-6-luna --sample 25000   # the rest: SAMPLE is an upper limit, and scored ids are skipped
-uv run elusion label --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --n 40 --exclude b5a579121f7c0f6a --exclude 4839dd2f05549e59 --exclude 11e01572681982b3 --exclude 7e84529379fbbf14 --exclude cb52fb2ee7bc1a71 --exclude c70aa5cfcdacaff1
-uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --only-labeled   # the owner's 40 first
+uv run elusion label --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --n 30 --exclude b5a579121f7c0f6a --exclude 4839dd2f05549e59 --exclude 11e01572681982b3 --exclude 7e84529379fbbf14 --exclude cb52fb2ee7bc1a71 --exclude c70aa5cfcdacaff1
+uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --only-labeled   # the owner's 30 first
 uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --seeds          # then the rest
 uv run elusion evaluate ...                      # the same flags; report gains the PRISMA counts and harvest recall
 uv run elusion index --criterion criteria/auditable-decisions.md --prompt-version v1 --review-model gpt-6-luna
@@ -652,22 +652,22 @@ Part A.
       pile, and `judge` already refuses to run while a review job is unfinished.
    2. The gold ids are drawn with the seed: 400 of the flagged pile and 400 of the discard
       pile, both at random. `split_piles` gains a limit on the flagged pile.
-   3. The owner labels 40 of them blind, 20 from each pile, with `elusion label`. Today
+   3. The owner labels 30 of them blind, 15 from each pile (40 until 2026-11-20, lowered at his request), with `elusion label`. Today
       `label` picks from abstracts the judge has already labelled; it must pick from the
       drawn gold ids instead. The six abstracts he judged on 2026-11-19 are left out. This
       replaces the 20 labels of call 5.
-   4. The judge as written labels those 40 only, about $0.20. `judge` gains a way to label
+   4. The judge as written labels those 30 only, about $0.15. `judge` gains a way to label
       only the ids the owner has labelled.
    5. Agreement is counted, with its interval, and every disagreement is read with the
-      owner. Claude's call, approved by the owner: at 36 or more of 40 the judge stands
+      owner. Claude's call, approved by the owner: at 27 or more of 30 the judge stands
       (A). Below that, B is taken if the disagreements are mostly abstracts he kept as
       proposals, arguments or doubtful cases and the judge refused.
-   6. Under A, the judge labels the other 760. Its 40 labels are not paid for twice, and
-      the owner's 40 are the agreement figure in the report.
+   6. Under A, the judge labels the other 770. Its 30 labels are not paid for twice, and
+      the owner's 30 are the agreement figure in the report.
    7. Under B, the judge prompt becomes `judge-v2`, written from the owner's rule in
       words. No abstract he labelled goes into it (the gold set is never in a prompt).
-      `judge-v2` labels all 800. The owner labels a fresh 40 for the agreement figure in
-      the report, because the prompt was changed after reading the first 40; the first 40
+      `judge-v2` labels all 800. The owner labels a fresh 30 for the agreement figure in
+      the report, because the prompt was changed after reading the first 30; the first 30
       are reported as the set the change was made on.
 
    *Also approved by the owner, as proposed by Claude.*
