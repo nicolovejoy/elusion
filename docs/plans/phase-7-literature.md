@@ -669,6 +669,13 @@ Part A.
       `judge-v2` labels all 800. The owner labels a fresh 30 for the agreement figure in
       the report, because the prompt was changed after reading the first 30; the first 30
       are reported as the set the change was made on.
+   8. What happened, 2026-11-21 (each step is a line in `docs/DECISIONS.md`): `judge-v1`
+      matched the owner on 20 of 30. The owner's purpose is concepts and mental models,
+      so B was taken: `judge-v2` from his rule, tested on the same 30 first (his call,
+      an optimistic figure) and also 20; `judge-v3` without "if unsure, keep", 21. He
+      re-read six labels and changed three, kept as revisions beside the blind ones: 23,
+      23 and 22. The bar was given up and `judge-v2` labels the gold set. A fresh 30
+      labeled later, blind, give the figure that was not fitted.
 
    *Also approved by the owner, as proposed by Claude.*
 

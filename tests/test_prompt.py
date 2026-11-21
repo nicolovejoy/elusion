@@ -82,12 +82,18 @@ def test_the_literature_criterion_has_its_three_prompts_and_its_file() -> None:
     assert (Path(__file__).parent.parent / "criteria" / "auditable-decisions.md").is_file()
 
 
-def test_latest_judge_version_is_the_highest_on_disk_and_v1_without_files() -> None:
-    from elusion.review.prompt import latest_judge_version
+def test_judge_version_is_the_chosen_one_else_the_highest_on_disk(tmp_path, monkeypatch) -> None:
+    import elusion.review.prompt as mod
+    from elusion.review.prompt import judge_version
 
-    assert latest_judge_version("cloud-concentration") == "judge-v1"
-    assert latest_judge_version("auditable-decisions") == "judge-v3"
-    assert latest_judge_version("no-such-criterion") == "judge-v1"
+    assert judge_version("cloud-concentration") == "judge-v1"
+    assert judge_version("auditable-decisions") == "judge-v2"  # chosen; judge-v3 exists
+    (tmp_path / "x").mkdir()
+    for n in (1, 2, 10):
+        (tmp_path / "x" / f"judge-v{n}.md").write_text("p")
+    monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)
+    assert judge_version("x") == "judge-v10"
+    assert judge_version("no-such-criterion") == "judge-v1"
 
 
 def test_judge_v2_of_the_literature_criterion_keeps_theory_and_the_answer_format() -> None:

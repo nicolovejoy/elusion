@@ -424,7 +424,7 @@ def agreement(
         str | None,
         typer.Option(
             help="Judge prompt whose labels to compare, e.g. judge-v1; default: the "
-            "criterion's newest."
+            "one the criterion uses."
         ),
     ] = None,
 ) -> None:
@@ -440,12 +440,12 @@ def agreement(
     from elusion.evaluate.agreement import compare, render
     from elusion.evaluate.gold import gold_path
     from elusion.review.corpus import load_texts
-    from elusion.review.prompt import latest_judge_version
+    from elusion.review.prompt import judge_version
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
     judge_model = judge_model or settings.judge_model
-    version = f"{criterion.stem}/{judge_prompt or latest_judge_version(criterion.stem)}"
+    version = f"{criterion.stem}/{judge_prompt or judge_version(criterion.stem)}"
     try:
         comparison = compare(gold_path(criterion.stem, settings.data_dir), judge_model, version)
     except ValueError as exc:

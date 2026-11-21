@@ -533,7 +533,7 @@ def test_a_new_judge_prompt_relabels_what_the_old_one_labeled(env, monkeypatch):
     gold = [("d000", "flagged"), ("d001", "discard")]
     kw = dict(years=[2019], gold=gold, gold_csv=csv)
     first = mod.judge("c", provider=FakeJudge(), **kw)
-    monkeypatch.setattr(mod, "latest_judge_version", lambda c: "judge-v2")
+    monkeypatch.setattr(mod, "judge_version", lambda c: "judge-v2")
     second = mod.judge("c", provider=FakeJudge(), **kw)
     again = mod.judge("c", provider=FakeJudge(), **kw)
     assert (first.labeled, second.labeled, again.labeled, again.skipped) == (2, 2, 0, 2)
