@@ -420,6 +420,13 @@ def agreement(
         str | None,
         typer.Option(help="Pinned judge model to compare with; default ELUSION_JUDGE_MODEL."),
     ] = None,
+    judge_prompt: Annotated[
+        str | None,
+        typer.Option(
+            help="Judge prompt whose labels to compare, e.g. judge-v1; default: the "
+            "criterion's newest."
+        ),
+    ] = None,
 ) -> None:
     """Count how often the judge matched your blind labels, and print each disagreement.
 
@@ -433,12 +440,14 @@ def agreement(
     from elusion.evaluate.agreement import compare, render
     from elusion.evaluate.gold import gold_path
     from elusion.review.corpus import load_texts
+    from elusion.review.prompt import latest_judge_version
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
     judge_model = judge_model or settings.judge_model
+    version = f"{criterion.stem}/{judge_prompt or latest_judge_version(criterion.stem)}"
     try:
-        comparison = compare(gold_path(criterion.stem, settings.data_dir), judge_model)
+        comparison = compare(gold_path(criterion.stem, settings.data_dir), judge_model, version)
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from None
@@ -446,7 +455,7 @@ def agreement(
     if comparison.disagreements:
         texts = load_texts(corpus_for(criterion.stem).text_dir(settings.data_dir))
     width = shutil.get_terminal_size((80, 24)).columns
-    typer.echo(render(comparison, judge_model, texts, width), nl=False)
+    typer.echo(render(comparison, judge_model, texts, width, version), nl=False)
 
 
 @app.command()

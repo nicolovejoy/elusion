@@ -32,7 +32,7 @@ def csv(tmp_path):
 
 
 def test_compare_counts_the_abstracts_both_have_labelled(csv) -> None:
-    c = compare(csv, JUDGE)
+    c = compare(csv, JUDGE, "c/judge-v1")
     assert (c.estimate.k, c.estimate.n) == (2, 4)
     assert c.human_only == 1
     assert [(d.doc_id, d.pile, d.owner, d.judge) for d in c.disagreements] == [
@@ -46,11 +46,13 @@ def test_compare_without_a_shared_abstract_is_an_error(tmp_path) -> None:
     path = tmp_path / "c.csv"
     append_rows(path, [row("a", 1, HUMAN)])
     with pytest.raises(ValueError, match="no doc_ids labeled by both"):
-        compare(path, JUDGE)
+        compare(path, JUDGE, "c/judge-v1")
 
 
 def test_render_gives_the_count_the_interval_and_each_disagreement(csv) -> None:
-    out = render(compare(csv, JUDGE), JUDGE, texts={"b": "Text of b.", "d": "Text of d."})
+    out = render(
+        compare(csv, JUDGE, "c/judge-v1"), JUDGE, texts={"b": "Text of b.", "d": "Text of d."}
+    )
     assert "agreement: 2 of 4 (0.500), 95% interval [0.068, 0.932]" in out
     assert "1 of the owner's labels has no fake-judge label yet and is not counted" in out
     assert "b (flagged): owner yes, judge no" in out
@@ -62,7 +64,7 @@ def test_render_gives_the_count_the_interval_and_each_disagreement(csv) -> None:
 def test_render_when_they_agree_on_everything(tmp_path) -> None:
     path = tmp_path / "c.csv"
     append_rows(path, [row("a", 1, HUMAN), row("a", 1, JUDGE)])
-    out = render(compare(path, JUDGE), JUDGE, texts={})
+    out = render(compare(path, JUDGE, "c/judge-v1"), JUDGE, texts={})
     assert "agreement: 1 of 1" in out and "No disagreement." in out
 
 
@@ -96,3 +98,19 @@ def test_cli_agreement_with_nothing_to_compare_exits_1(monkeypatch, tmp_path) ->
     r = CliRunner().invoke(app, ["agreement", "--criterion", str(crit)])
     assert r.exit_code == 1
     assert "error: no doc_ids labeled by both" in r.stderr
+
+
+def test_compare_reads_only_the_named_judge_prompts_rows(tmp_path) -> None:
+    from elusion.evaluate.gold import GoldRow, append_rows
+
+    p = tmp_path / "g.csv"
+    append_rows(
+        p,
+        [
+            GoldRow("a", 1, "flagged", HUMAN, "", "", "t"),
+            GoldRow("a", 0, "flagged", JUDGE, "c/judge-v1", "old", "t"),
+            GoldRow("a", 1, "flagged", JUDGE, "c/judge-v2", "new", "t"),
+        ],
+    )
+    assert compare(p, JUDGE, "c/judge-v1").estimate.k == 0
+    assert compare(p, JUDGE, "c/judge-v2").estimate.k == 1

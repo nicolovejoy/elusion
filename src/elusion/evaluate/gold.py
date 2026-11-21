@@ -4,8 +4,10 @@ A *gold set* is the answer key used to measure the review: for a sample of parag
 record whether each truly meets the criterion, then compare that with what the review
 flagged. Here a judge model writes most labels and the owner audits a few by hand, so
 every row says who labeled it. It is a plain CSV per criterion under data/gold/ (outside
-git, and never fed into any prompt), appended to as labels arrive; a (doc_id, labeler)
-pair appears at most once, which is what makes re-running the judge free.
+git, and never fed into any prompt), appended to as labels arrive; a (doc_id, labeler,
+prompt version) triple appears at most once, which is what makes re-running the judge
+free. The prompt version is in the key so that a rewritten judge prompt (judge-v2) can
+label abstracts the first one already labeled, and both sets of labels are kept.
 
 Which paragraphs get labeled is decided by `select_gold`: every paragraph the review
 flagged (score >= threshold), or a seeded random sample of them when a limit is given,
@@ -90,23 +92,35 @@ def human_rows(path: Path) -> list[GoldRow]:
     return [r for r in read_rows(path) if r.labeler == HUMAN]
 
 
-def labeled_ids(path: Path, labeler: str) -> set[str]:
-    return {r.doc_id for r in read_rows(path) if r.labeler == labeler}
+def judge_rows_for(path: Path, model: str, prompt_version: str) -> list[GoldRow]:
+    """The rows one judge wrote: a pinned model under one judge prompt version."""
+    return [r for r in read_rows(path) if r.labeler == model and r.prompt_version == prompt_version]
+
+
+def labeled_ids(path: Path, labeler: str, prompt_version: str | None = None) -> set[str]:
+    """Ids labeled by `labeler`; with `prompt_version`, only under that judge prompt."""
+    return {
+        r.doc_id
+        for r in read_rows(path)
+        if r.labeler == labeler and prompt_version in (None, r.prompt_version)
+    }
 
 
 def append_rows(path: Path, rows: Iterable[GoldRow]) -> int:
-    """Append rows whose (doc_id, labeler) is not in the file yet. Returns rows written.
+    """Append rows whose (doc_id, labeler, prompt_version) is not in the file yet.
+
+    Returns the number of rows written.
 
     Creates the directory and the header line on first use. Not safe for two writers at
     once; the judge flow and the labeling CLI each write from a single thread.
     """
-    seen = {(r.doc_id, r.labeler) for r in read_rows(path)}
+    seen = {(r.doc_id, r.labeler, r.prompt_version) for r in read_rows(path)}
     new: list[GoldRow] = []
     for r in rows:
         if r.label not in (0, 1) or isinstance(r.label, bool):
             raise ValueError(f"label must be 0 or 1, got {r.label!r} for {r.doc_id}")
-        if (r.doc_id, r.labeler) not in seen:
-            seen.add((r.doc_id, r.labeler))
+        if (r.doc_id, r.labeler, r.prompt_version) not in seen:
+            seen.add((r.doc_id, r.labeler, r.prompt_version))
             new.append(r)
     if not new:
         return 0

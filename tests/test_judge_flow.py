@@ -522,3 +522,21 @@ def test_only_human_is_quiet_when_every_human_label_is_in_the_draw(env, capsys) 
     append_rows(path, [human("d000", "flagged")])
     judge("c", years=YEARS, gold=gold_of(6), provider=FakeJudge(), gold_csv=path, only_human=True)
     assert "WARNING" not in capsys.readouterr().err
+
+
+def test_a_new_judge_prompt_relabels_what_the_old_one_labeled(env, monkeypatch):
+    """Rows are keyed by judge prompt too: judge-v2 labels ids judge-v1 already did."""
+    import elusion.flows.evaluate as mod
+    from elusion.evaluate.gold import read_rows
+
+    csv, _ = env
+    gold = [("d000", "flagged"), ("d001", "discard")]
+    kw = dict(years=[2019], gold=gold, gold_csv=csv)
+    first = mod.judge("c", provider=FakeJudge(), **kw)
+    monkeypatch.setattr(mod, "latest_judge_version", lambda c: "judge-v2")
+    second = mod.judge("c", provider=FakeJudge(), **kw)
+    again = mod.judge("c", provider=FakeJudge(), **kw)
+    assert (first.labeled, second.labeled, again.labeled, again.skipped) == (2, 2, 0, 2)
+    assert (
+        sorted(r.prompt_version for r in read_rows(csv)) == ["c/judge-v1"] * 2 + ["c/judge-v2"] * 2
+    )

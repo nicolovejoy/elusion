@@ -62,7 +62,7 @@ from elusion.evaluate.gold import (
     gold_path,
     human_rows,
     judge_cost_usd,
-    judge_rows,
+    judge_rows_for,
     judge_runs_path,
     labeled_ids,
     select_gold,
@@ -83,10 +83,8 @@ from elusion.flows.review import (
 from elusion.review import db
 from elusion.review.corpus import load_texts
 from elusion.review.db import jobs_summary, provider_for, scores_cost_usd, scores_for
-from elusion.review.prompt import PROMPTS_DIR, load_prompt
+from elusion.review.prompt import PROMPTS_DIR, latest_judge_version, load_prompt
 from elusion.review.providers import AnthropicProvider, Judge
-
-JUDGE_PROMPT_VERSION = "judge-v1"  # prompts/<criterion>/judge-v1.md
 
 
 @dataclass
@@ -186,7 +184,8 @@ def judge(
     scored on the laptop, 2020 on the cluster), and the seeded discard draw depends on
     the whole pile it is drawn from: mixing years would pick a new sample and pay the
     judge to label it. `prompt_version` names the review prompt whose scores define the
-    piles; the judge's own prompt is always JUDGE_PROMPT_VERSION. `gold` and `gold_csv`
+    piles; the judge's own prompt is the criterion's newest (`latest_judge_version`), and
+    labels written under an older judge prompt are not counted as done. `gold` and `gold_csv`
     default to `select_gold` over Postgres and data/gold/<criterion>.csv; tests pass
     their own.
 
@@ -213,7 +212,7 @@ def judge(
     review_model = review_model or settings.review_model
     if max_run_usd is None:
         max_run_usd = settings.max_run_usd
-    prompt = load_prompt(criterion, JUDGE_PROMPT_VERSION)
+    prompt = load_prompt(criterion, latest_judge_version(criterion))
     provider = provider or AnthropicProvider(settings.judge_model)
     path = gold_csv or gold_path(criterion, settings.data_dir)
     if gold is None:
@@ -257,7 +256,7 @@ def judge(
                 f"no human labels in {path} among the drawn gold ids; run `elusion label` first"
             )
     pile = dict(gold)
-    done = labeled_ids(path, provider.model)
+    done = labeled_ids(path, provider.model, prompt.version)
     todo = [d for d in pile if d not in done]
     summary = JudgeSummary(skipped=len(pile) - len(todo))
     log.info(
@@ -462,7 +461,8 @@ def evaluate(
     n_flagged = sum(1 for s in scores.values() if s >= threshold)
     piles = split_piles(scores, threshold, discard_n, seed, flagged_n)  # both draws, one call
     flagged = {d for d, pile in piles if pile == "flagged"}  # the whole pile without a limit
-    judged = {r.doc_id: r for r in judge_rows(csv) if r.labeler == judge_model}
+    judge_version = f"{criterion}/{latest_judge_version(criterion)}"
+    judged = {r.doc_id: r for r in judge_rows_for(csv, judge_model, judge_version)}
     missing = flagged - judged.keys()
     if missing and flagged_n is not None:
         raise MissingLabels(

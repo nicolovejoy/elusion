@@ -80,3 +80,19 @@ def test_the_literature_criterion_has_its_three_prompts_and_its_file() -> None:
     assert "- quote:" in load_prompt("auditable-decisions", "v1").text
     assert corpus_for("auditable-decisions") is OPENALEX
     assert (Path(__file__).parent.parent / "criteria" / "auditable-decisions.md").is_file()
+
+
+def test_latest_judge_version_is_the_highest_on_disk_and_v1_without_files() -> None:
+    from elusion.review.prompt import latest_judge_version
+
+    assert latest_judge_version("cloud-concentration") == "judge-v1"
+    assert latest_judge_version("auditable-decisions") == "judge-v2"
+    assert latest_judge_version("no-such-criterion") == "judge-v1"
+
+
+def test_judge_v2_of_the_literature_criterion_keeps_theory_and_the_answer_format() -> None:
+    prompt = load_prompt("auditable-decisions", "judge-v2")
+    assert prompt.version == "auditable-decisions/judge-v2"
+    for phrase in ("mental model", "Theory,", "in passing", "If you are unsure, keep"):
+        assert phrase in prompt.text
+    assert "- relevant:" in prompt.text and "- rationale:" in prompt.text
