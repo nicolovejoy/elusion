@@ -38,6 +38,9 @@ from elusion.review.db import scores_for
 Pile = Literal["flagged", "discard", "seed"]
 
 HUMAN = "human"  # the `labeler` value for the owner's own labels
+# The `prompt_version` of a human row that replaces the owner's first, blind label of the
+# same document. The blind row is kept; the revision is appended after it with the reason.
+REVISED = "revised"
 DEFAULT_SEED = 20261104  # fixed default for the discard sample; written into the report
 
 
@@ -88,8 +91,18 @@ def judge_rows(path: Path) -> list[GoldRow]:
     return [r for r in read_rows(path) if r.labeler != HUMAN]
 
 
-def human_rows(path: Path) -> list[GoldRow]:
-    return [r for r in read_rows(path) if r.labeler == HUMAN]
+def human_rows(path: Path, blind: bool = False) -> list[GoldRow]:
+    """The owner's label of each document he labeled, one row per document.
+
+    A label he changed after reading the judge's disagreements is a second row marked
+    REVISED; it replaces the first unless `blind`, which returns the labels as first
+    given, before he had seen anything the judge said.
+    """
+    rows: dict[str, GoldRow] = {}
+    for r in read_rows(path):
+        if r.labeler == HUMAN and not (blind and r.prompt_version == REVISED):
+            rows[r.doc_id] = r
+    return list(rows.values())
 
 
 def judge_rows_for(path: Path, model: str, prompt_version: str) -> list[GoldRow]:

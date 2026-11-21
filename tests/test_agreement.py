@@ -114,3 +114,26 @@ def test_compare_reads_only_the_named_judge_prompts_rows(tmp_path) -> None:
     )
     assert compare(p, JUDGE, "c/judge-v1").estimate.k == 0
     assert compare(p, JUDGE, "c/judge-v2").estimate.k == 1
+
+
+def test_a_revised_label_replaces_the_blind_one_and_both_counts_are_shown(tmp_path) -> None:
+    from elusion.evaluate.gold import REVISED, GoldRow, append_rows, human_rows
+
+    p = tmp_path / "g.csv"
+    append_rows(
+        p,
+        [
+            GoldRow("a", 0, "flagged", HUMAN, "", "", "t"),
+            GoldRow("b", 1, "discard", HUMAN, "", "", "t"),
+            GoldRow("a", 1, "flagged", JUDGE, "c/judge-v1", "why", "t"),
+            GoldRow("b", 1, "discard", JUDGE, "c/judge-v1", "why", "t"),
+            GoldRow("a", 1, "flagged", HUMAN, REVISED, "could not read it", "t2"),
+        ],
+    )
+    assert [(r.doc_id, r.label) for r in human_rows(p)] == [("a", 1), ("b", 1)]
+    assert [(r.doc_id, r.label) for r in human_rows(p, blind=True)] == [("a", 0), ("b", 1)]
+    c = compare(p, JUDGE, "c/judge-v1")
+    assert (c.estimate.k, c.blind.k, c.revised) == (2, 1, 1)
+    out = render(c, JUDGE, texts={})
+    assert "agreement: 2 of 2" in out
+    assert "blind labels, before he revised 1 after reading the judge: 1 of 2" in out

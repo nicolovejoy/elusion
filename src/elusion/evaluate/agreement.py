@@ -36,6 +36,8 @@ class Comparison:
     estimate: Estimate  # k agreeing out of n labeled by both, Clopper-Pearson interval
     human_only: int  # owner labels the judge model has not labeled yet (not counted)
     disagreements: list[Disagreement]
+    blind: Estimate | None = None  # the same count on his first labels, if he revised any
+    revised: int = 0  # labels he changed after reading the judge's disagreements
 
 
 def compare(path: Path, judge_model: str, prompt_version: str) -> Comparison:
@@ -54,7 +56,10 @@ def compare(path: Path, judge_model: str, prompt_version: str) -> Comparison:
         for h in sorted(shared, key=lambda r: r.doc_id)
         if h.label != judged[h.doc_id].label
     ]
-    return Comparison(estimate, len(humans) - len(shared), disagreements)
+    first = human_rows(path, blind=True)
+    revised = sum(1 for a, b in zip(first, humans, strict=True) if a.label != b.label)
+    blind = metrics.agreement(first, list(judged.values())) if revised else None
+    return Comparison(estimate, len(humans) - len(shared), disagreements, blind, revised)
 
 
 def render(
@@ -71,6 +76,12 @@ def render(
         f"agreement: {e.k} of {e.n} ({e.point:.3f}), 95% interval [{e.low:.3f}, {e.high:.3f}]",
         f"judge: {judge_model}" + (f", prompt {prompt_version}" if prompt_version else ""),
     ]
+    if c.blind:
+        b = c.blind
+        lines.append(
+            f"on the owner's blind labels, before he revised {c.revised} after reading the "
+            f"judge: {b.k} of {b.n} ({b.point:.3f}), 95% interval [{b.low:.3f}, {b.high:.3f}]"
+        )
     if c.human_only:
         one = c.human_only == 1
         lines.append(
