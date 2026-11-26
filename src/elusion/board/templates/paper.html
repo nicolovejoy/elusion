@@ -38,8 +38,8 @@
   <dd>{{ blind.verdict | words }}</dd>
   <dt>Your decision</dt>
   {% if decision %}
-  <dd><span class="tag">decided</span>{{ decision.verdict | words }}, on {{ decision.written_at | when }}:
-    {{ decision.body }}</dd>
+  <dd><span class="tag">decided</span>{{ decision.verdict | words }}, on {{ decision.written_at | when }}{% if decision.body %}:
+    {{ decision.body }}{% endif %}</dd>
   {% else %}
   <dd>No decision.</dd>
   {% endif %}

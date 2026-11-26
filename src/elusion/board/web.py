@@ -124,7 +124,7 @@ def create_app(
                 return redirect(url_for("audit_page"), 303)
         # The paper already has a verdict. The same one again is a double click or a resubmit,
         # and a skip adds nothing to a paper that has been decided; a different one is refused.
-        if verdict not in ("skip", given.verdict):
+        if given is None or verdict not in ("skip", given.verdict):
             abort(409)
         return redirect(url_for("audit_page"), 303)
 

@@ -485,11 +485,14 @@ def test_the_card_shows_the_wording_the_figures_and_each_answer_with_its_source(
     client = app.test_client()
     blind_step(client, concept, 4, {2: "does_not_hold", 3: "does_not_hold"})
     html = page(client, "/concept")
-    for tag in (">paper<", ">model<", ">decided<"):
-        assert tag in html
-    assert WORDING in html and "version 1" in html and "owner" in html
     parts = sections(html)
+    wording = parts["The wording"]  # the legend above the sections names all three tags
+    assert WORDING in wording and ">decided<" in wording
+    assert "version 1" in wording and "written by owner" in wording
     answers = parts["Answers"]
+    assert ">model<" in answers and ">paper<" in answers and ">decided<" not in answers
+    for row in answers.split("<li>")[1:]:  # every row carries both of its tags
+        assert ">model<" in row and ">paper<" in row
     assert ANSWER in answers and "A second answer" in answers
     assert answers.count(QUOTE) == 2
     assert f'href="/paper/{doc(0)}"' in answers and "Title of paper 0" in answers
@@ -497,6 +500,7 @@ def test_the_card_shows_the_wording_the_figures_and_each_answer_with_its_source(
     assert "Title of paper 2" not in answers and "Title of paper 3" not in answers
     assert "reader-model-9" in html and "first-read/v1" in html
     counts = parts["Counts"]
+    assert "Counted from the log." in counts
     for line in (
         "Papers matching the words: 4",
         "Held back: 0",
@@ -614,7 +618,10 @@ def test_the_paper_note_shows_the_abstract_marked_and_the_whole_story(
     for shown in (ANSWER, RATIONALE, "reader-model-9", "first-read/v1", "it does"):
         assert shown in html
     assert "does not hold" in html.lower()  # the owner's blind verdict
-    assert ">paper<" in html and ">model<" in html and ">decided<" in html
+    parts = sections(html)
+    reading, verdicts = parts["The reading"], parts["Your verdicts"]
+    assert ">model<" in reading and ">paper<" in reading and ">decided<" not in reading
+    assert ">decided<" in verdicts and "it does" in verdicts
 
 
 def test_the_paper_note_without_a_decision_has_none(board_engine, concept) -> None:
@@ -654,6 +661,21 @@ def test_our_history_lists_every_entry_in_order_in_pacific_time(board_engine, co
     assert "PST" in history or "PDT" in history
 
 
+def test_every_line_of_our_history_carries_the_tag_of_its_source(board_engine, concept) -> None:
+    app, papers = make(board_engine, concept, n=2, verdicts=["holds", "holds"])
+    client = app.test_client()
+    first = finish_with_one_disagreement(client, papers, concept, 2)
+    client.post(f"/audit/disagreements/{first}", data={"verdict": "holds", "reason": "stops here"})
+    history = sections(page(client, "/concept"))["Our history"]
+    lines = history.split("<li>")[1:]
+    assert len(lines) == 6
+    expected = {"concept": "decided", "reading": "model", "audit": "decided", "decision": "decided"}
+    for line in lines:
+        kind = re.search(r"<b>(\w+)</b>", line).group(1)
+        tags = re.findall(r'<span class="tag">(\w+)</span>', line)
+        assert tags == [expected[kind]], (kind, tags)
+
+
 def test_our_history_leaves_out_a_held_back_paper(board_engine, concept) -> None:
     app, papers = make(board_engine, concept, n=3, held_back=(2,))
     client = app.test_client()
@@ -661,3 +683,35 @@ def test_our_history_leaves_out_a_held_back_paper(board_engine, concept) -> None
     history = sections(page(client, "/concept"))["Our history"]
     assert history.count("<li") == 1 + 2 + 2
     assert "Title of paper 2" not in history
+
+
+def test_a_second_click_that_loses_the_race_and_finds_no_verdict_is_409(
+    board_engine, concept, monkeypatch
+) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    first = order_of(concept, 2)[0]
+
+    def refuse(*args, **kwargs):
+        raise log.AlreadyAudited("raced")
+
+    monkeypatch.setattr(log, "add_audit", refuse)
+    response = app.test_client().post(f"/audit/{first}", data={"verdict": "holds"})
+    assert response.status_code == 409
+
+
+def test_a_decision_without_a_reason_prints_no_none_on_the_note(board_engine, concept) -> None:
+    app, papers = make(board_engine, concept, n=2)
+    client = app.test_client()
+    first = finish_with_one_disagreement(client, papers, concept, 2)
+    # add_decision refuses an empty reason, so write the row the way the log's own helper does
+    log._append(
+        board_engine,
+        kind="decision",
+        concept=concept,
+        concept_version=1,
+        doc_id=first,
+        verdict="holds",
+        actor="owner",
+    )
+    html = page(client, f"/paper/{first}")
+    assert "None" not in html

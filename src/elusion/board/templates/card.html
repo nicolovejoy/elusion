@@ -13,13 +13,14 @@ copied from an abstract, <span class="tag">model</span> a reading by the model,
 on {{ s.entry.written_at | when }}.</p>
 
 <h2>Counts</h2>
+<p class="muted">Counted from the log.</p>
 <ul class="rows">
   <li>Papers matching the words: {{ matching }}</li>
   <li>Held back: {{ s.held_back_n }}</li>
   <li>Read: {{ s.doc_ids | length }}</li>
-  <li><span class="tag">model</span>Reader says holds: {{ by_reader["holds"] }}</li>
-  <li><span class="tag">model</span>Reader says does not hold: {{ by_reader["does_not_hold"] }}</li>
-  <li><span class="tag">model</span>Failed readings: {{ figures.failed_readings }}</li>
+  <li>Reader says holds: {{ by_reader["holds"] }}</li>
+  <li>Reader says does not hold: {{ by_reader["does_not_hold"] }}</li>
+  <li>Failed readings: {{ figures.failed_readings }}</li>
   <li>Agreement of the reader with your blind verdicts:
     {% if figures.agreement %}{{ figures.agreed }} of {{ figures.compared }} papers
     {{ interval(figures.agreement) }}{% else %}not yet available{% endif %}</li>
@@ -89,7 +90,7 @@ on {{ s.entry.written_at | when }}.</p>
 <ul class="rows">
   {% for e, p in log %}
   <li><span class="muted">{{ e.written_at | when }}</span>
-    <b>{{ e.kind }}</b> {{ e.model or e.actor }}
+    <span class="tag">{{ "model" if e.kind == "reading" else "decided" }}</span><b>{{ e.kind }}</b> {{ e.model or e.actor }}
     {%- if e.kind == "concept" %}, wording version {{ e.concept_version }}{% endif %}
     {%- if e.verdict %}, {{ e.verdict | words }}{% endif %}
     {%- if e.kind == "decision" and e.body %}: {{ e.body }}{% endif %}
