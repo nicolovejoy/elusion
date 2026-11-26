@@ -7,10 +7,13 @@ yet, and the value is a placeholder that the owner or the controller must check 
 first paid call.
 """
 
-EMBEDDING_MODEL = "text-embedding-3-small"  # confirmed from developers.openai.com/api/docs/models/text-embedding-3-small on 2026-11-26
+# Each id below was read on its provider's page on 2026-11-26:
+# OpenAI: developers.openai.com/api/docs/models/text-embedding-3-small and /guides/embeddings
+# Anthropic: platform.claude.com/docs/en/about-claude/pricing
+EMBEDDING_MODEL = "text-embedding-3-small"  # confirmed
 # The length of one embedding; the `vector` column is made from it, so a model with another
 # length needs a new column (and a new table or a rebuild), not a changed constant.
-EMBEDDING_DIM = 1536  # confirmed from developers.openai.com/api/docs/guides/embeddings on 2026-11-26
-ANSWER_MODEL = "claude-sonnet-5-5"  # confirmed from platform.claude.com/docs/en/about-claude/pricing on 2026-11-26
-JUDGE_MODEL = "claude-opus-5-5"  # confirmed from platform.claude.com/docs/en/about-claude/pricing on 2026-11-26
-DRAFT_MODEL = "claude-opus-5-5"  # confirmed from platform.claude.com/docs/en/about-claude/pricing on 2026-11-26
+EMBEDDING_DIM = 1536  # confirmed: the model's default length
+ANSWER_MODEL = "claude-sonnet-5-5"  # confirmed
+JUDGE_MODEL = "claude-opus-5-5"  # confirmed
+DRAFT_MODEL = "claude-opus-5-5"  # confirmed
