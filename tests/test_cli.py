@@ -529,3 +529,73 @@ def test_harvest_command_runs_the_flow_and_prints_its_summary(monkeypatch) -> No
 
     assert CliRunner().invoke(app, ["harvest", "--seeds-only"]).exit_code == 0
     assert seen == {"max_pages": None, "seeds_only": True}
+
+
+def test_concept_command_adds_a_version_with_search_terms_and_criterion(monkeypatch) -> None:
+    import elusion.board.log as log
+    import elusion.collect.db as db
+
+    seen = {}
+    monkeypatch.setattr(db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(log, "ensure_schema", lambda engine: seen.update(schema=engine))
+
+    def fake_add(engine, concept, wording, actor, detail=None):
+        seen.update(engine=engine, concept=concept, wording=wording, actor=actor, detail=detail)
+        return 3
+
+    monkeypatch.setattr(log, "add_concept", fake_add)
+    result = CliRunner().invoke(
+        app,
+        [
+            "concept",
+            "--name",
+            "stopping",
+            "--wording",
+            "When should a review stop?",
+            "--term",
+            "stopping rule",
+            "--term",
+            "recall target",
+            "--criterion",
+            "auditable-decisions",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "schema": "engine",
+        "engine": "engine",
+        "concept": "stopping",
+        "wording": "When should a review stop?",
+        "actor": "claude",
+        "detail": {
+            "search_terms": ["stopping rule", "recall target"],
+            "criterion": "auditable-decisions",
+        },
+    }
+    assert "stopping" in result.output and "3" in result.output
+
+
+def test_first_read_command_builds_the_reader_and_prints_the_summary(monkeypatch) -> None:
+    import elusion.flows.first_read as mod
+    import elusion.review.providers as providers
+
+    seen = {}
+
+    class StubProvider:
+        def __init__(self, model):
+            self.model = model
+
+    def fake_flow(concept, reader, **kw):
+        seen.update(concept=concept, reader=reader, **kw)
+        return {"read": 2}
+
+    monkeypatch.setattr(providers, "AnthropicProvider", StubProvider)
+    monkeypatch.setattr(mod, "first_read", fake_flow)
+    result = CliRunner().invoke(app, ["first-read", "--concept", "stopping"])
+    assert result.exit_code == 0, result.output
+    assert seen["concept"] == "stopping"
+    assert seen["reader"].model == "claude-haiku-5-5"
+    assert "{'read': 2}" in result.output
+
+    CliRunner().invoke(app, ["first-read", "--concept", "stopping", "--model", "other-model"])
+    assert seen["reader"].model == "other-model"

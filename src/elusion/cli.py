@@ -68,6 +68,43 @@ def harvest(
 
 
 @app.command()
+def concept(
+    name: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
+    wording: Annotated[str, typer.Option(help="The concept stated as a question.")],
+    term: Annotated[list[str], typer.Option(help="A search term; repeat it for several.")],
+    criterion: Annotated[
+        str | None, typer.Option(help="The criterion the concept belongs to, e.g. a file stem.")
+    ] = None,
+    actor: Annotated[
+        str, typer.Option(help="Who wrote this wording: owner, claude ...")
+    ] = "claude",
+) -> None:
+    """Write a new wording of a concept into the concept log; prints its version."""
+    from elusion.board import log
+    from elusion.collect.db import make_engine
+    from elusion.config import settings
+
+    engine = make_engine(settings.database_url)
+    log.ensure_schema(engine)
+    version = log.add_concept(
+        engine, name, wording, actor, {"search_terms": term, "criterion": criterion}
+    )
+    typer.echo(f"{name} version {version}")
+
+
+@app.command(name="first-read")
+def first_read(
+    concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
+    model: Annotated[str, typer.Option(help="Pinned reader model id.")] = "claude-haiku-5-5",
+) -> None:
+    """Have a model read each abstract matching the concept's search terms, once."""
+    from elusion.flows.first_read import first_read as first_read_flow
+    from elusion.review.providers import AnthropicProvider
+
+    typer.echo(first_read_flow(concept, AnthropicProvider(model)))
+
+
+@app.command()
 def review(
     criterion: Annotated[
         Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
