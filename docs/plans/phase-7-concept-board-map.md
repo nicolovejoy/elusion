@@ -309,6 +309,7 @@ The stopping concept, as far as the first pass took it:
    from the log, and the history of the *field's* thinking from each paper's publication
    date. Neither is on the diagrams above yet.
 2. How big one concept is: a problem, a technique, a named theory, a school of thought.
-3. Who does the first read: a pinned model through the pipeline, or Claude in the session.
+3. Settled 2026-11-26 (the owner): a pinned model through the pipeline does the first
+   read. See `phase-7-concept-audit.md`, "Decided by the owner, 2026-11-26".
 4. How step 3c searches: by the words of the paper notes, or by rereading the abstracts.
 5. How a concept or a link is checked, beyond tracing it to quotes.

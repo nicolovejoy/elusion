@@ -4,6 +4,12 @@ Status: drafted by Claude on 2026-11-18. **Not approved.** Nothing here is built
 is built until the owner approves this page. It belongs with the concept board
 (`phase-7-concept-board-map.md`) and uses its words.
 
+**Changed by the owner on 2026-11-26** ("Decided by the owner, 2026-11-26" below): the
+audit runs in a local web page and not in the terminal, the first read is made by a pinned
+model, and "skip" is kept. Where an older line below says a terminal command, Claude in
+the session, or asks whether skip is wanted, that block governs. The page as a whole is
+still not approved: the web approach is to be talked through first.
+
 ## Intent
 
 The owner wants checking Claude's readings to be easy, and built in from the start instead
@@ -20,6 +26,68 @@ and a few ids, so today there is nothing to audit.
   two differ, and settles each.
 - It runs on the laptop. The project is not on Azure: the phase 6 cluster ran for under
   four hours on 2026-11-16 and was destroyed.
+
+## Decided by the owner, 2026-11-26
+
+The owner saw three mockups of the stopping-rules pass (a concept card, a paper note and
+the blind audit screen) and called them good enough to build from. They are a private
+canvas, not in this repo; the views are described under "The three views" below.
+
+- **Order.** Part A of phase 7 is done and merged. One pass of the concept board on
+  stopping rules comes next, before part B (`docs/DECISIONS.md`, 2026-11-26).
+- **The audit runs in a local web page** (approach 3 below, in place of approach 1). The
+  page shows a quote in place inside its abstract, which a terminal does poorly. It is
+  local only, on the laptop, with one user and no login.
+- **The first read is made by a pinned model through the pipeline**, not by Claude in the
+  session. Each reading then carries a model snapshot id and a prompt version, like every
+  other model call in the repo. This settles item 3 of "Not decided yet" in the board doc
+  and replaces step 1 of "The design" below. The 2026-11-17 reading by Claude stays what
+  it was: an unlogged first pass.
+- **"Skip" is kept.** A skipped paper has no verdict; the disagreements step still waits
+  until every paper has one, so a skipped paper comes round again.
+
+**Open: the web approach.** The owner wants to talk it through before anything is built.
+What is known: `fastapi`, `uvicorn` and `jinja2` are already installed, pulled in by
+Prefect and MLflow, so a small server-rendered page needs them declared in
+`pyproject.toml` and nothing new downloaded. Claude's starting proposal, not agreed: one
+FastAPI app started by `uv run elusion board`, bound to localhost, with server-rendered
+HTML templates and no JavaScript build; every page is a view computed from `concept_log`,
+and every button is one insert into it. The alternatives to weigh: Python's standard
+`http.server` (no declared dependency, more code by hand), or Flask (also already
+installed). Not proposed: Streamlit or a JavaScript front end, which are new packages.
+
+**The three views** (the mockups, in words).
+
+1. *Concept card.* The wording as a question; counts (abstracts matching the words, how
+   many hold the concept, how many use the words for something else, and the precision of
+   the word search once audited); the rival answers side by side, each with its papers and
+   verbatim quotes; links to other concepts, each with its quote; the rejected meanings
+   with a quote each; our history from the log; the field's history by publication date.
+   Every statement is marked one of two ways: the paper says so, or we decided so. A quote
+   from a paper in the judge's gold draw is hidden until the owner's blind labels for the
+   screen are done.
+2. *Paper note.* The stored abstract with the quotes the reading rests on highlighted in
+   place; the concepts the paper holds, each with its quote and the verbatim check; how
+   the paper ties them together; who read it.
+3. *Blind audit.* Step 1: the concept's wording, one abstract, and three buttons (holds,
+   does not hold, skip), with nothing of the reader's shown. Step 2: only the
+   disagreements, with both verdicts, the reader's quote, and one line of reason for the
+   final verdict. At the end: agreement, and the precision of the word search with its
+   interval.
+
+**Next steps, in order.**
+
+1. Talk through the web approach and approve or change this page.
+2. Build `concept_log` (append-only, enforced by the database) with its tests.
+3. A versioned first-read prompt and a pinned model; read the 31 abstracts; each reading
+   stored with a quote that code confirms is verbatim.
+4. The audit page, blind step then disagreements; the owner audits the 31.
+5. The concept card and the paper note as views over the log.
+6. Then part B of the phase 7 spec (index, `ask`, `ask-eval`).
+
+Still owed from part A: the owner's fresh 30 blind labels for the screen's judge. One of
+the 31 stopping abstracts (`W7223334133`) is in that gold draw, so it is held back from
+anything the owner reads until those labels are done.
 
 ## Goals
 
