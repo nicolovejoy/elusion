@@ -900,3 +900,232 @@ def test_a_flagged_held_back_paper_is_on_neither_the_card_nor_its_history(
     part = sections(html)["Flagged as interesting"]
     assert "visible note" in part and part.count("<li>") == 1
     assert "visible note" in sections(html)["Our history"]
+
+
+# -- going back to papers already seen during the blind step -------------------------------
+
+SECRETS = (
+    RATIONALE,
+    "reader-model-9",
+    "first-read/v1",
+    "<mark",
+    ANSWER,
+    "quote_not_verbatim",
+    "words the abstract lacks",
+)
+FAILED_DETAIL = {"stop_reason": "quote_not_verbatim", "model_quote": "words the abstract lacks"}
+
+
+def seen_app(engine, concept, n=4, **kwargs):
+    """An app whose readings are distinctive: paper 0 holds with an answer, 1 does not hold,
+    2 failed with a stop reason, the rest hold."""
+    verdicts = (["holds", "does_not_hold", "failed"] + ["holds"] * n)[:n]
+    details = {0: {"answer": ANSWER}, 2: FAILED_DETAIL}
+    return make(engine, concept, n=n, verdicts=verdicts, details=details, **kwargs)
+
+
+def post_audit(client, i, verdict, **extra):
+    assert client.post(f"/audit/{doc(i)}", data={"verdict": verdict, **extra}).status_code == 303
+
+
+def test_the_seen_list_is_in_first_seen_order_with_skipped_papers_first_and_counts(
+    board_engine, concept
+) -> None:
+    app, _ = seen_app(board_engine, concept, n=5)
+    client = app.test_client()
+    assert "0 with a verdict, 0 skipped, 5 not seen yet" in " ".join(
+        page(client, "/audit/seen").split()
+    )
+    post_audit(client, 3, "holds")
+    post_audit(client, 1, "skip")
+    post_audit(client, 4, "does_not_hold")
+    post_audit(client, 2, "skip")
+    post_audit(client, 2, "skip")  # skipped twice: still one line
+    html = page(client, "/audit/seen")
+    assert "2 with a verdict, 2 skipped, 1 not seen yet" in " ".join(html.split())
+    parts = sections(html)
+    skipped, decided = parts["Skipped, no verdict yet"], parts["With a verdict"]
+    titles = lambda part: re.findall(r"Title of paper (\d)", part)  # noqa: E731
+    assert titles(skipped) == ["1", "2"]  # the order he first saw them
+    assert titles(decided) == ["3", "4"]
+    assert skipped.count('class="tag skipped"') == 2  # a mark on each line
+    assert 'class="tag skipped"' not in decided
+    assert "Holds" in decided and "Does not hold" in decided
+    assert "Title of paper 0" not in html  # not seen yet
+    assert f'href="/audit/seen/{doc(1)}"' in skipped
+    assert 'href="/audit"' in html and "Back to the next paper" in html
+
+
+def test_a_verdict_given_after_a_skip_moves_the_paper_to_the_verdict_group(
+    board_engine, concept
+) -> None:
+    app, _ = seen_app(board_engine, concept, n=3)
+    client = app.test_client()
+    post_audit(client, 0, "skip")
+    post_audit(client, 0, "does_not_hold")
+    parts = sections(page(client, "/audit/seen"))
+    assert "Title of paper 0" not in parts["Skipped, no verdict yet"]
+    assert "Title of paper 0" in parts["With a verdict"]
+
+
+def test_the_seen_list_works_after_the_blind_step_and_shows_flags_with_notes(
+    board_engine, concept
+) -> None:
+    app, _ = seen_app(board_engine, concept, n=3)
+    client = app.test_client()
+    post_audit(client, 0, "holds", flag="1", note="first note")
+    client.post(f"/audit/seen/{doc(0)}/flag", data={"note": "second note"})
+    client.post(f"/audit/seen/{doc(0)}/flag", data={})
+    post_audit(client, 1, "holds")
+    post_audit(client, 2, "skip")
+    post_audit(client, 2, "holds")
+    html = page(client, "/audit/seen")
+    assert "3 with a verdict, 0 skipped, 0 not seen yet" in " ".join(html.split())
+    decided = sections(html)["With a verdict"]
+    first = decided.split("<li>")[1]
+    assert "Title of paper 0" in first and "Flagged as interesting" in first
+    assert "first note; second note" in first
+    assert decided.count("Flagged as interesting") == 1  # only the one paper
+
+
+def test_the_audit_page_links_to_the_seen_list_with_its_count(board_engine, concept) -> None:
+    app, _ = seen_app(board_engine, concept, n=3)
+    client = app.test_client()
+    assert "Papers you have seen (0)" in page(client, "/audit")
+    post_audit(client, 0, "skip")
+    post_audit(client, 1, "holds")
+    html = page(client, "/audit")
+    assert "Papers you have seen (2)" in html and 'href="/audit/seen"' in html
+
+
+def test_the_blind_paper_page_shows_the_abstract_the_outcome_and_the_flag_form(
+    board_engine, concept
+) -> None:
+    app, papers = seen_app(board_engine, concept, n=3)
+    client = app.test_client()
+    post_audit(client, 1, "does_not_hold")
+    html = page(client, f"/audit/seen/{doc(1)}")
+    assert WORDING in html and papers[doc(1)].title in html and papers[doc(1)].text in html
+    parts = sections(html)
+    assert "Does not hold" in parts["Your outcome"]
+    assert (
+        "A blind verdict is not changed. If the model disagrees, you settle it in the next step."
+        in html
+    )
+    assert 'name="verdict"' not in html  # no verdict buttons for a paper that has a verdict
+    assert "Not flagged" in html
+    assert f'action="/audit/seen/{doc(1)}/flag"' in html and 'name="note"' in html
+    assert 'href="/audit"' in html and "Back to the next paper" in html
+
+
+def test_flagging_from_the_blind_page_works_before_the_step_is_finished(
+    board_engine, concept
+) -> None:
+    app, _ = seen_app(board_engine, concept, n=3)
+    client = app.test_client()
+    post_audit(client, 0, "skip")
+    response = client.post(f"/audit/seen/{doc(0)}/flag", data={"note": "  look again "})
+    assert response.status_code == 303
+    assert response.headers["Location"].endswith(f"/audit/seen/{doc(0)}")
+    [flagged] = flags(board_engine, concept)
+    assert (flagged.doc_id, flagged.actor, flagged.body) == (doc(0), "owner", "look again")
+    html = page(client, f"/audit/seen/{doc(0)}")
+    assert "Flagged on " in html and "look again" in html
+    assert client.get("/concept").status_code == 423  # the card is still locked
+
+
+def test_a_skipped_paper_can_be_settled_from_its_blind_page(board_engine, concept) -> None:
+    app, _ = seen_app(board_engine, concept, n=3)
+    client = app.test_client()
+    post_audit(client, 2, "skip")
+    html = page(client, f"/audit/seen/{doc(2)}")
+    assert "Skipped, no verdict yet" in html
+    assert f'action="/audit/{doc(2)}"' in html
+    assert ">Holds<" in html and ">Does not hold<" in html and ">Skip<" not in html
+    assert "A blind verdict is not changed" not in html
+    response = client.post(f"/audit/{doc(2)}", data={"verdict": "holds"})
+    assert response.status_code == 303 and response.headers["Location"].endswith("/audit")
+    assert "Holds" in sections(page(client, f"/audit/seen/{doc(2)}"))["Your outcome"]
+    assert "A blind verdict is not changed" in page(client, f"/audit/seen/{doc(2)}")
+
+
+def test_the_blind_pages_404_for_unseen_unknown_and_held_back_papers(board_engine, concept) -> None:
+    app, _ = seen_app(board_engine, concept, n=4, held_back=(3,))
+    client = app.test_client()
+    post_audit(client, 0, "holds")
+    for i in (1, 3, 9):  # not seen yet, held back, unknown
+        assert client.get(f"/audit/seen/{doc(i)}").status_code == 404
+        assert client.post(f"/audit/seen/{doc(i)}/flag", data={"note": "x"}).status_code == 404
+    assert flags(board_engine, concept) == []
+    # a held-back paper with an audit entry written straight to the log is still unreachable
+    log.add_audit(board_engine, concept, 1, doc(3), "holds")
+    assert client.get(f"/audit/seen/{doc(3)}").status_code == 404
+    assert "Title of paper 3" not in page(client, "/audit/seen")
+
+
+def test_the_blind_flag_post_has_the_same_origin_and_host_protection_and_note_limit(
+    board_engine, concept
+) -> None:
+    app, _ = seen_app(board_engine, concept, n=2)
+    client = app.test_client()
+    post_audit(client, 0, "holds")
+    url = f"/audit/seen/{doc(0)}/flag"
+    assert client.post(url, headers={"Origin": "https://evil.example"}).status_code == 403
+    assert client.post(url, headers={"Host": "evil.example"}).status_code == 403
+    assert client.get("/audit/seen", headers={"Host": "evil.example"}).status_code == 403
+    assert client.get(f"/audit/seen/{doc(0)}", headers={"Host": "evil.example"}).status_code == 403
+    assert client.post(url, data={"note": "x" * 1001}).status_code == 400
+    assert flags(board_engine, concept) == []
+    assert client.post(url, headers={"Origin": "http://localhost"}).status_code == 303
+
+
+def drive(client):
+    post_audit(client, 0, "skip")
+    post_audit(client, 1, "holds")
+    post_audit(client, 2, "skip", flag="1", note="a note")
+    post_audit(client, 3, "does_not_hold")
+
+
+def test_the_new_pages_show_nothing_of_the_reading_even_for_a_failed_one(
+    board_engine, concept
+) -> None:
+    app, papers = seen_app(board_engine, concept, n=4)
+    client = app.test_client()
+    drive(client)
+    client.post(f"/audit/seen/{doc(2)}/flag", data={"note": "again"})
+    urls = ["/audit/seen", "/audit"] + [f"/audit/seen/{doc(i)}" for i in range(4)]
+    for url in urls:
+        html = client.get(url).get_data(as_text=True)
+        for secret in SECRETS:
+            assert secret not in html, (url, secret)
+        assert "failed" not in html.lower(), url
+    # the abstract itself holds the quote's words, once, and is not marked
+    assert page(client, f"/audit/seen/{doc(0)}").count(QUOTE) == 1
+
+
+def test_nothing_on_the_new_pages_depends_on_what_the_reading_says(board_engine) -> None:
+    """Two concepts over the same papers, read in opposite ways (one reader holds
+    everything with answers, the other fails every reading). The owner does the same things
+    in both; every blind page must then be byte for byte the same."""
+    pages = []
+    for kind in ("holds", "failed"):
+        slug = f"c{uuid.uuid4().hex[:10]}"
+        log.add_concept(board_engine, slug, WORDING, "owner")
+        app, _ = make(
+            board_engine,
+            slug,
+            n=3,
+            verdicts=[kind] * 3,
+            details={
+                i: ({"answer": ANSWER} if kind == "holds" else FAILED_DETAIL) for i in range(3)
+            },
+        )
+        client = app.test_client()
+        post_audit(client, 0, "skip")
+        post_audit(client, 1, "holds")
+        post_audit(client, 2, "skip")
+        pages.append(
+            [page(client, "/audit/seen")]
+            + [page(client, f"/audit/seen/{doc(i)}") for i in range(3)]
+        )
+    assert pages[0] == pages[1]

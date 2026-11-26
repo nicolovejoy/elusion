@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Audit{% endblock %}
 {% block body %}
-<p class="muted">Paper {{ k }} of {{ n }}</p>
+<p class="muted">Paper {{ k }} of {{ n }}
+  <a href="{{ url_for('seen_page') }}">Papers you have seen ({{ seen_n }})</a></p>
 <p class="wording">{{ wording }}</p>
 <h1>{{ paper.title }}</h1>
 <p class="abstract">{{ paper.text }}</p>

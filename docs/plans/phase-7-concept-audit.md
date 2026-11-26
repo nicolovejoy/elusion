@@ -88,7 +88,10 @@ after his fresh 30 blind labels.
 an optional one-line note. The paper note has the same form, for papers already audited, and
 lists the paper's flags. The card has a section, "Flagged as interesting", with each flagged
 paper once and its notes. A flag is one `flag` row in `concept_log` (the note is in `body`),
-is never taken back, and a held-back paper's flags are never shown.
+is never taken back, and a held-back paper's flags are never shown. During the blind step
+the owner can go back to the papers he has already seen (`/audit/seen`: skipped ones first,
+his own outcome, his flags), flag them from a blind page that shows no part of the reading,
+and settle a skip there; a given verdict is not changed.
 
 **Next steps, in order.**
 

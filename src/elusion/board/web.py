@@ -16,7 +16,9 @@ not this page's own), so a web page elsewhere cannot make the owner's browser fi
 verdicts here.
 
 Blindness is the point of the design. Until the owner has a verdict on every paper, the
-only pages that can be reached show the concept and an abstract, and a count. The reader's
+only pages that can be reached show the concept and an abstract, and a count. Two of them
+let him go back to papers he has already seen (`/audit/seen`), to flag them or to settle a
+skip; they read only his own audit and flag entries, never the reading. The reader's
 verdicts, quotes and reasons are not read by those routes at all. The concept card and the
 paper notes, which show them, answer "locked" until that step is done. A held-back paper
 (one kept for evaluation) never appears on any page.
@@ -38,6 +40,15 @@ from elusion.board.log import Entry
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _NOTE_MAX = 1000  # characters in a flag's note
 _WORDS = {"holds": "Holds", "does_not_hold": "Does not hold", "skip": "Skip", "failed": "Failed"}
+
+
+@dataclass
+class _Seen:
+    """One paper the owner has already seen in the blind step."""
+
+    paper: Paper
+    verdict: str | None  # his holds / does_not_hold, or None when he has only skipped it
+    flags: list[Entry]
 
 
 @dataclass(frozen=True)
@@ -85,6 +96,25 @@ def create_app(
             if origin != f"{request.scheme}://{request.host}":
                 abort(403)
 
+    def seen_papers(s: _State) -> list[_Seen]:
+        """The papers the owner has an audit entry for (a verdict or a skip), in the order he
+        first saw them, each with his own outcome and his flags. This reads only the `audit`
+        and `flag` kinds of the log: nothing of any reading, so what these pages show cannot
+        depend on it."""
+        flags: dict[str, list[Entry]] = {}
+        for e in log.entries(engine, concept, kind="flag"):
+            flags.setdefault(e.doc_id, []).append(e)
+        found: dict[str, _Seen] = {}
+        for e in log.entries(engine, concept, s.version, kind="audit"):
+            if e.doc_id not in s.doc_ids:
+                continue
+            seen = found.setdefault(
+                e.doc_id, _Seen(papers[e.doc_id], None, flags.get(e.doc_id, []))
+            )
+            if e.verdict in ("holds", "does_not_hold"):
+                seen.verdict = e.verdict
+        return list(found.values())
+
     def add_flag(s: _State, doc_id: str) -> None:
         """Write the owner's flag on `doc_id`, with the note typed beside it (may be blank)."""
         note = request.form.get("note", "").strip()
@@ -110,7 +140,39 @@ def create_app(
             paper=papers[doc_id],
             k=s.verdicts + 1,
             n=len(s.doc_ids),
+            seen_n=len(seen_papers(s)),
         )
+
+    @app.get("/audit/seen")
+    def seen_page():
+        s = state()
+        seen = seen_papers(s)
+        skipped = [x for x in seen if x.verdict is None]
+        return render_template(
+            "seen.html",
+            skipped=skipped,
+            decided=[x for x in seen if x.verdict is not None],
+            unseen=len(s.doc_ids) - len(seen),
+        )
+
+    def seen_one(s: _State, doc_id: str) -> _Seen:
+        """The seen paper `doc_id`, or a 404: unknown, held back, or not yet shown."""
+        for x in seen_papers(s):
+            if x.paper.doc_id == doc_id:
+                return x
+        abort(404)
+
+    @app.get("/audit/seen/<doc_id>")
+    def seen_paper_page(doc_id: str):
+        s = state()
+        return render_template("seen_paper.html", wording=s.wording, x=seen_one(s, doc_id))
+
+    @app.post("/audit/seen/<doc_id>/flag")
+    def flag_seen(doc_id: str):
+        s = state()
+        seen_one(s, doc_id)
+        add_flag(s, doc_id)
+        return redirect(url_for("seen_paper_page", doc_id=doc_id), 303)
 
     @app.post("/audit/<doc_id>")
     def give_verdict(doc_id: str):
