@@ -248,8 +248,11 @@ def add_reading(
             prompt_version=prompt_version,
             detail=detail or {},
         )
+        # A literal, not a bind parameter: once Postgres plans the statement generically
+        # (psycopg prepares it after 5 runs), it cannot prove a parameter implies the partial
+        # index's predicate, and the 11th insert on a connection raised.
         .on_conflict_do_nothing(
-            index_elements=_READING_KEY, index_where=concept_log.c.kind == "reading"
+            index_elements=_READING_KEY, index_where=sa.text("kind = 'reading'")
         )
         .returning(concept_log.c.entry_id)
     )

@@ -182,3 +182,34 @@ def test_written_at_is_timezone_aware(board_engine, concept) -> None:
     log.add_concept(board_engine, concept, "when a review stops", "owner")
     [entry] = log.entries(board_engine, concept)
     assert entry.written_at.utcoffset() is not None
+
+
+def test_many_readings_on_one_connection_all_store_and_a_repeat_is_skipped(
+    board_engine, concept
+) -> None:
+    # psycopg prepares a statement server-side after 5 runs, and Postgres may plan it
+    # generically after 5 more. A bind parameter in the ON CONFLICT predicate then no longer
+    # proves it implies the partial index, and the 11th insert raised. One connection makes
+    # every run of the statement share that fate.
+    one_connection = sa.create_engine(board_engine.url, poolclass=sa.pool.StaticPool)
+    try:
+        ids = [reading(one_connection, concept, doc_id=f"{i:016d}") for i in range(12)]
+        assert all(isinstance(i, int) for i in ids)
+        assert reading(one_connection, concept, doc_id=f"{3:016d}") is None
+    finally:
+        one_connection.dispose()
+    assert len(log.entries(board_engine, concept, kind="reading")) == 12
+
+
+def test_the_on_conflict_predicate_has_no_bind_parameter(board_engine, concept) -> None:
+    sql = []
+    one_connection = sa.create_engine(board_engine.url, poolclass=sa.pool.StaticPool)
+    sa.event.listen(
+        one_connection, "before_cursor_execute", lambda c, cur, stmt, *a: sql.append(stmt)
+    )
+    try:
+        reading(one_connection, concept)
+    finally:
+        one_connection.dispose()
+    [insert] = [s for s in sql if "ON CONFLICT" in s]
+    assert "WHERE kind = 'reading'" in insert

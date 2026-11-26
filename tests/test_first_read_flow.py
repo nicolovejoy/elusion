@@ -269,3 +269,17 @@ def test_a_served_model_equal_to_the_pinned_one_logs_no_warning(
     with caplog.at_level("WARNING"):
         run(board_engine, abstracts, concept, FakeReader(holds_if_stops))
     assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+
+def test_twelve_papers_are_all_read_in_one_run(board_engine, tmp_path, concept) -> None:
+    # The 11th insert on one connection once failed, after the call had been paid for.
+    write_year(
+        tmp_path,
+        2024,
+        [{"doc_id": f"p{i:02d}", "text": STOPS} for i in range(12)],
+    )
+    reader = FakeReader(holds_if_stops)
+    summary = run(board_engine, tmp_path, concept, reader)
+    assert summary["read"] == 12 and summary["failed"] == 0
+    assert len(readings(board_engine, concept)) == 12
+    assert len(reader.calls) == 12
