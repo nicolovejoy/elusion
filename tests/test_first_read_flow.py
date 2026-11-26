@@ -202,10 +202,70 @@ def test_an_unexpected_error_propagates_after_logging_the_partial_summary(
     rows = readings(board_engine, concept)
     assert set(rows) == {"d1"}  # no row for the paper the outage stopped on
     stopped = [r.getMessage() for r in caplog.records if "d2" in r.getMessage()]
-    assert stopped and "'read': 1" in stopped[0] and "'holds': 1" in stopped[0]
+    assert stopped and "'read': 1" in stopped[0] and "'matched': 2" in stopped[0]
+    # The verdict counts are the owner's to find out after his blind audit, not the log's.
+    assert all("holds" not in r.getMessage() for r in caplog.records)
 
     reader = FakeReader(holds_if_stops)
     summary = run(board_engine, abstracts, concept, reader)
     assert [m for _, m in reader.calls] == [reader_message("When should a review stop?", OTHER)]
     assert summary["already_read"] == 1
     assert summary["read"] == 1
+
+
+def test_the_public_summary_has_the_counts_and_no_verdicts() -> None:
+    from elusion.flows.first_read import public_summary
+
+    full = {
+        "matched": 5,
+        "already_read": 1,
+        "read": 4,
+        "holds": 3,
+        "does_not_hold": 1,
+        "failed": 0,
+        "cost_usd": 0.25,
+    }
+    assert public_summary(full) == {
+        "matched": 5,
+        "already_read": 1,
+        "read": 4,
+        "failed": 0,
+        "cost_usd": 0.25,
+    }
+
+
+def test_no_log_record_of_a_run_names_the_verdict_counts(
+    board_engine, abstracts, concept, caplog
+) -> None:
+    with caplog.at_level("INFO"):
+        run(board_engine, abstracts, concept, FakeReader(holds_if_stops))
+    texts = [r.getMessage() for r in caplog.records if "first read of" in r.getMessage()]
+    assert texts and "'read': 2" in texts[0]
+    assert all("holds" not in r.getMessage() for r in caplog.records)
+
+
+def test_a_served_model_that_differs_from_the_pinned_one_is_warned_about(
+    board_engine, abstracts, concept, caplog
+) -> None:
+    from dataclasses import replace
+
+    class Drifting(FakeReader):
+        def read(self, system, message):
+            return replace(super().read(system, message), model="claude-haiku-5-5-served")
+
+    with caplog.at_level("WARNING"):
+        run(board_engine, abstracts, concept, Drifting(holds_if_stops))
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings
+    assert all(MODEL in w and "claude-haiku-5-5-served" in w for w in warnings)
+    row = readings(board_engine, concept)["d1"]
+    assert row.model == MODEL  # the row keeps the pinned id
+    assert row.detail["served_model"] == "claude-haiku-5-5-served"
+
+
+def test_a_served_model_equal_to_the_pinned_one_logs_no_warning(
+    board_engine, abstracts, concept, caplog
+) -> None:
+    with caplog.at_level("WARNING"):
+        run(board_engine, abstracts, concept, FakeReader(holds_if_stops))
+    assert [r for r in caplog.records if r.levelname == "WARNING"] == []

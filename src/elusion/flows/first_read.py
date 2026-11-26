@@ -41,6 +41,20 @@ FRAME_TOKENS = 600
 ANSWER_TOKENS = 300
 
 
+_PUBLIC_KEYS = ("matched", "already_read", "read", "failed", "cost_usd")
+
+
+def public_summary(summary: dict) -> dict:
+    """The part of a run's summary that may be printed or logged: no verdict counts.
+
+    The owner audits the readings blind, before he knows what the model said. How many
+    papers hold the concept would anchor his sense of its base rate, so the counts of
+    `holds` and `does_not_hold` stay in the return value (tests use them) and out of
+    every line a person reads.
+    """
+    return {key: summary[key] for key in _PUBLIC_KEYS}
+
+
 @flow(name="first_read")
 def first_read(
     concept: str,
@@ -95,14 +109,14 @@ def first_read(
                 "first read of %s stopped on %s; summary so far: %s",
                 concept,
                 paper.doc_id,
-                summary,
+                public_summary(summary),
             )
             raise
         summary["read"] += 1
         summary[verdict] += 1
         summary["cost_usd"] += cost
 
-    get_run_logger().info("first read of %s: %s", concept, summary)
+    get_run_logger().info("first read of %s: %s", concept, public_summary(summary))
     return summary
 
 
@@ -141,6 +155,13 @@ def _read_one(engine, reader, prompt, entry, paper) -> tuple[str, float]:
         }
         return _store(engine, stored, "failed", None, "", detail), cost
     reading = first.reading
+    if first.model != reader.model:
+        get_run_logger().warning(
+            "paper %s: the pinned model is %s but the API served %s; the row stores both",
+            paper.doc_id,
+            reader.model,
+            first.model,
+        )
     detail = {
         "answer": reading.answer,
         "served_model": first.model,

@@ -9,13 +9,14 @@ sees.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from elusion.evaluate.gold import read_rows
+from elusion.evaluate.gold import read_rows, refusals_path
 
 _COLUMNS = ["doc_id", "work_id", "title", "publication_date", "text"]
 
@@ -50,5 +51,12 @@ def word_search(papers: Iterable[Paper], terms: Sequence[str]) -> list[Paper]:
 
 
 def held_back_ids(gold_csv: Path) -> set[str]:
-    """Every `doc_id` in the gold CSV; the empty set when the file does not exist."""
-    return {row.doc_id for row in read_rows(gold_csv)}
+    """Every `doc_id` in the gold CSV, and in the judge-refusals file beside it (a paper the
+    judge refused to answer about was still drawn for evaluation, whatever model refused it
+    and under whichever prompt version). The empty set when neither file exists."""
+    ids = {row.doc_id for row in read_rows(gold_csv)}
+    refusals = refusals_path(gold_csv)
+    if refusals.is_file():
+        with refusals.open(encoding="utf-8") as f:
+            ids |= {json.loads(line)["doc_id"] for line in f if line.strip()}
+    return ids

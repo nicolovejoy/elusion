@@ -76,7 +76,7 @@ uv run elusion agreement --criterion criteria/auditable-decisions.md   # no mode
 uv run elusion judge --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400 --seeds          # then the rest
 uv run elusion grade --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400
 uv run elusion evaluate --criterion criteria/auditable-decisions.md --prompt-version v1 --year 2025 --year 2026 --review-model gpt-6-luna --flagged-n 400 --discard-n 400
-uv run elusion concept --name stopping --wording "..." --term "stopping rule" --term "stopping criteri" --term "stopping method" --criterion auditable-decisions   # concept board: a new wording is a new version; nothing in concept_log is ever changed
+uv run elusion concept --name stopping --wording "..." --term "stopping rule" --term "stopping criteri" --term "stopping method" --criterion criteria/auditable-decisions.md   # concept board: a new wording is a new version; nothing in concept_log is ever changed
 op run --env-file=.env.tpl -- uv run elusion first-read --concept stopping   # one claude-haiku-5-5 read per matching abstract; papers already read are skipped
 uv run elusion board --concept stopping   # the blind audit, then the concept card, at http://localhost:8010; --release-gold shows the papers in the gold draw
 uv run elusion review --criterion criteria/cloud-concentration.md --sample 20000

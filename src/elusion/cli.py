@@ -73,8 +73,12 @@ def concept(
     wording: Annotated[str, typer.Option(help="The concept stated as a question.")],
     term: Annotated[list[str], typer.Option(help="A search term; repeat it for several.")],
     criterion: Annotated[
-        str | None, typer.Option(help="The criterion the concept belongs to, e.g. a file stem.")
-    ] = None,
+        str,
+        typer.Option(
+            help="The criterion the concept belongs to: criteria/auditable-decisions.md or "
+            "auditable-decisions. The board holds back that criterion's gold set."
+        ),
+    ],
     actor: Annotated[
         str, typer.Option(help="Who wrote this wording: owner, claude ...")
     ] = "claude",
@@ -83,11 +87,23 @@ def concept(
     from elusion.board import log
     from elusion.collect.db import make_engine
     from elusion.config import settings
+    from elusion.corpora import UnknownCriterion, corpus_for
+
+    # The log is append-only, so a criterion that does not resolve is refused before anything
+    # is written: the board finds the gold set to hold back through this stem.
+    stem = Path(criterion).stem if criterion.endswith(".md") else criterion
+    try:
+        if not (Path("criteria") / f"{stem}.md").is_file():
+            raise UnknownCriterion(f"no criterion file criteria/{stem}.md")
+        corpus_for(stem)
+    except UnknownCriterion as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
 
     engine = make_engine(settings.database_url)
     log.ensure_schema(engine)
     version = log.add_concept(
-        engine, name, wording, actor, {"search_terms": term, "criterion": criterion}
+        engine, name, wording, actor, {"search_terms": term, "criterion": stem}
     )
     typer.echo(f"{name} version {version}")
 
@@ -100,6 +116,7 @@ def first_read(
     """Have a model read each abstract matching the concept's search terms, once."""
     from elusion.board.log import UnknownConcept
     from elusion.flows.first_read import first_read as first_read_flow
+    from elusion.flows.first_read import public_summary
     from elusion.flows.review import BudgetExceeded
     from elusion.review.providers import AnthropicProvider
 
@@ -108,7 +125,7 @@ def first_read(
     except (BudgetExceeded, UnknownConcept) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
-    typer.echo(summary)
+    typer.echo(public_summary(summary))
 
 
 @app.command()
@@ -146,8 +163,25 @@ def board(
     }
     criterion = entry.detail.get("criterion")
     held_back = set()
-    if criterion and not release_gold:
-        held_back = held_back_ids(gold_path(criterion, settings.data_dir))
+    if not release_gold:
+        # Fail closed: with no gold file to read, nothing would be held back and the owner
+        # would be served the papers he labelled for evaluation.
+        if not criterion:
+            typer.echo(
+                f"error: concept {concept!r} names no criterion, so the gold set cannot be held "
+                "back; pass --release-gold to serve every paper",
+                err=True,
+            )
+            raise typer.Exit(1)
+        gold_csv = gold_path(criterion, settings.data_dir)
+        if not gold_csv.is_file():
+            typer.echo(
+                f"error: no gold file at {gold_csv}, so the gold set cannot be held back; "
+                "pass --release-gold to serve every paper",
+                err=True,
+            )
+            raise typer.Exit(1)
+        held_back = held_back_ids(gold_csv)
     n = len(held_back & papers.keys())
     typer.echo(f"http://localhost:{port}")
     typer.echo(f"{n} {'paper' if n == 1 else 'papers'} held back")

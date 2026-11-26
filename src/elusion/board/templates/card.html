@@ -15,9 +15,9 @@ on {{ s.entry.written_at | when }}.</p>
 <h2>Counts</h2>
 <p class="muted">Counted from the log.</p>
 <ul class="rows">
-  <li>Papers matching the words: {{ matching }}</li>
-  <li>Held back: {{ s.held_back_n }}</li>
-  <li>Read: {{ s.doc_ids | length }}</li>
+  <li>Matched and read by the model: {{ matching }}</li>
+  <li>Held back until the gold labels are done: {{ s.held_back_n }}</li>
+  <li>Audited here: {{ s.doc_ids | length }}</li>
   <li>Reader says holds: {{ by_reader["holds"] }}</li>
   <li>Reader says does not hold: {{ by_reader["does_not_hold"] }}</li>
   <li>Failed readings: {{ figures.failed_readings }}</li>
@@ -42,8 +42,8 @@ on {{ s.entry.written_at | when }}.</p>
     <blockquote><span class="tag">paper</span>{{ r.quote }}</blockquote>
     {% else %}
     <div class="muted">{% if r.verdict == "does_not_hold" %}The reader said it does not hold,
-      and you decided it holds, so there is no answer.{% else %}The reading failed, and you
-      decided it holds, so there is no answer.{% endif %}</div>
+      and you decided it holds, so there is no answer.
+      {%- else %}The reading failed. Your verdict: holds.{% endif %}</div>
     {% endif %}
   </li>
   {% endfor %}

@@ -174,6 +174,10 @@ def create_app(
         if verdict not in ("holds", "does_not_hold") or not reason:
             abort(400)
         d = found[doc_id]
+        if d.decision is not None:
+            # Already settled: a double click or a resubmit. The log is append-only, so a
+            # second row would stay for good.
+            return redirect(url_for("disagreements_page"), 303)
         log.add_decision(
             engine,
             concept,

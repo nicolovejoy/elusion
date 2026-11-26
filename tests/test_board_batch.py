@@ -8,7 +8,7 @@ import pytest
 
 from elusion.board.batch import Paper, held_back_ids, load_papers, word_search
 from elusion.collect.abstracts import SCHEMA
-from elusion.evaluate.gold import GoldRow, append_rows
+from elusion.evaluate.gold import GoldRow, append_refusals, append_rows, refusals_path
 
 
 def write_year(directory: Path, year: int, papers: list[dict]) -> None:
@@ -80,3 +80,16 @@ def test_held_back_ids_are_the_doc_ids_in_the_gold_csv(tmp_path) -> None:
 
 def test_held_back_ids_without_a_file_is_empty(tmp_path) -> None:
     assert held_back_ids(tmp_path / "gold" / "missing.csv") == set()
+
+
+def test_held_back_ids_include_the_ids_the_judge_refused(tmp_path) -> None:
+    csv = tmp_path / "gold" / "c.csv"
+    append_rows(csv, [GoldRow("a", 1, "flagged", "human", "", "r", "2026-11-01T00:00:00Z")])
+    append_refusals(refusals_path(csv), ["r1", "r2"], "m", "v1")
+    assert held_back_ids(csv) == {"a", "r1", "r2"}
+
+
+def test_held_back_ids_read_the_refusals_even_when_nothing_is_labelled_yet(tmp_path) -> None:
+    csv = tmp_path / "gold" / "c.csv"
+    append_refusals(refusals_path(csv), ["r1"], "m", "v1")
+    assert held_back_ids(csv) == {"r1"}

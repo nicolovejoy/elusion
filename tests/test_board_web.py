@@ -302,6 +302,18 @@ def test_a_decision_is_stored_with_its_evidence_and_removes_the_paper_from_the_l
     assert done.status_code == 302 and done.headers["Location"].endswith("/audit/summary")
 
 
+def test_the_same_decision_posted_twice_stores_one_row_and_redirects(board_engine, concept) -> None:
+    app, papers = make(board_engine, concept, n=3)
+    client = app.test_client()
+    first = finish_with_one_disagreement(client, papers, concept, 3)
+    data = {"verdict": "holds", "reason": "it does set one"}
+    one = client.post(f"/audit/disagreements/{first}", data=data)
+    two = client.post(f"/audit/disagreements/{first}", data=data)
+    assert one.status_code == 303 and two.status_code == 303
+    assert two.headers["Location"].endswith("/audit/disagreements")
+    assert len(log.entries(board_engine, concept, kind="decision")) == 1
+
+
 def test_a_failed_reading_is_not_a_disagreement(board_engine, concept) -> None:
     app, papers = make(board_engine, concept, n=2, verdicts=["failed", "failed"])
     client = app.test_client()
@@ -502,9 +514,9 @@ def test_the_card_shows_the_wording_the_figures_and_each_answer_with_its_source(
     counts = parts["Counts"]
     assert "Counted from the log." in counts
     for line in (
-        "Papers matching the words: 4",
-        "Held back: 0",
-        "Read: 4",
+        "Matched and read by the model: 4",
+        "Held back until the gold labels are done: 0",
+        "Audited here: 4",
         "Reader says holds: 2",
         "Reader says does not hold: 1",
         "Failed readings: 1",
@@ -575,6 +587,18 @@ def test_a_decision_that_overturned_the_blind_verdict_lists_the_paper_by_its_fin
     assert ANSWER in answers.split("Title of paper 2")[0]
 
 
+def test_a_failed_reading_the_owner_says_holds_reads_as_failed_with_his_verdict(
+    board_engine, concept
+) -> None:
+    app, papers = make(board_engine, concept, n=2, verdicts=["holds", "failed"])
+    client = app.test_client()
+    blind_step(client, concept, 2)  # the owner says holds on both; the reading of paper 1 failed
+    answers = sections(page(client, "/concept"))["Answers"]
+    row = answers.split("Title of paper 1")[1].split("</li>")[0]
+    assert "The reading failed. Your verdict: holds." in row
+    assert "no answer" not in row
+
+
 def test_nothing_of_a_held_back_paper_is_on_the_card_or_reachable(board_engine, concept) -> None:
     secret = "okapi passage only the held back paper has"
     app, papers = make(
@@ -590,8 +614,9 @@ def test_nothing_of_a_held_back_paper_is_on_the_card_or_reachable(board_engine, 
     html = page(client, "/concept")
     for hidden in ("Title of paper 2", doc(2), "secret answer", secret):
         assert hidden not in html
-    assert "Papers matching the words: 3" in html and "Held back: 1" in html
-    assert "Read: 2" in html
+    assert "Matched and read by the model: 3" in html
+    assert "Held back until the gold labels are done: 1" in html
+    assert "Audited here: 2" in html
     assert client.get(f"/paper/{doc(2)}").status_code == 404
 
 
