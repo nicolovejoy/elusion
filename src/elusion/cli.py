@@ -129,6 +129,52 @@ def first_read(
 
 
 @app.command()
+def index(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+    prompt_version: Annotated[
+        str, typer.Option(help="Review prompt version whose scores define the screened-in set.")
+    ],
+    review_model: Annotated[str, typer.Option(help="Pinned review model of the pair.")],
+    threshold: Annotated[int, typer.Option(help="Score at or above this is screened in.")] = 3,
+    max_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+) -> None:
+    """Index the screened-in abstracts for `ask`: full text plus one embedding each, once."""
+    from elusion.ask.embed import OpenAIEmbedder
+    from elusion.ask.index import IndexPairMismatch
+    from elusion.corpora import UnknownCriterion
+    from elusion.flows.index import build_index
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import ProviderConfigError
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    try:
+        summary = build_index(
+            criterion.stem,
+            OpenAIEmbedder(),
+            review_model=review_model,
+            prompt_version=prompt_version,
+            threshold=threshold,
+            max_usd=max_usd,
+        )
+    except (
+        BudgetExceeded,
+        IndexPairMismatch,
+        ProviderConfigError,
+        UnknownCriterion,
+        ValueError,
+    ) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(summary)
+
+
+@app.command()
 def board(
     concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
     port: Annotated[int, typer.Option(help="The local port to serve on.")] = 8010,

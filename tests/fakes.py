@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import math
+import zlib
+from collections.abc import Sequence
+
+from elusion.ask.embed import Embedded
+from elusion.ask.models import EMBEDDING_DIM
+from elusion.review.pricing import register_free
 from elusion.review.providers import (
     FirstRead,
     Grade,
@@ -127,4 +134,46 @@ class FakeReader:
             raise result
         return FirstRead(
             reading=result, model=self.model, input_tokens=100, output_tokens=20, cost_usd=0.0
+        )
+
+
+class FakeEmbedder:
+    """Test-only embedder: a text becomes a vector of word counts, scaled to length 1.
+
+    The word is hashed with `zlib.crc32` (Python's `hash` changes between runs), so the same
+    text always gives the same vector, and two texts that share words get nearby vectors.
+    `calls` records every list of texts it was sent; `fail_on_call=2` raises `RuntimeError`
+    on its second call, to test a crash between two batches. Its model is free.
+    """
+
+    name = "fake"
+
+    def __init__(
+        self,
+        model: str = "fake-embedder",
+        dim: int = EMBEDDING_DIM,
+        fail_on_call: int | None = None,
+    ) -> None:
+        register_free(model)
+        self.model = model
+        self.dim = dim
+        self.fail_on_call = fail_on_call
+        self.calls: list[list[str]] = []
+
+    def vector(self, text: str) -> list[float]:
+        counts = [0.0] * self.dim
+        for word in text.split():
+            counts[zlib.crc32(word.lower().encode()) % self.dim] += 1.0
+        norm = math.sqrt(sum(c * c for c in counts)) or 1.0
+        return [c / norm for c in counts]
+
+    def embed(self, texts: Sequence[str]) -> Embedded:
+        self.calls.append(list(texts))
+        if self.fail_on_call is not None and len(self.calls) == self.fail_on_call:
+            raise RuntimeError(f"fake embedder failed on call {len(self.calls)}")
+        return Embedded(
+            vectors=[self.vector(t) for t in texts],
+            model=self.model,
+            input_tokens=sum(len(t.split()) for t in texts),
+            cost_usd=0.0,
         )

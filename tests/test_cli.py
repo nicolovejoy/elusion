@@ -689,6 +689,81 @@ def test_first_read_budget_and_unknown_concept_exit_1_without_traceback(monkeypa
         assert "Traceback" not in result.output
 
 
+def test_index_command_passes_the_pair_and_prints_the_summary(monkeypatch, tmp_path) -> None:
+    import elusion.ask.embed as embed
+    import elusion.flows.index as mod
+
+    seen = {}
+
+    class StubEmbedder:
+        model = "stub-embedder"
+
+    def fake_flow(criterion, embedder, **kw):
+        seen.update(criterion=criterion, embedder=embedder, **kw)
+        return {"screened_in": 5, "embedded": 4, "cost_usd": 0.01}
+
+    monkeypatch.setattr(embed, "OpenAIEmbedder", StubEmbedder)
+    monkeypatch.setattr(mod, "build_index", fake_flow)
+    args = ["index", "--criterion", _crit(tmp_path), "--prompt-version", "v1"]
+    result = CliRunner().invoke(app, [*args, "--review-model", "gpt-6-luna"])
+    assert result.exit_code == 0, result.output
+    assert seen["criterion"] == "c"
+    assert isinstance(seen["embedder"], StubEmbedder)
+    assert seen["review_model"] == "gpt-6-luna"
+    assert seen["prompt_version"] == "v1"
+    assert seen["threshold"] == 3
+    assert seen["max_usd"] is None
+    assert "'screened_in': 5" in result.output and "'embedded': 4" in result.output
+
+    result = CliRunner().invoke(
+        app, [*args, "--review-model", "other", "--threshold", "4", "--max-usd", "2.5"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (seen["review_model"], seen["threshold"], seen["max_usd"]) == ("other", 4, 2.5)
+
+    missing = CliRunner().invoke(app, ["index", "--criterion", "nope.md", "--prompt-version", "v1"])
+    assert missing.exit_code != 0
+
+
+def test_index_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) -> None:
+    import elusion.ask.embed as embed
+    import elusion.flows.index as mod
+    from elusion.ask.index import IndexPairMismatch
+    from elusion.corpora import UnknownCriterion
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import ProviderConfigError
+
+    monkeypatch.setattr(embed, "OpenAIEmbedder", lambda: object())
+    args = ["index", "--criterion", _crit(tmp_path), "--prompt-version", "v1"]
+    args += ["--review-model", "gpt-6-luna"]
+    for exc, text in [
+        (BudgetExceeded("projected cost $2 is above the limit of $1"), "above the limit"),
+        (IndexPairMismatch("index holds another pair"), "another pair"),
+        (UnknownCriterion("no corpus"), "no corpus"),
+        (ValueError("ask searches abstracts only"), "abstracts only"),
+    ]:
+
+        def fake_flow(criterion, embedder, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(mod, "build_index", fake_flow)
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 1, result.output
+        assert text in result.output
+        assert "Traceback" not in result.output
+
+    def no_key():
+        raise ProviderConfigError(
+            "OPENAI_API_KEY is not set; run with op run --env-file=.env.tpl --"
+        )
+
+    monkeypatch.setattr(embed, "OpenAIEmbedder", no_key)
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1
+    assert "OPENAI_API_KEY is not set" in result.output
+    assert "Traceback" not in result.output
+
+
 def _stub_board(
     monkeypatch, tmp_path, *, held=frozenset(), criterion="auditable-decisions", gold_exists=True
 ):
