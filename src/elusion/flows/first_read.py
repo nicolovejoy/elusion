@@ -86,58 +86,18 @@ def first_read(
         "cost_usd": 0.0,
     }
     for paper in unread:
-        stored = {
-            "concept": concept,
-            "version": entry.concept_version,
-            "doc_id": paper.doc_id,
-            "model": reader.model,
-            "prompt_version": prompt.version,
-            "text": paper.text,
-        }
         try:
-            first = reader.read(prompt.text, reader_message(entry.body, paper.text))
-        except ReviewError as exc:
-            cost = cost_usd(
-                reader.model,
-                exc.input_tokens,
-                exc.output_tokens,
-                exc.cache_creation_input_tokens,
-                exc.cache_read_input_tokens,
+            verdict, cost = _read_one(engine, reader, prompt, entry, paper)
+        except Exception:
+            # Any other error (a dropped connection, a bad request) is not a reading: no row is
+            # written, so the next run tries this paper again. The spend so far is reported.
+            get_run_logger().error(
+                "first read of %s stopped on %s; summary so far: %s",
+                concept,
+                paper.doc_id,
+                summary,
             )
-            detail = {
-                "stop_reason": exc.stop_reason,
-                "input_tokens": exc.input_tokens,
-                "output_tokens": exc.output_tokens,
-                "cost_usd": cost,
-            }
-            verdict = _store(engine, stored, "failed", None, "", detail)
-        else:
-            cost = first.cost_usd
-            reading = first.reading
-            detail = {
-                "answer": reading.answer,
-                "served_model": first.model,
-                "input_tokens": first.input_tokens,
-                "output_tokens": first.output_tokens,
-                "cost_usd": cost,
-            }
-            verdict = "holds" if reading.holds else "does_not_hold"
-            try:
-                log.add_reading(
-                    engine,
-                    verdict=verdict,
-                    quote=reading.quote,
-                    rationale=reading.rationale,
-                    detail=detail,
-                    **stored,
-                )
-            except log.QuoteNotVerbatim:
-                detail.update(
-                    stop_reason="quote_not_verbatim",
-                    model_holds=reading.holds,
-                    model_quote=reading.quote,
-                )
-                verdict = _store(engine, stored, "failed", None, reading.rationale, detail)
+            raise
         summary["read"] += 1
         summary[verdict] += 1
         summary["cost_usd"] += cost
@@ -151,3 +111,52 @@ def _store(engine, stored, verdict, quote, rationale, detail) -> str:
         engine, verdict=verdict, quote=quote, rationale=rationale, detail=detail, **stored
     )
     return verdict
+
+
+def _read_one(engine, reader, prompt, entry, paper) -> tuple[str, float]:
+    """Send one paper to the reader and store the reading. Returns (verdict, cost in USD)."""
+    stored = {
+        "concept": entry.concept,
+        "version": entry.concept_version,
+        "doc_id": paper.doc_id,
+        "model": reader.model,
+        "prompt_version": prompt.version,
+        "text": paper.text,
+    }
+    try:
+        first = reader.read(prompt.text, reader_message(entry.body, paper.text))
+    except ReviewError as exc:
+        cost = cost_usd(
+            reader.model,
+            exc.input_tokens,
+            exc.output_tokens,
+            exc.cache_creation_input_tokens,
+            exc.cache_read_input_tokens,
+        )
+        detail = {
+            "stop_reason": exc.stop_reason,
+            "input_tokens": exc.input_tokens,
+            "output_tokens": exc.output_tokens,
+            "cost_usd": cost,
+        }
+        return _store(engine, stored, "failed", None, "", detail), cost
+    reading = first.reading
+    detail = {
+        "answer": reading.answer,
+        "served_model": first.model,
+        "input_tokens": first.input_tokens,
+        "output_tokens": first.output_tokens,
+        "cost_usd": first.cost_usd,
+    }
+    verdict = "holds" if reading.holds else "does_not_hold"
+    try:
+        return _store(engine, stored, verdict, reading.quote, reading.rationale, detail), (
+            first.cost_usd
+        )
+    except log.QuoteNotVerbatim:
+        detail.update(
+            stop_reason="quote_not_verbatim",
+            model_holds=reading.holds,
+            model_quote=reading.quote,
+        )
+        return _store(engine, stored, "failed", None, reading.rationale, detail), first.cost_usd

@@ -98,10 +98,17 @@ def first_read(
     model: Annotated[str, typer.Option(help="Pinned reader model id.")] = "claude-haiku-5-5",
 ) -> None:
     """Have a model read each abstract matching the concept's search terms, once."""
+    from elusion.board.log import UnknownConcept
     from elusion.flows.first_read import first_read as first_read_flow
+    from elusion.flows.review import BudgetExceeded
     from elusion.review.providers import AnthropicProvider
 
-    typer.echo(first_read_flow(concept, AnthropicProvider(model)))
+    try:
+        summary = first_read_flow(concept, AnthropicProvider(model))
+    except (BudgetExceeded, UnknownConcept) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(summary)
 
 
 @app.command()

@@ -177,3 +177,35 @@ def test_a_concept_without_search_terms_is_refused(board_engine, abstracts) -> N
     log.add_concept(board_engine, slug, "no terms", "owner")
     with pytest.raises(ValueError, match="search_terms"):
         run(board_engine, abstracts, slug, FakeReader(holds_if_stops))
+
+
+def test_a_paper_in_two_year_files_is_called_once(board_engine, abstracts, concept) -> None:
+    write_year(abstracts, 2023, [{"doc_id": "d1", "text": STOPS}])
+    reader = FakeReader(holds_if_stops)
+    summary = run(board_engine, abstracts, concept, reader)
+    assert len(reader.calls) == 2
+    assert summary["matched"] == 2
+    assert summary["read"] == 2
+
+
+def test_an_unexpected_error_propagates_after_logging_the_partial_summary(
+    board_engine, abstracts, concept, caplog
+) -> None:
+    def outage(message: str):
+        if OTHER in message:
+            return RuntimeError("connection reset")
+        return holds_if_stops(message)
+
+    with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="connection reset"):
+        run(board_engine, abstracts, concept, FakeReader(outage))
+
+    rows = readings(board_engine, concept)
+    assert set(rows) == {"d1"}  # no row for the paper the outage stopped on
+    stopped = [r.getMessage() for r in caplog.records if "d2" in r.getMessage()]
+    assert stopped and "'read': 1" in stopped[0] and "'holds': 1" in stopped[0]
+
+    reader = FakeReader(holds_if_stops)
+    summary = run(board_engine, abstracts, concept, reader)
+    assert [m for _, m in reader.calls] == [reader_message("When should a review stop?", OTHER)]
+    assert summary["already_read"] == 1
+    assert summary["read"] == 1

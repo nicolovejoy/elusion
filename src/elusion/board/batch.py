@@ -30,12 +30,14 @@ class Paper:
 
 
 def load_papers(abstracts_dir: Path) -> list[Paper]:
-    """Every paper in every `year=*.parquet` file under `abstracts_dir`."""
-    papers = []
+    """Every paper in every `year=*.parquet` file under `abstracts_dir`, once per `doc_id`:
+    when two files hold the same id, the first in file order is kept."""
+    papers: dict[str, Paper] = {}
     for path in sorted(abstracts_dir.glob("year=*.parquet")):
         table = pq.read_table(path, columns=_COLUMNS)
-        papers.extend(Paper(**row) for row in table.to_pylist())
-    return papers
+        for row in table.to_pylist():
+            papers.setdefault(row["doc_id"], Paper(**row))
+    return list(papers.values())
 
 
 def word_search(papers: Iterable[Paper], terms: Sequence[str]) -> list[Paper]:

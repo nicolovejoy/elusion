@@ -599,3 +599,25 @@ def test_first_read_command_builds_the_reader_and_prints_the_summary(monkeypatch
 
     CliRunner().invoke(app, ["first-read", "--concept", "stopping", "--model", "other-model"])
     assert seen["reader"].model == "other-model"
+
+
+def test_first_read_budget_and_unknown_concept_exit_1_without_traceback(monkeypatch) -> None:
+    import elusion.flows.first_read as mod
+    import elusion.review.providers as providers
+    from elusion.board.log import UnknownConcept
+    from elusion.flows.review import BudgetExceeded
+
+    monkeypatch.setattr(providers, "AnthropicProvider", lambda model: object())
+    for exc, text in [
+        (BudgetExceeded("projected cost $2 is above the limit of $1"), "above the limit"),
+        (UnknownConcept("nope"), "nope"),
+    ]:
+
+        def fake_flow(concept, reader, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(mod, "first_read", fake_flow)
+        result = CliRunner().invoke(app, ["first-read", "--concept", "nope"])
+        assert result.exit_code == 1
+        assert text in result.output
+        assert "Traceback" not in result.output

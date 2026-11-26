@@ -44,6 +44,12 @@ def test_load_papers_reads_every_year_file(tmp_path) -> None:
     ]
 
 
+def test_a_doc_id_in_two_year_files_loads_once_the_first_in_file_order(tmp_path) -> None:
+    write_year(tmp_path, 2024, [{"doc_id": "a", "text": "Later file."}])
+    write_year(tmp_path, 2023, [{"doc_id": "a", "text": "Earlier file."}])
+    assert load_papers(tmp_path) == [Paper("a", "Wa", "title a", "2023-03-01", "Earlier file.")]
+
+
 def test_word_search_is_case_insensitive_and_sorted_by_doc_id() -> None:
     papers = [
         paper("c", "A Stopping Rule for review."),
