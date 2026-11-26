@@ -4,6 +4,14 @@ SQLAlchemy Core (not the ORM) describes the table and builds the INSERT; psycopg
 executes it. `ON CONFLICT DO NOTHING` on the primary key is what makes a re-run of
 collect safe: rows already present are skipped, and the function reports how many
 were new.
+
+`corpus` says which corpus a row belongs to (`elusion.corpora`): `edgar` for a 10-K
+paragraph, `openalex` for a paper abstract. It was added after 1.6 million 10-K rows
+existed. `create_all` never alters a table, so `ensure_schema` adds the column itself,
+with `edgar` as its default: every older row is a 10-K paragraph. Postgres stores a
+constant default in the catalogue instead of rewriting the rows, so the change is
+instant at any table size. `cik`, the SEC's id for a filer, stopped being required at
+the same time, because an abstract has no filer.
 """
 
 from __future__ import annotations
@@ -22,12 +30,13 @@ documents = sa.Table(
     "documents",
     metadata,
     sa.Column("doc_id", sa.String(16), primary_key=True),
-    sa.Column("cik", sa.String(10), nullable=False, index=True),
+    sa.Column("cik", sa.String(10), index=True),  # null outside the edgar corpus
     sa.Column("company", sa.Text),
     sa.Column("year", sa.SmallInteger, nullable=False, index=True),
     sa.Column("paragraph_index", sa.Integer, nullable=False),
     sa.Column("word_count", sa.Integer, nullable=False),
     sa.Column("ingested_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+    sa.Column("corpus", sa.Text, nullable=False, server_default="edgar"),
 )
 
 
@@ -39,10 +48,21 @@ def make_engine(database_url: str) -> Engine:
 
 def ensure_schema(engine: Engine) -> None:
     metadata.create_all(engine)
+    with engine.begin() as conn:  # for a documents table created before the second corpus
+        conn.execute(
+            sa.text(
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS corpus text NOT NULL "
+                "DEFAULT 'edgar'"
+            )
+        )
+        conn.execute(sa.text("ALTER TABLE documents ALTER COLUMN cik DROP NOT NULL"))
 
 
-def upsert_documents(engine: Engine, docs: Iterable[Document], batch_size: int = 5000) -> int:
-    """Insert rows for `docs`, skipping doc_ids already present. Returns rows inserted."""
+def upsert_documents(
+    engine: Engine, docs: Iterable[Document], batch_size: int = 5000, corpus: str = "edgar"
+) -> int:
+    """Insert rows for `docs` under `corpus`, skipping doc_ids already present. Returns
+    rows inserted. An abstract has no filer: its `cik` and `company` are None."""
     inserted = 0
     batch: list[dict] = []
 
@@ -71,6 +91,7 @@ def upsert_documents(engine: Engine, docs: Iterable[Document], batch_size: int =
                 "year": d["year"],
                 "paragraph_index": d["paragraph_index"],
                 "word_count": len(d["text"].split()),
+                "corpus": corpus,
             }
         )
         if len(batch) >= batch_size:
@@ -79,10 +100,26 @@ def upsert_documents(engine: Engine, docs: Iterable[Document], batch_size: int =
     return inserted
 
 
-def count_documents(engine: Engine, year: int | None = None) -> int:
+def known_doc_ids(engine: Engine, doc_ids: Iterable[str], batch_size: int = 5000) -> set[str]:
+    """Which of `doc_ids` already have a `documents` row."""
+    ids = list(doc_ids)
+    known: set[str] = set()
+    with engine.connect() as conn:
+        for start in range(0, len(ids), batch_size):
+            stmt = sa.select(documents.c.doc_id).where(
+                documents.c.doc_id.in_(ids[start : start + batch_size])
+            )
+            known.update(conn.execute(stmt).scalars())
+    return known
+
+
+def count_documents(engine: Engine, year: int | None = None, corpus: str | None = None) -> int:
+    """Rows of `documents`, narrowed to a year, to a corpus (its name), or to both."""
     stmt = sa.select(sa.func.count()).select_from(documents)
     if year is not None:
         stmt = stmt.where(documents.c.year == year)
+    if corpus is not None:
+        stmt = stmt.where(documents.c.corpus == corpus)
     with engine.connect() as conn:
         return conn.execute(stmt).scalar_one()
 

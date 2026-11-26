@@ -13,6 +13,7 @@ also why this module is named prompt.py and not prompts.py.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,3 +32,24 @@ def load_prompt(criterion: str, version: str = "v1") -> Prompt:
     if not path.is_file():
         raise FileNotFoundError(f"no prompt file at {path}")
     return Prompt(text=path.read_text(encoding="utf-8"), version=f"{criterion}/{version}")
+
+
+# The judge prompt a criterion uses when it is not its newest. `auditable-decisions` has a
+# judge-v3 that did no better than judge-v2 on the owner's 30 labels; judge-v2 was chosen
+# (docs/DECISIONS.md, 2026-11-21) and judge-v3 stays on disk because it wrote labels.
+CHOSEN_JUDGE = {"auditable-decisions": "judge-v2"}
+
+
+def judge_version(criterion: str) -> str:
+    """The judge prompt of a criterion: the one in CHOSEN_JUDGE, else the newest on disk
+    ("judge-vN" for the highest N).
+
+    A judge prompt is never edited once it has labeled anything; a change of rule is a
+    new file, and the judge, the agreement count and the report all work from one
+    version. Labels written under another version stay in the gold CSV and are not read.
+    "judge-v1" when the criterion has no judge prompt file.
+    """
+    if criterion in CHOSEN_JUDGE:
+        return CHOSEN_JUDGE[criterion]
+    found = (re.fullmatch(r"judge-v(\d+)", p.stem) for p in (PROMPTS_DIR / criterion).glob("*.md"))
+    return f"judge-v{max((int(m.group(1)) for m in found if m), default=1)}"

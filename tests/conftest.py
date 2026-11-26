@@ -19,3 +19,13 @@ def _reachable(host: str, port: int) -> bool:
 
 def requires_service(host: str, port: int, name: str):
     return pytest.mark.skipif(not _reachable(host, port), reason=f"{name} not reachable")
+
+
+@pytest.fixture(autouse=True)
+def made_up_criteria(monkeypatch):
+    """The flow tests review made-up criteria ("c", "s", "sys"); file them under the 10-K
+    corpus, as a real criterion is filed in `elusion.corpora`. `monkeypatch` undoes it."""
+    from elusion import corpora
+
+    for name in ("c", "s", "sys"):
+        monkeypatch.setitem(corpora.CRITERION_CORPUS, name, corpora.EDGAR)

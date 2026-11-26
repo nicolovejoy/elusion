@@ -61,7 +61,8 @@ def env(monkeypatch, tmp_path):
         seen["scores_cost_usd"] = (engine, model, prompt_version, years)
         return 0.60  # not the jobs' 0.75: the report's review cost is the scores' own
 
-    def fake_count_documents(engine, year):
+    def fake_count_documents(engine, year, corpus):
+        seen.setdefault("count_documents", []).append((year, corpus))
         return {2018: 600, 2019: 400, 2020: 5000}[year]
 
     def fake_jobs_summary(engine, model, prompt_version, years):
@@ -460,3 +461,255 @@ def test_report_path_has_no_character_windows_rejects(tmp_path) -> None:
     assert got.name == "cloud-concentration-qwen2.5-14b-v2-2018-2019.md"
     bad = report_path(tmp_path, "c", 'a<b>c:d"e/f\\g|h?i*j', "x/y", [2020])
     assert bad.name == "c-a-b-c-d-e-f-g-h-i-j-x-y-2020.md"
+
+
+def test_filed_counts_only_documents_of_the_criterions_corpus(env) -> None:
+    tmp_path, seen = env
+    run(tmp_path)
+    assert seen["count_documents"] == [(2018, "edgar"), (2019, "edgar")]
+
+
+# The flagged sample: 20 flagged (h00-h19) and 16 discard (g00-g15); a draw of 5 flagged.
+BIG = {**{f"h{i:02d}": 4 for i in range(20)}, **{f"g{i:02d}": 0 for i in range(16)}}
+DRAWN = sorted(d for d, p in split_piles(BIG, 3, 10, DEFAULT_SEED, flagged_n=5) if p == "flagged")
+OUTSIDE = sorted(set(BIG) - set(DRAWN) - {d for d in BIG if d.startswith("g")})[0]
+
+
+@pytest.fixture
+def sampled(env, monkeypatch):
+    """`evaluate` over BIG with its own gold CSV; returns (run, reports seen, readers seen).
+
+    The judge labeled the five drawn flagged ids (the first three relevant), the seeded
+    discard draw of 10 (none relevant) and one flagged citation seed outside the draw.
+    """
+    import elusion.flows.evaluate as mod
+
+    tmp_path, seen = env
+    data_dir = tmp_path / "sampled"
+    scores = dict(BIG)
+    reports = []
+    real_render = mod.render
+    monkeypatch.setattr(mod, "scores_for", lambda e, m, p, y: dict(scores))
+    monkeypatch.setattr(mod, "render", lambda r: reports.append(r) or real_render(r))
+    rows = [row(d, int(i < 3)) for i, d in enumerate(DRAWN)]
+    rows += [row(d, 0, pile="discard") for d in sorted(seeded_draw(BIG, 10))]
+    rows += [row(OUTSIDE, 1, pile="seed")]
+    append_rows(gold_path("c", data_dir), rows)
+
+    def go(**kw):
+        run(tmp_path, data_dir=data_dir, **kw)
+        return reports[-1]
+
+    go.scores, go.data_dir, go.seen = scores, data_dir, seen
+    return go
+
+
+def test_precision_comes_from_the_flagged_draw_only(sampled) -> None:
+    report = sampled(flagged_n=5)
+    assert (report.precision.k, report.precision.n) == (3, 5)
+    assert (report.n_flagged, report.n_discard) == (20, 16)  # the whole piles' sizes
+    assert report.recall == metrics.recall(report.precision, report.elusion, 20, 16)
+    assert report.richness == metrics.richness(report.precision, report.elusion, 20, 16)
+    assert report.flagged_n == 5
+    # the relevant seed outside the draw is in neither precision nor the works found
+    assert sampled.seen["company_ids"] == DRAWN[:3]
+
+
+def test_flagged_limit_does_not_move_the_discard_sample(sampled) -> None:
+    with_limit = sampled(flagged_n=5).elusion
+    # without a limit every flagged id needs a label: give the other fourteen one
+    rest = [d for d in BIG if d.startswith("h") and d not in DRAWN and d != OUTSIDE]
+    append_rows(gold_path("c", sampled.data_dir), [row(d, 0) for d in rest])
+    assert sampled().elusion == with_limit  # and no MissingDiscardLabels: the same draw
+
+
+def test_missing_label_in_the_flagged_draw_names_the_flag(sampled) -> None:
+    from elusion.flows.evaluate import MissingLabels
+
+    # a draw of 6 holds an id the judge, given 5, never labeled
+    with pytest.raises(MissingLabels, match=r"of the draw have no .*--flagged-n"):
+        sampled(flagged_n=6)
+
+
+def test_evaluate_without_the_judges_flagged_limit_says_how_many_are_missing(sampled) -> None:
+    from elusion.flows.evaluate import MissingLabels
+
+    with pytest.raises(MissingLabels, match=r"14 flagged paragraphs have no.*--flagged-n"):
+        sampled()
+
+
+def test_precision_by_score_splits_the_same_sample(sampled) -> None:
+    # of the five drawn: the first two score 3 (both relevant), the other three score 4
+    # (one relevant)
+    for d in DRAWN[:2]:
+        sampled.scores[d] = 3
+    report = sampled(flagged_n=5)
+    assert {s: (e.k, e.n) for s, e in report.precision_by_score.items()} == {3: (2, 2), 4: (1, 3)}
+
+
+def test_precision_by_score_leaves_out_a_score_nothing_was_drawn_at(sampled) -> None:
+    assert set(sampled(flagged_n=5).precision_by_score) == {4}
+
+
+def test_without_a_flagged_limit_nothing_changes(env) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+    reports = []
+    real_render = mod.render
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(mod, "render", lambda r: reports.append(r) or real_render(r))
+        run(tmp_path)
+    (report,) = reports
+    assert report.flagged_n is None and report.precision_by_score is None
+
+
+def test_grades_outside_the_flagged_draw_are_not_counted(sampled) -> None:
+    from elusion.evaluate.grades import GradeRow, grades_path
+    from elusion.evaluate.grades import append_rows as append_grades
+
+    def g(doc, sound):
+        return GradeRow(doc, "rev-model", "c/v2", 4, JUDGE, "c/grade-v1", sound, 1, "r", "t")
+
+    not_judged = sorted(set(BIG) - set(DRAWN) - {OUTSIDE} - {d for d in BIG if d[0] == "g"})[0]
+    append_grades(
+        grades_path("c", sampled.data_dir),
+        [g(d, 1) for d in DRAWN] + [g(OUTSIDE, 0), g(not_judged, 0)],
+    )
+    report = sampled(flagged_n=5)
+    assert (report.rationale_sound.k, report.rationale_sound.n) == (5, 5)
+
+
+# --- A criterion over the abstracts corpus: the literature sections (phase 7, task 6) ---
+
+
+@pytest.fixture
+def literature(sampled, monkeypatch):
+    """`sampled`, with the criterion reviewed over the abstracts corpus.
+
+    Every doc dNN is work W-dNN. The citation seeds are OUTSIDE (flagged, judged
+    relevant, also found by a search term), DRAWN[0] (flagged, judged relevant, found
+    by no term), DRAWN[4] (flagged, judged not relevant), one more flagged doc the judge
+    never read, g00 (discarded) and a work that was never stored.
+    """
+    import elusion.flows.evaluate as mod
+    from elusion.collect.custody import QueryCount, Seed
+    from elusion.corpora import OPENALEX
+
+    unjudged = sorted(set(BIG) - set(DRAWN) - {OUTSIDE} - {d for d in BIG if d[0] == "g"})[0]
+    seeds = {
+        f"W-{OUTSIDE}": Seed(("W3001807593",), True),
+        f"W-{DRAWN[0]}": Seed(("W3001807593",), False),
+        f"W-{DRAWN[4]}": Seed(("W3001807593",), True),
+        f"W-{unjudged}": Seed(("W3001807593",), True),
+        "W-g00": Seed(("W3001807593",), True),
+        "W-gone": Seed(("W3001807593",), False),
+    }
+    monkeypatch.setattr(mod, "corpus_for", lambda criterion: OPENALEX)
+    monkeypatch.setattr(mod, "seed_works", lambda engine: seeds)
+    monkeypatch.setattr(mod, "distinct_works", lambda engine: 37)
+    monkeypatch.setattr(
+        mod,
+        "works_per_query",
+        lambda engine: [
+            QueryCount("search", '"audit trail"', "stemmed", 36),
+            QueryCount("citation", "W3001807593", None, 6),
+            QueryCount("citation", "W-unknown-anchor", None, 1),
+        ],
+    )
+    monkeypatch.setattr(mod, "doc_ids_by_work", lambda d: {f"W-{x}": {x} for x in BIG})
+    monkeypatch.setattr(mod, "load_texts", lambda d: {x: f"Title of {x}\n\nBody." for x in BIG})
+    return sampled
+
+
+def test_literature_harvest_recall_counts_relevant_seeds_a_term_also_found(literature) -> None:
+    lit = literature(flagged_n=5).literature
+    assert (lit.seeds, lit.seeds_flagged, lit.seeds_judged, lit.seeds_relevant) == (6, 4, 3, 2)
+    assert lit.harvest_recall == metrics.proportion(1, 2)
+
+
+def test_literature_identified_names_an_anchor_by_its_label(literature) -> None:
+    lit = literature(flagged_n=5).literature
+    assert [(i.route, i.query, i.form, i.works) for i in lit.identified] == [
+        ("search", '"audit trail"', "stemmed", 36),
+        ("citation", "Raji and others 2020 (W3001807593)", None, 6),
+        ("citation", "W-unknown-anchor", None, 1),
+    ]
+    assert lit.distinct_works == 37
+
+
+def test_literature_works_are_the_relevant_of_the_flagged_sample(literature) -> None:
+    lit = literature(flagged_n=5).literature
+    assert lit.works == [(f"W-{d}", f"Title of {d}") for d in DRAWN[:3]]
+
+
+def test_literature_report_file_has_the_sections(literature) -> None:
+    literature(flagged_n=5)
+    md = next((literature.seen and literature.data_dir).parent.glob("reports/*.md")).read_text()
+    assert "## Records (PRISMA-style counts)" in md
+    assert "## Harvest recall" in md
+    assert "## Works kept" in md
+    assert "## Companies found" not in md
+
+
+def test_edgar_report_has_no_literature(sampled) -> None:
+    assert sampled(flagged_n=5).literature is None
+
+
+# --- Gold ids the judge refused to answer about ---
+
+
+def refuse(data_dir, *doc_ids, model=JUDGE, prompt="c/judge-v1") -> None:
+    from elusion.evaluate.gold import append_refusals, refusals_path
+
+    append_refusals(refusals_path(gold_path("c", data_dir)), doc_ids, model, prompt)
+
+
+def test_a_recorded_refusal_is_left_out_and_counted(env) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+    scores = {**SCORES, "f04": 3}  # one more flagged doc, which the judge refused
+    reports = []
+    real = mod.render
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(mod, "scores_for", lambda e, m, p, y: dict(scores))
+        mp.setattr(mod, "render", lambda r: reports.append(r) or real(r))
+        with pytest.raises(mod.MissingLabels):
+            run(tmp_path, discard_n=16)
+        refuse(tmp_path, "f04")
+        with pytest.raises(mod.MissingLabels):  # the discard draw now lacks six labels
+            run(tmp_path, discard_n=16)
+        refuse(tmp_path, *(set(SCORES) - set(DRAW_10) - {"f00", "f01", "f02", "f03"}))
+        md = run(tmp_path, discard_n=16).read_text()
+    r = reports[-1]
+    assert (r.refused_flagged, r.refused_discard) == (1, 6)
+    assert (r.precision.k, r.precision.n) == (3, 4)
+    assert r.elusion.n == 10
+    assert r.n_flagged == 5  # the pile sizes still count every scored document
+    assert "refused by the judge: 1 flagged and 6 of the discard sample" in md
+
+
+def test_a_refusal_by_another_judge_or_prompt_does_not_count(env, monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+    monkeypatch.setattr(mod, "scores_for", lambda e, m, p, y: {**SCORES, "f04": 3})
+    refuse(tmp_path, "f04", model="other-judge")
+    refuse(tmp_path, "f04", prompt="c/judge-v0")
+    with pytest.raises(mod.MissingLabels):
+        run(tmp_path)
+
+
+def test_a_label_written_after_a_refusal_wins(env, monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+    refuse(tmp_path, "f03")  # refused once, labeled since (the env's CSV has its row)
+    reports = []
+    real = mod.render
+    monkeypatch.setattr(mod, "render", lambda r: reports.append(r) or real(r))
+    md = run(tmp_path).read_text()
+    assert reports[-1].refused_flagged == 0
+    assert reports[-1].precision.n == 4
+    assert "refused by the judge" not in md

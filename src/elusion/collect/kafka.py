@@ -15,7 +15,9 @@ from collections.abc import Iterable
 from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
-TOPIC = "documents.ingested"
+from elusion.corpora import EDGAR
+
+TOPIC = EDGAR.topic  # "documents.ingested": the 10-K corpus's topic, and the default below
 
 
 def ensure_topic(bootstrap: str, topic: str = TOPIC, partitions: int = 1) -> None:

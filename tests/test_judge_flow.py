@@ -9,7 +9,16 @@ import json
 import pytest
 from prefect.testing.utilities import prefect_test_harness
 
-from elusion.evaluate.gold import human_rows, judge_cost_usd, judge_rows, judge_runs_path
+from elusion.evaluate.gold import (
+    HUMAN,
+    GoldRow,
+    append_rows,
+    human_rows,
+    judge_cost_usd,
+    judge_rows,
+    judge_runs_path,
+    labeled_ids,
+)
 from elusion.review.prompt import Prompt
 from elusion.review.providers import Judgement, ReviewError
 from tests.fakes import FakeJudge
@@ -260,7 +269,7 @@ def running_review(monkeypatch):
     import elusion.flows.evaluate as mod
 
     monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
-    monkeypatch.setattr(mod, "select_gold", lambda *a: gold_of(5))
+    monkeypatch.setattr(mod, "select_gold", lambda *a, **kw: gold_of(5))
     monkeypatch.setattr(
         mod,
         "jobs_summary",
@@ -297,7 +306,7 @@ def test_review_model_and_years_select_the_population(env, monkeypatch) -> None:
     seen = {}
     monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
 
-    def select(engine, model, version, threshold, discard_n, seed, years):
+    def select(engine, model, version, threshold, discard_n, seed, years, **kw):
         seen["select"] = (model, years)
         return gold_of(5)
 
@@ -326,3 +335,224 @@ def test_ledger_records_the_filing_years(env) -> None:
     path, _ = env
     judge("c", years=[2020, 2019], gold=gold_of(3), provider=FakeJudge(), gold_csv=path)
     assert runs(path)[-1]["years"] == [2019, 2020]
+
+
+def test_judge_reads_the_texts_of_the_criterions_corpus(env, monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+    from elusion.config import settings
+    from elusion.flows.evaluate import judge
+
+    path, texts = env
+    seen = []
+    monkeypatch.setattr(mod, "load_texts", lambda text_dir: seen.append(text_dir) or dict(texts))
+    judge("c", years=YEARS, gold=gold_of(2), provider=FakeJudge(), gold_csv=path)
+    judge(
+        "auditable-decisions",
+        years=YEARS,
+        gold=gold_of(2),
+        provider=FakeJudge(),
+        gold_csv=path.with_name("a.csv"),
+    )
+    assert seen == [settings.data_dir / "corpus", settings.data_dir / "abstracts"]
+
+
+def human(doc_id: str, pile: str) -> GoldRow:
+    return GoldRow(doc_id, 1, pile, HUMAN, "", "", "2026-11-20T12:00:00+00:00")
+
+
+def test_only_human_labels_just_the_ids_the_owner_labelled(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    gold = gold_of(6, flagged=3)
+    append_rows(path, [human("d000", "flagged"), human("d003", "discard")])
+    j = FakeJudge()
+    s = judge("c", years=YEARS, gold=gold, provider=j, gold_csv=path, only_human=True)
+    assert s.labeled == 2
+    assert labeled_ids(path, j.model) == {"d000", "d003"}
+
+
+def test_only_human_with_no_human_labels_is_an_error(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    j = FakeJudge()
+    with pytest.raises(RuntimeError, match="no human labels"):
+        judge("c", years=YEARS, gold=gold_of(6), provider=j, gold_csv=path, only_human=True)
+    assert j.calls == []
+
+
+def test_only_human_ignores_human_labels_outside_the_draw(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    append_rows(path, [human("d030", "flagged")])  # labelled once, but not in this draw
+    with pytest.raises(RuntimeError, match="no human labels"):
+        judge(
+            "c", years=YEARS, gold=gold_of(6), provider=FakeJudge(), gold_csv=path, only_human=True
+        )
+
+
+def test_full_run_after_only_human_does_not_pay_twice(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    gold = gold_of(6, flagged=3)
+    append_rows(path, [human("d000", "flagged"), human("d003", "discard")])
+    judge("c", years=YEARS, gold=gold, provider=FakeJudge(), gold_csv=path, only_human=True)
+    j = FakeJudge()
+    second = judge("c", years=YEARS, gold=gold, provider=j, gold_csv=path)
+    assert second.skipped == 2 and second.labeled == 4
+    assert len(j.calls) == 4
+
+
+def test_draw_gold_refuses_an_unfinished_review(running_review) -> None:
+    from elusion.flows.evaluate import ReviewStillRunning, draw_gold
+
+    with pytest.raises(ReviewStillRunning, match=r"job-abc.*--force"):
+        draw_gold("c", "v2", years=YEARS)
+    assert draw_gold("c", "v2", years=YEARS, force=True) == gold_of(5)
+
+
+def test_draw_gold_passes_the_flagged_limit(monkeypatch) -> None:
+    import elusion.evaluate.gold as gold_mod
+    import elusion.flows.evaluate as mod
+    from elusion.flows.evaluate import draw_gold
+
+    scores = {f"f{i}": 4 for i in range(5)} | {f"d{i}": 0 for i in range(5)}
+    monkeypatch.setattr(gold_mod, "scores_for", lambda engine, model, version, years: scores)
+    monkeypatch.setattr(
+        mod, "jobs_summary", lambda *a: {"jobs": 1, "unfinished": False, "unfinished_ids": []}
+    )
+    got = draw_gold("c", "v2", years=YEARS, discard_n=2, flagged_n=1, engine="engine")
+    assert [p for _, p in got] == ["flagged", "discard", "discard"]
+
+
+def test_draw_gold_with_no_scores_is_an_error(monkeypatch) -> None:
+    import elusion.evaluate.gold as gold_mod
+    import elusion.flows.evaluate as mod
+    from elusion.flows.evaluate import draw_gold
+
+    monkeypatch.setattr(gold_mod, "scores_for", lambda engine, model, version, years: {})
+    monkeypatch.setattr(
+        mod, "jobs_summary", lambda *a: {"jobs": 0, "unfinished": False, "unfinished_ids": []}
+    )
+    with pytest.raises(RuntimeError, match="no scores"):
+        draw_gold("c", "v2", years=YEARS, engine="engine")
+
+
+def test_seed_rows_carry_the_seed_pile(env) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    gold = [("d000", "flagged"), ("d001", "discard"), ("d002", "seed")]
+    judge("c", years=YEARS, gold=gold, provider=FakeJudge(), gold_csv=path)
+    assert {r.doc_id: r.pile for r in judge_rows(path)} == dict(gold)
+
+
+@pytest.fixture
+def scored(monkeypatch):
+    """judge() without `gold`: 4 flagged and 4 discard scores, the review finished, and
+    two citation seeds: W1 flagged (d001, d003 its two documents), W2 discarded (d005)."""
+    import elusion.evaluate.gold as gold_mod
+    import elusion.flows.evaluate as mod
+
+    scores = {f"d{i:03d}": (4 if i < 4 else 0) for i in range(8)}
+    monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(gold_mod, "scores_for", lambda engine, model, version, years: scores)
+    monkeypatch.setattr(mod, "scores_for", lambda engine, model, version, years: scores)
+    monkeypatch.setattr(
+        mod, "jobs_summary", lambda *a: {"jobs": 1, "unfinished": False, "unfinished_ids": []}
+    )
+    monkeypatch.setattr(mod, "seed_works", lambda engine: {"W1": object(), "W2": object()})
+    monkeypatch.setattr(
+        mod,
+        "doc_ids_by_work",
+        lambda d: {"W1": {"d001", "d003"}, "W2": {"d005"}, "W9": {"d002"}},
+    )
+    return scores
+
+
+def test_seeds_adds_the_flagged_seeds_the_draw_left_out(env, scored) -> None:
+    from elusion.evaluate.gold import split_piles
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    kw = dict(years=YEARS, discard_n=2, flagged_n=1, seed=7, gold_csv=path)
+    drawn = {d for d, p in split_piles(scored, 3, 2, 7, flagged_n=1) if p == "flagged"}
+    s = judge("auditable-decisions", "v1", provider=FakeJudge(), seeds=True, **kw)
+    piles = {r.doc_id: r.pile for r in judge_rows(path)}
+    assert {d for d, p in piles.items() if p == "flagged"} == drawn
+    assert {d for d, p in piles.items() if p == "seed"} == {"d001", "d003"} - drawn
+    assert "d005" not in piles  # a discarded seed is not judged; d002 is not a seed
+    assert s.labeled == len(piles)
+    # Without --seeds the same draw has no seed rows to add; nothing is paid twice.
+    again = judge("auditable-decisions", "v1", provider=FakeJudge(), **kw)
+    assert again.labeled == 0
+
+
+def test_seeds_is_refused_for_a_criterion_without_citation_seeds(env, scored) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    j = FakeJudge()
+    with pytest.raises(RuntimeError, match="no citation seeds"):
+        judge("cloud-concentration", years=YEARS, provider=j, gold_csv=path, seeds=True)
+    assert j.calls == []
+
+
+def test_only_human_warns_about_human_labels_outside_the_draw(env, capsys) -> None:
+    """Sizes or a seed that differ from `label`'s would otherwise shrink the 40 silently."""
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    append_rows(path, [human("d000", "flagged"), human("d030", "flagged"), human("d031", "x")])
+    s = judge(
+        "c", years=YEARS, gold=gold_of(6), provider=FakeJudge(), gold_csv=path, only_human=True
+    )
+    assert s.labeled == 1
+    err = capsys.readouterr().err
+    assert "WARNING: 2 of the 3 human labels" in err and "--flagged-n" in err
+
+
+def test_only_human_is_quiet_when_every_human_label_is_in_the_draw(env, capsys) -> None:
+    from elusion.flows.evaluate import judge
+
+    path, _ = env
+    append_rows(path, [human("d000", "flagged")])
+    judge("c", years=YEARS, gold=gold_of(6), provider=FakeJudge(), gold_csv=path, only_human=True)
+    assert "WARNING" not in capsys.readouterr().err
+
+
+def test_a_new_judge_prompt_relabels_what_the_old_one_labeled(env, monkeypatch):
+    """Rows are keyed by judge prompt too: judge-v2 labels ids judge-v1 already did."""
+    import elusion.flows.evaluate as mod
+    from elusion.evaluate.gold import read_rows
+
+    csv, _ = env
+    gold = [("d000", "flagged"), ("d001", "discard")]
+    kw = dict(years=[2019], gold=gold, gold_csv=csv)
+    first = mod.judge("c", provider=FakeJudge(), **kw)
+    monkeypatch.setattr(mod, "judge_version", lambda c: "judge-v2")
+    second = mod.judge("c", provider=FakeJudge(), **kw)
+    again = mod.judge("c", provider=FakeJudge(), **kw)
+    assert (first.labeled, second.labeled, again.labeled, again.skipped) == (2, 2, 0, 2)
+    assert (
+        sorted(r.prompt_version for r in read_rows(csv)) == ["c/judge-v1"] * 2 + ["c/judge-v2"] * 2
+    )
+
+
+def test_a_refusal_is_recorded_and_still_retried(env) -> None:
+    from elusion.evaluate.gold import refusals_path, refused_ids
+    from elusion.flows.evaluate import judge
+
+    path, texts = env
+    j = Flaky({texts["d002"]})
+    judge("c", years=YEARS, gold=gold_of(5), provider=j, gold_csv=path)
+    assert refused_ids(refusals_path(path), j.model, "c/judge-v1") == {"d002"}
+    assert refused_ids(refusals_path(path), "another-model", "c/judge-v1") == set()
+    assert refused_ids(refusals_path(path), j.model, "c/judge-v9") == set()
+
+    again = Flaky(set())
+    s = judge("c", years=YEARS, gold=gold_of(5), provider=again, gold_csv=path)
+    assert s.labeled == 1  # a recorded refusal is not a label: the id is tried again

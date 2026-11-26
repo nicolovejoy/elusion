@@ -197,3 +197,185 @@ def test_render_review_cost_is_the_populations_own_scores() -> None:
     md = " ".join(render(make_report()).split())
     assert "- review run: $0.8340 (the cost of this population's scores, summed)" in md
     assert "A billed call that left no score" in md and "is not in this sum" in md
+
+
+# A population whose flagged pile (9000) is larger than the sample of 400 drawn from it.
+SAMPLED = dict(
+    flagged_n=400,
+    n_flagged=9000,
+    n_discard=3906,
+    precision=Estimate(0.8, 0.7574, 0.8381, 320, 400),
+)
+
+
+def test_flagged_sample_line_and_by_score_lines_render() -> None:
+    by_score = {3: Estimate(0.25, 0.0866, 0.4910, 5, 20), 4: Estimate(0.9, 0.683, 0.988, 18, 20)}
+    md = render(make_report(threshold=3, **SAMPLED, precision_by_score=by_score))
+    lines = md.splitlines()
+    sample = (
+        "- flagged sample: 400 drawn with seed 20261104 from the pair's flagged pile; "
+        "400 labeled by the judge"
+    )
+    assert sample in lines
+    assert lines[lines.index(sample) + 1].startswith("- discard sample: ")
+    note = lines.index(
+        "Precision by score, from the same flagged sample; a description, not a separate"
+    )
+    assert lines[note + 1] == "estimate of the population."
+    assert lines[note + 3 : note + 5] == [
+        "- score 3: 0.250 [0.087, 0.491] (k/n = 5/20)",
+        "- score 4: 0.900 [0.683, 0.988] (k/n = 18/20)",
+    ]
+    assert note > lines.index("## Metrics") and note < lines.index(
+        "## Judge agreement with the owner"
+    )
+
+
+def test_render_is_unchanged_without_a_flagged_limit() -> None:
+    md = render(make_report())
+    assert "flagged sample" not in md and "score 3" not in md and "by score" not in md
+
+
+def test_a_flagged_pile_no_larger_than_the_limit_is_reported_as_taken_whole() -> None:
+    md = render(make_report(flagged_n=400))  # the fixture's flagged pile holds 117
+    assert (
+        "- flagged sample: the whole flagged pile, 117, which is no larger than the 400 "
+        "asked for; 117 labeled by the judge" in md
+    )
+    assert "400 drawn" not in md
+
+
+def test_with_a_flagged_sample_the_prose_says_sample_not_pile() -> None:
+    md = render(make_report(**SAMPLED, **GRADED))
+    assert "read each paragraph of the flagged sample with the reviewer's" in md
+    assert "against the judge's label, over the flagged sample:" in md
+    assert "Companies of the paragraphs of the flagged sample the judge labeled relevant" in md
+    for whole_pile in ("read each flagged paragraph", "over the flagged paragraphs:"):
+        assert whole_pile not in md
+    plain = render(make_report(**GRADED))
+    assert "read each flagged paragraph with the reviewer's" in plain
+    assert "over the flagged paragraphs:" in plain
+    assert "Companies of the flagged paragraphs the judge labeled relevant" in plain
+
+
+# --- A report over the abstracts corpus (phase 7, task 6) ---
+
+
+def make_literature(**kw):
+    from elusion.evaluate.report import Identified, Literature
+
+    base = dict(
+        identified=[
+            Identified("search", '"citation screening"', "stemmed", 131),
+            Identified("search", '"audit trail"', "stemmed", 6162),
+            Identified("citation", "Raji and others 2020 (W3001807593)", None, 75),
+        ],
+        distinct_works=6300,
+        seeds=75,
+        seeds_flagged=40,
+        seeds_judged=40,
+        seeds_relevant=30,
+        harvest_recall=Estimate(0.2, 0.077, 0.386, 6, 30),
+        works=[("W1", "A paper about audit logs"), ("W2", "")],
+    )
+    return Literature(**{**base, **kw})
+
+
+def lit_report(**kw) -> RunReport:
+    return make_report(
+        criterion="auditable-decisions",
+        years=(2025, 2026),
+        filed=6300,
+        population=6290,
+        n_flagged=2800,
+        n_discard=3490,
+        literature=make_literature(**kw),
+    )
+
+
+def test_a_ten_k_report_has_no_literature_sections() -> None:
+    md = render(make_report())
+    assert "## Records" not in md
+    assert "## Harvest recall" not in md
+    assert "## Vocabulary" not in md
+    assert "## Works kept" not in md
+    assert "abstract" not in md
+
+
+def test_literature_report_counts_records_at_each_stage() -> None:
+    md = render(lit_report())
+    assert "## Records (PRISMA-style counts)" in md
+    assert '- search, stemmed, `"citation screening"`: 131' in md
+    assert "- citation, works citing Raji and others 2020 (W3001807593): 75" in md
+    assert "- records identified, all routes: 6368" in md
+    assert "- duplicates removed: 68" in md
+    assert "- distinct works: 6300" in md
+    assert "- screened: 6290" in md
+    assert "- not screened: 10" in md
+    assert "- excluded (score < 2): 3490" in md
+    assert "- included (score >= 2): 2800" in md
+
+
+def test_literature_report_gives_harvest_recall_with_its_limit() -> None:
+    md = render(lit_report())
+    assert "## Harvest recall" in md
+    assert "- harvest recall: 0.200 [0.077, 0.386] (k/n = 6/30)" in md
+    assert "- citation seeds drawn: 75" in md
+    assert "- of those, flagged by the review: 40" in md
+    assert "- of those, labeled relevant by the judge: 30" in md
+    assert "never judged" in md
+
+
+def test_literature_report_says_when_no_seed_is_relevant() -> None:
+    md = render(lit_report(seeds_relevant=0, harvest_recall=None))
+    assert "No citation seed was both flagged and labeled relevant" in md
+
+
+def test_literature_report_says_when_flagged_seeds_are_unjudged() -> None:
+    md = render(lit_report(seeds_judged=35))
+    assert "5 flagged seeds have no judge label" in md
+    assert "--seeds" in md
+
+
+def test_literature_report_lists_works_not_companies() -> None:
+    md = render(lit_report())
+    assert "## Works kept" in md
+    assert "## Companies found" not in md
+    assert "- W1: A paper about audit logs" in md
+    assert "- W2: (no title)" in md
+
+
+def test_literature_report_speaks_of_abstracts_and_publication_years() -> None:
+    md = render(lit_report())
+    assert "- publication years: 2025-2026" in md
+    assert "Every abstract published in 2025-2026" in md
+    assert "paragraph" not in md
+    assert "filing" not in md
+    assert "filed" not in md
+
+
+def test_literature_report_maps_the_vocabulary() -> None:
+    md = render(lit_report())
+    assert "## Vocabulary" in md
+    assert "| flagged | included | responsive |" in md
+    assert "| discard pile | excluded | null set |" in md
+
+
+def test_agreement_prints_the_blind_figure_beside_the_revised_one() -> None:
+    md = render(
+        make_report(
+            agreement=Estimate(23 / 30, 0.577, 0.901, 23, 30),
+            agreement_blind=Estimate(20 / 30, 0.472, 0.827, 20, 30),
+            labels_revised=3,
+        )
+    )
+    assert "- agreement, blind labels: 0.667 [0.472, 0.827] (k/n = 20/30)" in md
+    assert "- agreement, after the owner revised 3 labels" in md
+    assert "(k/n = 23/30)" in md
+    assert "Fraction of the owner's blind labels the judge matched." not in md
+
+
+def test_agreement_without_revisions_reads_as_before() -> None:
+    md = render(make_report())
+    assert "Fraction of the owner's blind labels the judge matched." in md
+    assert "- agreement: 0.900 [0.683, 0.988] (k/n = 18/20)" in md

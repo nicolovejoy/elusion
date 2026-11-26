@@ -34,6 +34,7 @@ from prefect import flow, get_run_logger, task
 from prefect.cache_policies import NO_CACHE
 
 from elusion.config import settings
+from elusion.corpora import corpus_for
 from elusion.review import db
 from elusion.review.corpus import load_texts
 from elusion.review.pricing import cost_usd
@@ -89,6 +90,7 @@ class BatchResult:
     failed: int = 0  # ReviewErrors: billed, no answer
     cost_usd: float = 0.0  # everything billed: answers and ReviewErrors
     errors: list[tuple[str, Exception]] = field(default_factory=list)  # anything else
+    refused: list[str] = field(default_factory=list)  # ids among `failed` the model refused
 
 
 def run_batch(call: Callable[[str], Any], texts: dict[str, str], concurrency: int) -> BatchResult:
@@ -114,6 +116,8 @@ def run_batch(call: Callable[[str], Any], texts: dict[str, str], concurrency: in
             if isinstance(out, ReviewError):
                 log.warning("no answer for %s (stop_reason=%s)", doc_id, out.stop_reason)
                 result.failed += 1
+                if out.stop_reason == "refusal":
+                    result.refused.append(doc_id)
                 try:
                     result.cost_usd += cost_usd(
                         out.model,
@@ -222,6 +226,9 @@ def review(
         raise ProviderConfigError(
             f"the judge model cannot be a reviewer: {provider.model!r} is ELUSION_JUDGE_MODEL"
         )
+    # Which topic and which text directory: the criterion's corpus, and no other. Looked up
+    # before the job row exists, so a criterion that names no corpus starts nothing.
+    corpus = corpus_for(criterion)
     engine = db.make_engine(settings.database_url)
     db.ensure_schema(engine)
     job_id = db.start_job(
@@ -260,9 +267,9 @@ def review(
         if ids is None:
             group = group_id(criterion, provider.model, prompt.version)
             log.info("kafka consumer group %s", group)
-            ids = KafkaIdSource(settings.kafka_bootstrap, group)
+            ids = KafkaIdSource(settings.kafka_bootstrap, group, corpus.topic)
         t0 = time.monotonic()
-        texts = load_texts(settings.corpus_dir)
+        texts = load_texts(corpus.text_dir(settings.data_dir))
         log.info("loaded %s paragraph texts in %.1fs", len(texts), time.monotonic() - t0)
 
         probe_costs: list[float] = []  # billed cost of every probe attempt, failures included

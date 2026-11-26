@@ -12,6 +12,12 @@ Measured metrics (precision, elusion, judge agreement) print their sample as k/n
 relevant (or agreeing) out of n labeled. Derived metrics (richness, recall) have no
 sample of their own; they combine the two pile intervals weighted by pile sizes, and
 say so instead of printing a k/n.
+
+A report over the abstracts corpus (phase 7) carries a `Literature` and gains what a
+systematic review reports: the PRISMA-style counts of records at each stage, harvest
+recall, a vocabulary table, and the works kept in place of the companies found. Its
+documents are called abstracts and its years publication years. A 10-K report has no
+`Literature` and reads exactly as before.
 """
 
 from __future__ import annotations
@@ -22,6 +28,34 @@ from datetime import timedelta
 
 from elusion.evaluate.metrics import Estimate
 from elusion.review.providers import EFFORT
+
+
+@dataclass(frozen=True)
+class Identified:
+    """One "records identified" line: the distinct works one query returned."""
+
+    route: str  # search | citation
+    query: str  # the search string, or the anchor's label and work id
+    form: str | None  # stemmed | exact; None on the citation route
+    works: int
+
+
+@dataclass(frozen=True)
+class Literature:
+    """What a report over the abstracts corpus adds to a `RunReport`.
+
+    The seed counts narrow in order: drawn, then flagged by the review, then given a
+    label by the judge, then labeled relevant. Harvest recall is measured on the last.
+    """
+
+    identified: list[Identified]
+    distinct_works: int  # works left once a work found by several queries is counted once
+    seeds: int  # works drawn on the citation route
+    seeds_flagged: int
+    seeds_judged: int
+    seeds_relevant: int
+    harvest_recall: Estimate | None  # None when no seed is flagged and relevant
+    works: list[tuple[str, str]]  # (OpenAlex work id, title) of the works listed as kept
 
 
 @dataclass(frozen=True)
@@ -60,6 +94,18 @@ class RunReport:
     grade_cost_usd: float = 0.0
     # review_jobs rows per environment they ran in ("local", or a cluster's name).
     review_envs: dict[str, int] = field(default_factory=dict)
+    # Set when precision was measured on a seeded sample of the flagged pile: the size
+    # asked for, and precision split by score over that same sample.
+    flagged_n: int | None = None
+    precision_by_score: dict[int, Estimate] | None = None
+    literature: Literature | None = None  # set for a criterion over the abstracts corpus
+    # Sampled ids the judge model refused to answer about: no label, in no figure.
+    # Set when the owner changed labels after reading the judge's disagreements:
+    # `agreement` is then on the revised labels, and this is the count on the blind ones.
+    agreement_blind: Estimate | None = None
+    labels_revised: int = 0
+    refused_flagged: int = 0
+    refused_discard: int = 0
 
 
 def years_label(years: Iterable[int]) -> str:
@@ -92,15 +138,135 @@ def _envs(envs: dict[str, int]) -> str:
     return ", ".join(parts)
 
 
+def _flagged_sample(r: RunReport) -> list[str]:
+    """The flagged-sample line; nothing when precision was measured on the whole pile."""
+    if r.flagged_n is None:
+        return []
+    labeled = f"{r.precision.n} labeled by the judge"
+    if r.n_flagged <= r.flagged_n:
+        return [
+            f"- flagged sample: the whole flagged pile, {r.n_flagged}, which is no larger "
+            f"than the {r.flagged_n} asked for; {labeled}"
+        ]
+    return [
+        f"- flagged sample: {r.flagged_n} drawn with seed {r.seed} from the pair's "
+        f"flagged pile; {labeled}"
+    ]
+
+
+def _refused(r: RunReport) -> list[str]:
+    """The refusals line; nothing when the judge answered about every sampled id."""
+    if not (r.refused_flagged or r.refused_discard):
+        return []
+    return [
+        f"- refused by the judge: {r.refused_flagged} flagged and {r.refused_discard} of the "
+        "discard sample have no label, because the judge model declined to answer about "
+        "them; they are in the pile sizes and in no metric below"
+    ]
+
+
+def _records(r: RunReport, lit: Literature) -> list[str]:
+    """The PRISMA-style counts: records at each stage, from identified to included."""
+    lines = [
+        "## Records (PRISMA-style counts)",
+        "",
+        "PRISMA is the reporting standard for systematic reviews; its flow diagram is a",
+        "count of records at each stage. Identified: the distinct works each query returned.",
+        "",
+    ]
+    for i in lit.identified:
+        if i.route == "citation":
+            lines.append(f"- citation, works citing {i.query}: {i.works}")
+        else:
+            lines.append(f"- {i.route}, {i.form}, `{i.query}`: {i.works}")
+    total = sum(i.works for i in lit.identified)
+    lines += [
+        "",
+        f"- records identified, all routes: {total}",
+        f"- duplicates removed: {total - lit.distinct_works}",
+        f"- distinct works: {lit.distinct_works}",
+        f"- abstracts stored: {r.filed} (a work whose abstract changed between two "
+        "harvests is stored once per text)",
+        f"- screened: {r.population}",
+        f"- not screened: {r.filed - r.population}",
+        f"- excluded (score < {r.threshold}): {r.n_discard}",
+        f"- included (score >= {r.threshold}): {r.n_flagged}",
+        "",
+    ]
+    return lines
+
+
+def _harvest_recall(lit: Literature) -> list[str]:
+    lines = [
+        "## Harvest recall",
+        "",
+        "The fraction of on-topic works that the search terms returned at all. Elusion",
+        "cannot see it: a work no term returned is not in the discard pile. It is measured",
+        "on the citation seeds, works found by following citations to an anchor paper and",
+        "not by any search word. A seed that the review flagged and the judge labeled",
+        "relevant is an on-topic work known without the terms; harvest recall is the",
+        "fraction of those that a search term also returned.",
+        "",
+    ]
+    if lit.harvest_recall is None:
+        lines.append("No citation seed was both flagged and labeled relevant by the judge.")
+    else:
+        lines.append(metric_line("harvest recall", lit.harvest_recall))
+    lines += [
+        "",
+        f"- citation seeds drawn: {lit.seeds}",
+        f"- of those, flagged by the review: {lit.seeds_flagged}",
+        f"- of those, labeled relevant by the judge: {lit.seeds_relevant}",
+        "",
+    ]
+    unjudged = lit.seeds_flagged - lit.seeds_judged
+    if unjudged:
+        lines += [
+            f"{unjudged} flagged seeds have no judge label and are left out; `elusion judge "
+            "--seeds` labels them.",
+            "",
+        ]
+    lines += [
+        "Its limit: a seed the review discarded is never judged, so a relevant seed the",
+        "screen missed is absent from the denominator. And the seeds are works that cite",
+        "five chosen papers, not a random sample of the on-topic literature.",
+        "",
+    ]
+    return lines
+
+
+VOCABULARY = [
+    "## Vocabulary",
+    "",
+    "| this report | systematic review | e-discovery |",
+    "| --- | --- | --- |",
+    "| first-pass review | screening | first-pass review |",
+    "| relevant | eligible | responsive |",
+    "| flagged | included | responsive |",
+    "| discard pile | excluded | null set |",
+    "| elusion | (no common word) | elusion |",
+    "| harvest | search | collection |",
+    "",
+]
+
+
 def render(r: RunReport) -> str:
     years = years_label(r.years)
+    lit = r.literature
+    unit = "abstract" if lit else "paragraph"
+    filed = "published" if lit else "filed"
+    # What precision, the grades and the list of what was found were measured on.
+    sampled = r.flagged_n is not None and r.n_flagged > r.flagged_n
+    each = f"{unit} of the flagged sample" if sampled else f"flagged {unit}"
+    over = "the flagged sample" if sampled else f"the flagged {unit}s"
+    of = f"{unit}s of the flagged sample" if sampled else f"flagged {unit}s"
     lines = [
         f"# Review report: {r.criterion}",
         "",
         f"- criterion: {r.criterion}",
         f"- review model: {r.review_model}",
         f"- review prompt version: {r.prompt_version}",
-        f"- filing years: {years}",
+        f"- {'publication' if lit else 'filing'} years: {years}",
         f"- judge model: {r.judge_model}",
         f"- judge prompt version: {r.judge_prompt_version}",
         f"- judge effort: {EFFORT}",
@@ -109,17 +275,20 @@ def render(r: RunReport) -> str:
         "",
         "## Population",
         "",
-        f"Every paragraph filed in {years} and scored under the review model and prompt",
+        f"Every {unit} {filed} in {years} and scored under the review model and prompt",
         "version above.",
         "",
-        f"- population N: {r.population} of {r.filed} paragraphs filed in {years}, "
+        f"- population N: {r.population} of {r.filed} {unit}s {filed} in {years}, "
         "in ingestion order, not a random draw",
         f"- flagged (score >= {r.threshold}): {r.n_flagged}",
         f"- discard (score < {r.threshold}): {r.n_discard}",
         f"- threshold: {r.threshold}",
+        *_flagged_sample(r),
         f"- discard sample: {r.discard_n} drawn with seed {r.seed} from the pair's discard pile; "
         f"{r.elusion.n} labeled by the judge",
+        *_refused(r),
         "",
+        *(_records(r, lit) if lit else []),
         "## Metrics",
         "",
         "Point estimate and Clopper-Pearson 95% interval; ground truth is the judge's label.",
@@ -129,10 +298,10 @@ def render(r: RunReport) -> str:
         metric_line("richness", r.richness),
         metric_line("recall", r.recall),
         "",
-        "- precision: fraction of flagged paragraphs that are truly relevant.",
+        f"- precision: fraction of flagged {unit}s that are truly relevant.",
         "- elusion: relevant rate inside the discard pile, measured by sampling it.",
         "- richness: fraction of the whole population that is relevant.",
-        "- recall: fraction of truly relevant paragraphs the system flagged.",
+        f"- recall: fraction of truly relevant {unit}s the system flagged.",
         "",
         "Richness and recall are not measured on a sample of their own: they combine the",
         "precision and elusion intervals weighted by pile sizes. Both are monotone in",
@@ -140,11 +309,34 @@ def render(r: RunReport) -> str:
         "interval covers the true value with probability at least about 90% (0.95 × 0.95),",
         "not 95%.",
         "",
+    ]
+    if r.precision_by_score:
+        lines += [
+            "Precision by score, from the same flagged sample; a description, not a separate",
+            "estimate of the population.",
+            "",
+            *(metric_line(f"score {s}", e) for s, e in sorted(r.precision_by_score.items())),
+            "",
+        ]
+    if lit:
+        lines += _harvest_recall(lit)
+    lines += [
         "## Judge agreement with the owner",
         "",
     ]
     if r.agreement is None:
         lines.append("No human audit labels yet; run `elusion label` to add some.")
+    elif r.agreement_blind is not None:
+        lines += [
+            "Fraction of the owner's labels the judge matched. The blind figure is on his",
+            "labels as first given; the other is after he re-read the judge's disagreements",
+            "and changed some, so it is not a blind measurement.",
+            "",
+            metric_line("agreement, blind labels", r.agreement_blind),
+            metric_line(
+                f"agreement, after the owner revised {r.labels_revised} labels", r.agreement
+            ),
+        ]
     else:
         lines += [
             "Fraction of the owner's blind labels the judge matched.",
@@ -157,15 +349,15 @@ def render(r: RunReport) -> str:
     else:
         by = r.sound_by_label
         lines += [
-            f"The grader ({r.grader_model}) read each flagged paragraph with the reviewer's",
+            f"The grader ({r.grader_model}) read each {each} with the reviewer's",
             "rationale and quote and said whether the rationale is a faithful reading. The",
-            "quote check is mechanical: does the quote occur in the paragraph.",
+            f"quote check is mechanical: does the quote occur in the {unit}.",
             "",
             f"- grader model: {r.grader_model}",
             metric_line("rationale sound", r.rationale_sound),
             metric_line("quote verbatim", r.quote_verbatim),
             "",
-            "Rationale soundness against the judge's label, over the flagged paragraphs:",
+            f"Rationale soundness against the judge's label, over {over}:",
             "",
             f"- sound and relevant: {by.get((1, 1), 0)}",
             f"- sound and not relevant: {by.get((1, 0), 0)}",
@@ -204,11 +396,26 @@ def render(r: RunReport) -> str:
             f"- review run, summed over {r.review_jobs} review_jobs rows ({each}): "
             f"{_duration(r.review_wall_clock)}"
         )
+    if lit:
+        lines += [
+            "",
+            "## Works kept",
+            "",
+            f"The review kept {r.n_flagged} abstracts, the flagged pile. Listed here are the",
+            f"{len(lit.works)} {of} the judge labeled relevant, by OpenAlex work id and title.",
+            "",
+        ]
+        if lit.works:
+            lines += [f"- {work}: {title or '(no title)'}" for work, title in lit.works]
+        else:
+            lines.append("No flagged abstract was labeled relevant by the judge.")
+        lines += ["", *VOCABULARY[:-1]]
+        return "\n".join(lines) + "\n"
     lines += [
         "",
         "## Companies found",
         "",
-        "Companies of the flagged paragraphs the judge labeled relevant, with paragraph counts.",
+        f"Companies of the {of} the judge labeled relevant, with paragraph counts.",
         "",
     ]
     if r.companies:

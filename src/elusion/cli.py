@@ -47,6 +47,27 @@ def collect(
 
 
 @app.command()
+def harvest(
+    max_pages: Annotated[
+        int | None,
+        typer.Option(help="Stop after this many pages of 100 works per search term."),
+    ] = None,
+    seeds_only: Annotated[
+        bool,
+        typer.Option(
+            "--seeds-only",
+            help="Skip the searches; draw only the citation samples not yet drawn.",
+        ),
+    ] = False,
+) -> None:
+    """Fetch the abstracts the search terms return from OpenAlex, and a sample of the
+    works citing each anchor paper; store and publish them."""
+    from elusion.flows.harvest import harvest as harvest_flow
+
+    typer.echo(harvest_flow(max_pages=max_pages, seeds_only=seeds_only))
+
+
+@app.command()
 def review(
     criterion: Annotated[
         Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")
@@ -186,6 +207,29 @@ def judge(
             "(only for a job whose process was killed)."
         ),
     ] = False,
+    flagged_n: Annotated[
+        int | None,
+        typer.Option(
+            help="Label a seeded random sample of this many flagged paragraphs; "
+            "default: the whole flagged pile."
+        ),
+    ] = None,
+    only_labeled: Annotated[
+        bool,
+        typer.Option(
+            "--only-labeled",
+            help="Label only the drawn paragraphs the owner has already labeled with "
+            "`elusion label`.",
+        ),
+    ] = False,
+    seeds: Annotated[
+        bool,
+        typer.Option(
+            "--seeds",
+            help="Also label the flagged citation seeds the flagged sample left out "
+            "(abstracts only; they feed harvest recall, never precision).",
+        ),
+    ] = False,
 ) -> None:
     """Have the judge model label the gold set (flagged pile + discard sample) to a CSV."""
     from elusion.flows.evaluate import ReviewStillRunning
@@ -193,6 +237,13 @@ def judge(
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+
+    if seeds and only_labeled:
+        raise typer.BadParameter(
+            "--seeds cannot be combined with --only-labeled: the seeds are not among "
+            "the paragraphs the owner labels",
+            param_hint="--seeds",
+        )
 
     try:
         summary = judge_flow(
@@ -205,6 +256,9 @@ def judge(
             review_model=review_model,
             max_run_usd=max_run_usd,
             force=force,
+            flagged_n=flagged_n,
+            only_human=only_labeled,
+            seeds=seeds,
         )
     except ReviewStillRunning as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -230,22 +284,46 @@ def grade(
         float | None,
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
     ] = None,
+    flagged_n: Annotated[
+        int | None,
+        typer.Option(
+            help="Grade only the seeded flagged sample of this size, as given to `judge`; "
+            "default: the whole flagged pile."
+        ),
+    ] = None,
+    seed: Annotated[
+        int, typer.Option(help="Seed the flagged sample was drawn with.")
+    ] = DEFAULT_SEED,
+    force: Annotated[
+        bool,
+        typer.Option(
+            help="With --flagged-n: grade even though a review job for the pair has no "
+            "finished_at (only for a job whose process was killed)."
+        ),
+    ] = False,
 ) -> None:
     """Have the grader model judge whether each flagged rationale is a sound reading."""
+    from elusion.flows.evaluate import ReviewStillRunning
     from elusion.flows.grade import grade as grade_flow
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
-    typer.echo(
-        grade_flow(
+    try:
+        summary = grade_flow(
             criterion.stem,
             prompt_version=prompt_version,
             years=sorted(set(year)),
             review_model=review_model,
             threshold=threshold,
             max_run_usd=max_run_usd,
+            flagged_n=flagged_n,
+            seed=seed,
+            force=force,
         )
-    )
+    except ReviewStillRunning as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(summary)
 
 
 @app.command()
@@ -256,19 +334,128 @@ def label(
     prompt_version: Annotated[
         str,
         typer.Option(
-            help="Accepted for symmetry with judge/evaluate; unused here, since the judge "
-            "rows already carry the judge prompt version."
+            help="Review prompt version whose scores define the two piles; read only "
+            "when --year is given."
         ),
     ],
     n: Annotated[int, typer.Option(help="Paragraphs to label: n/2 flagged, n/2 discard.")] = 20,
-    seed: Annotated[int, typer.Option(help="Seed for the random pick.")] = DEFAULT_SEED,
+    seed: Annotated[
+        int,
+        typer.Option(help="Seed for the random pick and, with --year, for the draw."),
+    ] = DEFAULT_SEED,
+    year: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--year",
+            help="Pick from the draw of the population filed in these years, before the "
+            "judge has labeled it; give the same --flagged-n, --discard-n and --seed to "
+            "`judge` later. Without --year, pick among the judge's labels.",
+        ),
+    ] = None,
+    review_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
+    ] = None,
+    threshold: Annotated[int, typer.Option(help="Score at or above this is 'flagged'.")] = 3,
+    flagged_n: Annotated[
+        int | None,
+        typer.Option(help="Size of the flagged sample; default: the whole flagged pile."),
+    ] = None,
+    discard_n: Annotated[int, typer.Option(help="Size of the discard sample.")] = 200,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(help="Document id never to show (already seen); repeat for several."),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            help="With --year: draw even though a review job for the pair has no "
+            "finished_at (only for a job whose process was killed)."
+        ),
+    ] = False,
 ) -> None:
-    """Label judge-labeled paragraphs yourself, blind, for the human audit."""
+    """Label paragraphs yourself, blind: before the judge (--year) or as its audit."""
+    from elusion.evaluate.label import criterion_summary
     from elusion.evaluate.label import label as label_session
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
-    typer.echo(label_session(criterion.stem, n, seed))
+    candidates = None
+    if year:
+        from elusion.flows.evaluate import ReviewStillRunning, draw_gold
+
+        try:
+            candidates = draw_gold(
+                criterion.stem,
+                prompt_version,
+                years=sorted(set(year)),
+                threshold=threshold,
+                discard_n=discard_n,
+                seed=seed,
+                review_model=review_model,
+                flagged_n=flagged_n,
+                force=force,
+            )
+        except ReviewStillRunning as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from None
+    typer.echo(
+        label_session(
+            criterion.stem,
+            n,
+            seed,
+            candidates=candidates,
+            exclude=set(exclude or ()),
+            topic=criterion_summary(criterion),
+        )
+    )
+
+
+@app.command()
+def agreement(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+    judge_model: Annotated[
+        str | None,
+        typer.Option(help="Pinned judge model to compare with; default ELUSION_JUDGE_MODEL."),
+    ] = None,
+    judge_prompt: Annotated[
+        str | None,
+        typer.Option(
+            help="Judge prompt whose labels to compare, e.g. judge-v1; default: the "
+            "one the criterion uses."
+        ),
+    ] = None,
+) -> None:
+    """Count how often the judge matched your blind labels, and print each disagreement.
+
+    Reads the gold CSV only: no model call, nothing written. Run it after `judge
+    --only-labeled`, before the judge labels the rest.
+    """
+    import shutil
+
+    from elusion.config import settings
+    from elusion.corpora import corpus_for
+    from elusion.evaluate.agreement import compare, render
+    from elusion.evaluate.gold import gold_path
+    from elusion.review.corpus import load_texts
+    from elusion.review.prompt import judge_version
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    judge_model = judge_model or settings.judge_model
+    version = f"{criterion.stem}/{judge_prompt or judge_version(criterion.stem)}"
+    try:
+        comparison = compare(gold_path(criterion.stem, settings.data_dir), judge_model, version)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from None
+    texts = {}
+    if comparison.disagreements:
+        texts = load_texts(corpus_for(criterion.stem).text_dir(settings.data_dir))
+    width = shutil.get_terminal_size((80, 24)).columns
+    typer.echo(render(comparison, judge_model, texts, width, version), nl=False)
 
 
 @app.command()
@@ -291,6 +478,13 @@ def evaluate(
         str | None,
         typer.Option(help="Pinned review model of the pair; default ELUSION_REVIEW_MODEL."),
     ] = None,
+    flagged_n: Annotated[
+        int | None,
+        typer.Option(
+            help="Size of the flagged sample, as given to `judge`; default: the whole "
+            "flagged pile was labeled."
+        ),
+    ] = None,
 ) -> None:
     """Compute recall, precision, elusion and richness from the judge labels; write the report."""
     from elusion.flows.evaluate import MissingLabels  # MissingDiscardLabels subclasses it
@@ -307,6 +501,7 @@ def evaluate(
             seed=seed,
             discard_n=discard_n,
             review_model=review_model,
+            flagged_n=flagged_n,
         )
     except (MissingLabels, ValueError) as exc:
         # metrics raises ValueError("no labeled rows in the <pile> pile") for an empty

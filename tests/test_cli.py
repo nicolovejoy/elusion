@@ -92,6 +92,9 @@ def test_judge_command_passes_criterion_name_and_defaults(monkeypatch) -> None:
         "review_model": None,
         "max_run_usd": None,
         "force": False,
+        "flagged_n": None,
+        "only_human": False,
+        "seeds": False,
     }
     assert "judge summary" in result.output
 
@@ -137,10 +140,27 @@ def test_evaluate_command_passes_criterion_name_and_prints_path(monkeypatch) -> 
         "seed": DEFAULT_SEED,
         "review_model": None,
         "discard_n": 200,
+        "flagged_n": None,
     }
     assert "docs/reports/cloud-concentration-m-v2.md" in result.output
     assert f"mlflow run {'a' * 32}" in result.output
     assert "/#/experiments" in result.output
+
+
+def test_evaluate_cli_passes_flagged_n(monkeypatch, tmp_path) -> None:
+    from pathlib import Path
+
+    import elusion.flows.evaluate as mod
+    from elusion.flows.evaluate import EvalResult
+
+    seen = {}
+    monkeypatch.setattr(
+        mod, "evaluate", lambda criterion, **kw: seen.update(kw) or EvalResult(Path("r.md"), None)
+    )
+    args = ["evaluate", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--flagged-n", "400"])
+    assert r.exit_code == 0, r.output
+    assert seen["flagged_n"] == 400
 
 
 def _crit(tmp_path):
@@ -159,6 +179,40 @@ def test_judge_force_flag_is_passed(monkeypatch, tmp_path) -> None:
     )
     assert r.exit_code == 0, r.output
     assert seen["force"] is True
+
+
+def test_judge_cli_passes_flagged_n_and_only_labeled(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "judge", lambda criterion, **kw: seen.update(kw) or "ok")
+    args = ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--flagged-n", "400", "--only-labeled"])
+    assert r.exit_code == 0, r.output
+    assert (seen["flagged_n"], seen["only_human"]) == (400, True)
+
+
+def test_judge_cli_passes_seeds(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "judge", lambda criterion, **kw: seen.update(kw) or "ok")
+    args = ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--seeds"])
+    assert r.exit_code == 0, r.output
+    assert seen["seeds"] is True
+
+
+def test_judge_cli_rejects_seeds_with_only_labeled(monkeypatch, tmp_path) -> None:
+    import elusion.flows.evaluate as mod
+
+    called = []
+    monkeypatch.setattr(mod, "judge", lambda criterion, **kw: called.append(kw) or "ok")
+    args = ["judge", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--seeds", "--only-labeled"])
+    assert r.exit_code == 2
+    assert "--seeds" in r.output and "--only-labeled" in r.output
+    assert called == []
 
 
 def test_judge_refusal_exits_1_without_traceback(monkeypatch, tmp_path) -> None:
@@ -332,8 +386,40 @@ def test_promote_command_prints_version_alias_and_registry_url(monkeypatch) -> N
     assert (seen["name"], seen["alias"]) == ("other", "challenger")
 
 
+def test_grade_cli_passes_flagged_n_and_seed(monkeypatch, tmp_path) -> None:
+    import elusion.flows.grade as mod
+
+    seen = {}
+    monkeypatch.setattr(mod, "grade", lambda criterion, **kw: seen.update(kw) or "ok")
+    args = ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--flagged-n", "400", "--seed", "11"])
+    assert r.exit_code == 0, r.output
+    assert (seen["flagged_n"], seen["seed"]) == (400, 11)
+
+
+def test_grade_refusal_exits_1_without_traceback(monkeypatch, tmp_path) -> None:
+    import elusion.flows.grade as mod
+    from elusion.flows.evaluate import ReviewStillRunning
+
+    seen = {}
+
+    def flow(criterion, **kw):
+        seen.update(kw)
+        if not kw["force"]:
+            raise ReviewStillRunning("review job(s) job-abc still running")
+        return "ok"
+
+    monkeypatch.setattr(mod, "grade", flow)
+    args = ["grade", "--criterion", _crit(tmp_path), "--prompt-version", "v1", *YEARS]
+    r = CliRunner().invoke(app, [*args, "--flagged-n", "400"])
+    assert r.exit_code == 1 and "error: review job(s) job-abc" in r.stderr
+    assert "Traceback" not in r.output
+    assert CliRunner().invoke(app, [*args, "--flagged-n", "400", "--force"]).exit_code == 0
+
+
 def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
     import elusion.flows.grade as mod
+    from elusion.evaluate.gold import DEFAULT_SEED
 
     seen = {}
     monkeypatch.setattr(
@@ -350,6 +436,9 @@ def test_grade_command_passes_options_through(monkeypatch, tmp_path) -> None:
         "review_model": None,
         "threshold": 3,
         "max_run_usd": None,
+        "flagged_n": None,
+        "seed": DEFAULT_SEED,
+        "force": False,
     }
     assert "grade ok" in r.output
     seen.clear()
@@ -421,3 +510,22 @@ def test_a_year_given_twice_counts_once(monkeypatch, tmp_path) -> None:
     r = CliRunner().invoke(app, [*args, "--year", "2020", "--year", "2020"])
     assert r.exit_code == 0, r.output
     assert seen["years"] == [2020]
+
+
+def test_harvest_command_runs_the_flow_and_prints_its_summary(monkeypatch) -> None:
+    import elusion.flows.harvest as mod
+
+    seen = {}
+
+    def fake_flow(**kw):
+        seen.update(kw)
+        return "harvest summary"
+
+    monkeypatch.setattr(mod, "harvest", fake_flow)
+    result = CliRunner().invoke(app, ["harvest", "--max-pages", "1"])
+    assert result.exit_code == 0, result.output
+    assert seen == {"max_pages": 1, "seeds_only": False}
+    assert "harvest summary" in result.output
+
+    assert CliRunner().invoke(app, ["harvest", "--seeds-only"]).exit_code == 0
+    assert seen == {"max_pages": None, "seeds_only": True}

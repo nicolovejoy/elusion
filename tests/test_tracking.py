@@ -155,3 +155,9 @@ def test_run_params_names_the_filing_years(report):
     assert run_params(report, "anthropic", Path("r.md"))["years"] == "2018,2019"
     one = make_report(years=(2020,))
     assert run_params(one, "openai", Path("r.md"))["years"] == "2020"
+
+
+def test_run_params_names_the_flagged_sample_only_when_there_is_one(report):
+    assert "flagged_n" not in run_params(report, "anthropic", Path("r.md"))
+    sampled = make_report(flagged_n=400)
+    assert run_params(sampled, "openai", Path("r.md"))["flagged_n"] == "400"

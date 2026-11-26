@@ -61,3 +61,51 @@ def test_loads_v3_with_exact_version_string_and_gap_rules() -> None:
         assert phrase in prompt.text
     assert "Generic IT outsourcing" in prompt.text  # unique to v3
     assert load_prompt("cloud-concentration", "v2").text != prompt.text
+
+
+def test_the_literature_criterion_has_its_three_prompts_and_its_file() -> None:
+    from pathlib import Path
+
+    from elusion.corpora import OPENALEX, corpus_for
+
+    for version, field in (
+        ("v1", "- score:"),
+        ("judge-v1", "- relevant:"),
+        ("grade-v1", "- sound:"),
+    ):
+        prompt = load_prompt("auditable-decisions", version)
+        assert prompt.version == f"auditable-decisions/{version}"
+        assert field in prompt.text and "- rationale:" in prompt.text
+        assert "title and abstract" in prompt.text
+    assert "- quote:" in load_prompt("auditable-decisions", "v1").text
+    assert corpus_for("auditable-decisions") is OPENALEX
+    assert (Path(__file__).parent.parent / "criteria" / "auditable-decisions.md").is_file()
+
+
+def test_judge_version_is_the_chosen_one_else_the_highest_on_disk(tmp_path, monkeypatch) -> None:
+    import elusion.review.prompt as mod
+    from elusion.review.prompt import judge_version
+
+    assert judge_version("cloud-concentration") == "judge-v1"
+    assert judge_version("auditable-decisions") == "judge-v2"  # chosen; judge-v3 exists
+    (tmp_path / "x").mkdir()
+    for n in (1, 2, 10):
+        (tmp_path / "x" / f"judge-v{n}.md").write_text("p")
+    monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)
+    assert judge_version("x") == "judge-v10"
+    assert judge_version("no-such-criterion") == "judge-v1"
+
+
+def test_judge_v2_of_the_literature_criterion_keeps_theory_and_the_answer_format() -> None:
+    prompt = load_prompt("auditable-decisions", "judge-v2")
+    assert prompt.version == "auditable-decisions/judge-v2"
+    for phrase in ("mental model", "Theory,", "in passing", "If you are unsure, keep"):
+        assert phrase in prompt.text
+    assert "- relevant:" in prompt.text and "- rationale:" in prompt.text
+
+
+def test_judge_v3_is_judge_v2_without_the_keep_if_unsure_clause() -> None:
+    v2 = load_prompt("auditable-decisions", "judge-v2").text
+    v3 = load_prompt("auditable-decisions", "judge-v3").text
+    assert v3 == v2.replace("If you are unsure, keep the paper: answer relevant.\n\n", "")
+    assert "unsure" not in v3

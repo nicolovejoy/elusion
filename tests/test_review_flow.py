@@ -524,3 +524,77 @@ def test_job_row_records_the_configured_run_env(env, monkeypatch) -> None:
     monkeypatch.setattr(mod, "settings", dataclasses.replace(settings, run_env="aks-test"))
     s = review("cloud-concentration", sample=2, provider=FakeProvider(), ids=ListIdSource(IDS))
     assert get_job(engine, s.job_id)["run_env"] == "aks-test"
+
+
+@pytest.mark.parametrize(
+    ("criterion", "topic", "subdir"),
+    [
+        ("cloud-concentration", "documents.ingested", "corpus"),
+        ("auditable-decisions", "abstracts.ingested", "abstracts"),
+    ],
+)
+def test_a_review_reads_the_topic_and_texts_of_its_own_corpus(
+    env, monkeypatch, criterion, topic, subdir
+) -> None:
+    import elusion.flows.review as mod
+    from elusion.flows.review import review
+
+    seen = {}
+
+    def fake_source(bootstrap, group, topic):  # stands in for the Kafka consumer
+        seen["topic"] = topic
+        return ListIdSource(IDS)
+
+    def fake_load(text_dir):
+        seen["dir"] = text_dir
+        return dict(TEXTS)
+
+    monkeypatch.setattr(mod, "KafkaIdSource", fake_source)
+    monkeypatch.setattr(mod, "load_texts", fake_load)
+    s = review(criterion, sample=2, provider=FakeProvider())
+    assert s.docs_scored == 2
+    assert seen == {"topic": topic, "dir": settings.data_dir / subdir}
+
+
+@pytest.mark.parametrize(
+    ("criterion", "foreign_subdir"),
+    [("auditable-decisions", "corpus"), ("cloud-concentration", "abstracts")],
+)
+def test_a_document_of_the_other_corpus_is_never_sent_to_the_model(
+    env, monkeypatch, criterion, foreign_subdir
+) -> None:
+    """The id of a document from the other corpus (say, published to the wrong topic) has
+    no text in this corpus's directory, so the run fails before any call is paid for."""
+    import elusion.flows.review as mod
+    from elusion.flows.review import review
+
+    engine, version = env
+    by_dir = {settings.data_dir / foreign_subdir: dict(TEXTS)}
+    monkeypatch.setattr(mod, "load_texts", lambda text_dir: dict(by_dir.get(text_dir, {})))
+    provider = FakeProvider()
+    with pytest.raises(KeyError, match="not in the Parquet corpus"):
+        review(criterion, sample=1, provider=provider, ids=ListIdSource(IDS[:1]))
+    assert provider.calls == []
+    with engine.connect() as conn:
+        n = conn.execute(
+            sa.select(sa.func.count()).select_from(scores).where(scores.c.prompt_version == version)
+        ).scalar_one()
+    assert n == 0
+
+
+def test_a_criterion_with_no_corpus_starts_no_job(env) -> None:
+    from elusion.corpora import UnknownCriterion
+    from elusion.flows.review import review
+
+    engine, version = env
+    provider = FakeProvider()
+    with pytest.raises(UnknownCriterion, match="'unfiled-criterion'"):
+        review("unfiled-criterion", sample=1, provider=provider, ids=ListIdSource(IDS))
+    assert provider.calls == []
+    with engine.connect() as conn:
+        n = conn.execute(
+            sa.select(sa.func.count())
+            .select_from(review_jobs)
+            .where(review_jobs.c.prompt_version == version)
+        ).scalar_one()
+    assert n == 0

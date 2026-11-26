@@ -220,3 +220,109 @@ def test_no_verdicts_is_an_error(env, monkeypatch) -> None:
     path, _ = env
     with pytest.raises(RuntimeError, match=r"no flagged scores for \(rev, c/v2\)"):
         mod.grade("c", "v2", years=[2020], review_model="rev", grader=FakeGrader(), grades_csv=path)
+
+
+def test_grade_reads_the_texts_of_the_criterions_corpus(env, monkeypatch) -> None:
+    import elusion.flows.grade as mod
+    from elusion.config import settings
+    from elusion.flows.grade import grade
+
+    path, texts = env
+    seen = []
+    monkeypatch.setattr(mod, "load_texts", lambda text_dir: seen.append(text_dir) or dict(texts))
+    for criterion in ("c", "auditable-decisions"):
+        grade(
+            criterion, "v2", years=[2018, 2019], review_model="rev",
+            verdicts=verdicts_of(2), grader=FakeGrader(),
+            grades_csv=path.with_name(f"{criterion}.csv"),
+        )  # fmt: skip
+    assert seen == [settings.data_dir / "corpus", settings.data_dir / "abstracts"]
+
+
+@pytest.fixture
+def pair(monkeypatch):
+    """The Postgres readers stubbed: 10 flagged verdicts and 30 discard scores."""
+    import elusion.flows.grade as mod
+
+    verdicts = verdicts_of(10)
+    scores = {d: 3 for d in verdicts} | {f"d{i:03d}": 0 for i in range(10, 40)}
+    monkeypatch.setattr(mod.db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(mod, "verdicts_for", lambda *a: dict(verdicts))
+    monkeypatch.setattr(mod, "scores_for", lambda engine, model, version, years: scores)
+    monkeypatch.setattr(mod, "jobs_summary", lambda *a: {"unfinished": False, "unfinished_ids": []})
+    return scores
+
+
+def test_flagged_limit_grades_only_the_drawn_ids(env, pair) -> None:
+    import elusion.flows.grade as mod
+    from elusion.evaluate.gold import split_piles
+
+    path, _ = env
+    s = mod.grade(
+        "c", "v2", years=[2018], grader=FakeGrader(), grades_csv=path, flagged_n=4, seed=7
+    )
+    drawn = {d for d, p in split_piles(pair, 3, 0, 7, flagged_n=4) if p == "flagged"}
+    assert len(drawn) == 4 and s.graded == 4
+    assert {r.doc_id for r in read_rows(path)} == drawn
+
+
+def test_flagged_limit_draws_the_ids_the_judge_draws(env, pair) -> None:
+    """The discard sample size must not change which flagged ids are graded."""
+    import elusion.flows.grade as mod
+    from elusion.evaluate.gold import DEFAULT_SEED, split_piles
+
+    path, _ = env
+    mod.grade("c", "v2", years=[2018], grader=FakeGrader(), grades_csv=path, flagged_n=4)
+    judged = {d for d, p in split_piles(pair, 3, 20, DEFAULT_SEED, flagged_n=4) if p == "flagged"}
+    assert {r.doc_id for r in read_rows(path)} == judged
+
+
+def test_no_flagged_limit_grades_every_flagged_verdict(env, pair) -> None:
+    import elusion.flows.grade as mod
+
+    path, _ = env
+    s = mod.grade("c", "v2", years=[2018], grader=FakeGrader(), grades_csv=path)
+    assert s.graded == 10
+
+
+def test_verdicts_passed_in_are_not_narrowed(env) -> None:
+    path, _ = env
+    assert run(path, verdicts_of(6), FakeGrader(), flagged_n=2).graded == 6
+
+
+@pytest.fixture
+def unfinished(pair, monkeypatch):
+    import elusion.flows.grade as mod
+
+    seen = []
+    monkeypatch.setattr(
+        mod,
+        "jobs_summary",
+        lambda engine, model, version, years: (
+            seen.append(years) or {"unfinished": True, "unfinished_ids": ["job-abc"]}
+        ),
+    )
+    return seen
+
+
+def test_flagged_limit_refuses_while_a_review_job_is_unfinished(env, unfinished) -> None:
+    """The sample depends on the whole flagged pile: drawn early, it grades ids that
+    fall out of the final sample."""
+    import elusion.flows.grade as mod
+    from elusion.flows.evaluate import ReviewStillRunning
+
+    path, _ = env
+    g = FakeGrader()
+    with pytest.raises(ReviewStillRunning, match=r"job-abc.*--force"):
+        mod.grade("c", "v2", years=[2018], grader=g, grades_csv=path, flagged_n=4)
+    assert g.calls == [] and read_rows(path) == []
+    s = mod.grade("c", "v2", years=[2018], grader=g, grades_csv=path, flagged_n=4, force=True)
+    assert s.graded == 4
+
+
+def test_without_a_flagged_limit_an_unfinished_review_is_not_looked_at(env, unfinished) -> None:
+    import elusion.flows.grade as mod
+
+    path, _ = env
+    assert mod.grade("c", "v2", years=[2018], grader=FakeGrader(), grades_csv=path).graded == 10
+    assert unfinished == []

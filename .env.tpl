@@ -20,6 +20,7 @@ ELUSION_RUN_ENV=local
 # Collection
 ELUSION_DATA_DIR=data
 ELUSION_SEC_USER_AGENT=
+OPENALEX_API_KEY=op://dev-secrets/OpenAlex elusion/credential   # phase 7 harvest
 
 # Local services (match compose.yaml)
 DATABASE_URL=postgresql://elusion:elusion@localhost:5433/elusion
