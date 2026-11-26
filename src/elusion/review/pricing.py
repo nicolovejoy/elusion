@@ -15,8 +15,11 @@ from __future__ import annotations
 PRICES: dict[str, dict[str, float]] = {
     "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_write": 0.125, "cache_read": 0.01},
     "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cache_write": 5.00, "cache_read": 0.20},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_read": 0.10},
     # OpenAI caches prompt prefixes automatically and has no cache-write charge: cache_write is 0.
     "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_write": 0.0, "cache_read": 0.01},
+    # An embedding model bills input tokens only.
+    "text-embedding-3-small": {"input": 0.02, "output": 0.0, "cache_write": 0.0, "cache_read": 0.0},
 }
 
 
