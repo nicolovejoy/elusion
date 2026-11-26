@@ -256,3 +256,106 @@ def test_with_a_flagged_sample_the_prose_says_sample_not_pile() -> None:
     assert "read each flagged paragraph with the reviewer's" in plain
     assert "over the flagged paragraphs:" in plain
     assert "Companies of the flagged paragraphs the judge labeled relevant" in plain
+
+
+# --- A report over the abstracts corpus (phase 7, task 6) ---
+
+
+def make_literature(**kw):
+    from elusion.evaluate.report import Identified, Literature
+
+    base = dict(
+        identified=[
+            Identified("search", '"citation screening"', "stemmed", 131),
+            Identified("search", '"audit trail"', "stemmed", 6162),
+            Identified("citation", "Raji and others 2020 (W3001807593)", None, 75),
+        ],
+        distinct_works=6300,
+        seeds=75,
+        seeds_flagged=40,
+        seeds_judged=40,
+        seeds_relevant=30,
+        harvest_recall=Estimate(0.2, 0.077, 0.386, 6, 30),
+        works=[("W1", "A paper about audit logs"), ("W2", "")],
+    )
+    return Literature(**{**base, **kw})
+
+
+def lit_report(**kw) -> RunReport:
+    return make_report(
+        criterion="auditable-decisions",
+        years=(2025, 2026),
+        filed=6300,
+        population=6290,
+        n_flagged=2800,
+        n_discard=3490,
+        literature=make_literature(**kw),
+    )
+
+
+def test_a_ten_k_report_has_no_literature_sections() -> None:
+    md = render(make_report())
+    assert "## Records" not in md
+    assert "## Harvest recall" not in md
+    assert "## Vocabulary" not in md
+    assert "## Works kept" not in md
+    assert "abstract" not in md
+
+
+def test_literature_report_counts_records_at_each_stage() -> None:
+    md = render(lit_report())
+    assert "## Records (PRISMA-style counts)" in md
+    assert '- search, stemmed, `"citation screening"`: 131' in md
+    assert "- citation, works citing Raji and others 2020 (W3001807593): 75" in md
+    assert "- records identified, all routes: 6368" in md
+    assert "- duplicates removed: 68" in md
+    assert "- distinct works: 6300" in md
+    assert "- screened: 6290" in md
+    assert "- not screened: 10" in md
+    assert "- excluded (score < 2): 3490" in md
+    assert "- included (score >= 2): 2800" in md
+
+
+def test_literature_report_gives_harvest_recall_with_its_limit() -> None:
+    md = render(lit_report())
+    assert "## Harvest recall" in md
+    assert "- harvest recall: 0.200 [0.077, 0.386] (k/n = 6/30)" in md
+    assert "- citation seeds drawn: 75" in md
+    assert "- of those, flagged by the review: 40" in md
+    assert "- of those, labeled relevant by the judge: 30" in md
+    assert "never judged" in md
+
+
+def test_literature_report_says_when_no_seed_is_relevant() -> None:
+    md = render(lit_report(seeds_relevant=0, harvest_recall=None))
+    assert "No citation seed was both flagged and labeled relevant" in md
+
+
+def test_literature_report_says_when_flagged_seeds_are_unjudged() -> None:
+    md = render(lit_report(seeds_judged=35))
+    assert "5 flagged seeds have no judge label" in md
+    assert "--seeds" in md
+
+
+def test_literature_report_lists_works_not_companies() -> None:
+    md = render(lit_report())
+    assert "## Works kept" in md
+    assert "## Companies found" not in md
+    assert "- W1: A paper about audit logs" in md
+    assert "- W2: (no title)" in md
+
+
+def test_literature_report_speaks_of_abstracts_and_publication_years() -> None:
+    md = render(lit_report())
+    assert "- publication years: 2025-2026" in md
+    assert "Every abstract published in 2025-2026" in md
+    assert "paragraph" not in md
+    assert "filing" not in md
+    assert "filed" not in md
+
+
+def test_literature_report_maps_the_vocabulary() -> None:
+    md = render(lit_report())
+    assert "## Vocabulary" in md
+    assert "| flagged | included | responsive |" in md
+    assert "| discard pile | excluded | null set |" in md

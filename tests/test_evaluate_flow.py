@@ -578,3 +578,79 @@ def test_grades_outside_the_flagged_draw_are_not_counted(sampled) -> None:
     )
     report = sampled(flagged_n=5)
     assert (report.rationale_sound.k, report.rationale_sound.n) == (5, 5)
+
+
+# --- A criterion over the abstracts corpus: the literature sections (phase 7, task 6) ---
+
+
+@pytest.fixture
+def literature(sampled, monkeypatch):
+    """`sampled`, with the criterion reviewed over the abstracts corpus.
+
+    Every doc dNN is work W-dNN. The citation seeds are OUTSIDE (flagged, judged
+    relevant, also found by a search term), DRAWN[0] (flagged, judged relevant, found
+    by no term), DRAWN[4] (flagged, judged not relevant), one more flagged doc the judge
+    never read, g00 (discarded) and a work that was never stored.
+    """
+    import elusion.flows.evaluate as mod
+    from elusion.collect.custody import QueryCount, Seed
+    from elusion.corpora import OPENALEX
+
+    unjudged = sorted(set(BIG) - set(DRAWN) - {OUTSIDE} - {d for d in BIG if d[0] == "g"})[0]
+    seeds = {
+        f"W-{OUTSIDE}": Seed(("W3001807593",), True),
+        f"W-{DRAWN[0]}": Seed(("W3001807593",), False),
+        f"W-{DRAWN[4]}": Seed(("W3001807593",), True),
+        f"W-{unjudged}": Seed(("W3001807593",), True),
+        "W-g00": Seed(("W3001807593",), True),
+        "W-gone": Seed(("W3001807593",), False),
+    }
+    monkeypatch.setattr(mod, "corpus_for", lambda criterion: OPENALEX)
+    monkeypatch.setattr(mod, "seed_works", lambda engine: seeds)
+    monkeypatch.setattr(mod, "distinct_works", lambda engine: 37)
+    monkeypatch.setattr(
+        mod,
+        "works_per_query",
+        lambda engine: [
+            QueryCount("search", '"audit trail"', "stemmed", 36),
+            QueryCount("citation", "W3001807593", None, 6),
+            QueryCount("citation", "W-unknown-anchor", None, 1),
+        ],
+    )
+    monkeypatch.setattr(mod, "doc_ids_by_work", lambda d: {f"W-{x}": {x} for x in BIG})
+    monkeypatch.setattr(mod, "load_texts", lambda d: {x: f"Title of {x}\n\nBody." for x in BIG})
+    return sampled
+
+
+def test_literature_harvest_recall_counts_relevant_seeds_a_term_also_found(literature) -> None:
+    lit = literature(flagged_n=5).literature
+    assert (lit.seeds, lit.seeds_flagged, lit.seeds_judged, lit.seeds_relevant) == (6, 4, 3, 2)
+    assert lit.harvest_recall == metrics.proportion(1, 2)
+
+
+def test_literature_identified_names_an_anchor_by_its_label(literature) -> None:
+    lit = literature(flagged_n=5).literature
+    assert [(i.route, i.query, i.form, i.works) for i in lit.identified] == [
+        ("search", '"audit trail"', "stemmed", 36),
+        ("citation", "Raji and others 2020 (W3001807593)", None, 6),
+        ("citation", "W-unknown-anchor", None, 1),
+    ]
+    assert lit.distinct_works == 37
+
+
+def test_literature_works_are_the_relevant_of_the_flagged_sample(literature) -> None:
+    lit = literature(flagged_n=5).literature
+    assert lit.works == [(f"W-{d}", f"Title of {d}") for d in DRAWN[:3]]
+
+
+def test_literature_report_file_has_the_sections(literature) -> None:
+    literature(flagged_n=5)
+    md = next((literature.seen and literature.data_dir).parent.glob("reports/*.md")).read_text()
+    assert "## Records (PRISMA-style counts)" in md
+    assert "## Harvest recall" in md
+    assert "## Works kept" in md
+    assert "## Companies found" not in md
+
+
+def test_edgar_report_has_no_literature(sampled) -> None:
+    assert sampled(flagged_n=5).literature is None

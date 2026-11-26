@@ -119,6 +119,14 @@ def works_per_query(engine: Engine) -> list[QueryCount]:
         return [QueryCount(*row) for row in conn.execute(stmt)]
 
 
+def distinct_works(engine: Engine) -> int:
+    """Works identified by any query, each counted once: what is left of the hits once
+    duplicates are removed."""
+    with engine.connect() as conn:
+        stmt = sa.select(sa.func.count(sa.distinct(harvest_custody.c.work_id)))
+        return conn.execute(stmt).scalar_one()
+
+
 @dataclass(frozen=True)
 class Seed:
     anchors: tuple[str, ...]  # the anchors whose sample drew this work, sorted

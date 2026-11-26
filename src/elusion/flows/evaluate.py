@@ -47,8 +47,9 @@ from prefect.cache_policies import NO_CACHE
 from sqlalchemy.engine import Engine
 
 from elusion.collect.abstracts import doc_ids_by_work
-from elusion.collect.custody import seed_works
+from elusion.collect.custody import Seed, distinct_works, seed_works, works_per_query
 from elusion.collect.db import company_counts, count_documents
+from elusion.collect.terms import ANCHORS
 from elusion.config import settings
 from elusion.corpora import OPENALEX, corpus_for
 from elusion.evaluate import metrics
@@ -70,7 +71,7 @@ from elusion.evaluate.gold import (
     with_seeds,
 )
 from elusion.evaluate.grades import grade_cost_usd, grade_runs_path, grades_path, rows_for
-from elusion.evaluate.report import RunReport, render, years_label
+from elusion.evaluate.report import Identified, Literature, RunReport, render, years_label
 from elusion.evaluate.tracking import log_run
 from elusion.flows.review import (
     PROBE_DOCS,
@@ -392,6 +393,62 @@ def report_date(now: datetime) -> str:
     return now.astimezone(ZoneInfo("America/Los_Angeles")).date().isoformat()
 
 
+def _literature(
+    engine: Engine,
+    abstracts_dir: Path,
+    scores: dict[str, int],
+    threshold: int,
+    judged: dict[str, GoldRow],
+    relevant: list[str],
+) -> Literature:
+    """What the report of a criterion over the abstracts corpus adds (report.Literature).
+
+    The record counts are queries over the custody table. Harvest recall is counted by
+    *work*: a seed is flagged, judged or relevant if any document stored for it is. The
+    judge's labels on seeds outside the flagged draw are read here and nowhere else in
+    the report, so precision stays a random sample. `relevant` are the documents listed
+    as kept: those of the flagged sample the judge labeled relevant.
+    """
+    by_work = doc_ids_by_work(abstracts_dir)
+    work_of = {d: w for w, docs in by_work.items() for d in docs}
+    anchors = {a.work_id: a.label for a in ANCHORS}
+    identified = [
+        Identified(
+            q.route,
+            f"{anchors[q.query]} ({q.query})" if q.query in anchors else q.query,
+            q.search_form,
+            q.works,
+        )
+        for q in works_per_query(engine)
+    ]
+    seeds: dict[str, Seed] = seed_works(engine)
+    flagged_seeds = judged_seeds = 0
+    found: list[bool] = []  # one per relevant seed: did a search term return it too
+    for work, seed in seeds.items():
+        docs = [d for d in by_work.get(work, ()) if scores.get(d, -1) >= threshold]
+        if not docs:
+            continue
+        flagged_seeds += 1
+        labels = [judged[d].label for d in docs if d in judged]
+        if not labels:
+            continue
+        judged_seeds += 1
+        if any(labels):
+            found.append(seed.by_search)
+    titles = load_texts(abstracts_dir)
+    return Literature(
+        identified=identified,
+        distinct_works=distinct_works(engine),
+        seeds=len(seeds),
+        seeds_flagged=flagged_seeds,
+        seeds_judged=judged_seeds,
+        seeds_relevant=len(found),
+        harvest_recall=metrics.proportion(sum(found), len(found)) if found else None,
+        # The stored text is the title, a blank line and the abstract.
+        works=[(work_of.get(d, d), titles.get(d, "").split("\n", 1)[0].strip()) for d in relevant],
+    )
+
+
 @flow(name="evaluate")
 def evaluate(
     criterion: str,
@@ -502,6 +559,11 @@ def evaluate(
 
     wall_clock = timedelta(seconds=jobs["busy_s"]) if jobs["jobs"] else None
     relevant = [r.doc_id for r in flagged_rows if r.label == 1]
+    corpus = corpus_for(criterion)
+    literature = None
+    if corpus is OPENALEX:
+        abstracts_dir = corpus.text_dir(data_dir or settings.data_dir)
+        literature = _literature(engine, abstracts_dir, scores, threshold, judged, relevant)
 
     # Rationale grades for the pair's flagged docs by the same model that judged. They
     # join the judge's labels here, in memory; neither file feeds the other.
@@ -541,7 +603,7 @@ def evaluate(
         precision_by_score=precision_by_score,
         threshold=threshold,
         years=tuple(years),
-        filed=sum(count_documents(engine, y, corpus_for(criterion).name) for y in years),
+        filed=sum(count_documents(engine, y, corpus.name) for y in years),
         population=len(scores),
         n_flagged=n_flagged,
         n_discard=n_discard,
@@ -556,7 +618,8 @@ def evaluate(
         review_wall_clock=wall_clock,
         review_unfinished=jobs["unfinished"],
         review_envs=jobs["run_envs"],
-        companies=company_counts(engine, relevant),
+        companies=[] if literature else company_counts(engine, relevant),
+        literature=literature,
         **graded,
     )
     path = report_path(reports_dir, criterion, review_model, prompt_version, years)
