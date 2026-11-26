@@ -3,7 +3,7 @@
 # are unchanged, so other containers still reach postgres:5432 and mlflow:5000.
 services:
   postgres:
-    image: postgres:16.15
+    image: pgvector/pgvector:0.8.2-pg16-trixie # Postgres 16 with the pgvector extension, same Debian release as postgres:16.15 so text ordering is unchanged
     environment:
       POSTGRES_USER: elusion
       POSTGRES_PASSWORD: elusion
