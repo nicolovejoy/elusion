@@ -64,7 +64,7 @@ Work in order. A phase is done when every box is ticked and `docs/notes/phase-N.
 - [x] One real review run on the cluster against the 20k sample; report notes the cluster name
 - [x] `terraform destroy` the same day; confirm the bill ($0.93, confirmed 2026-11-20)
 - [ ] Optional: Pulumi (Python) rewrite of the Terraform module; note the differences
-- [ ] Note: AWS-to-Azure mapping; what Helm did for us; what it cost
+- [x] Note: AWS-to-Azure mapping; what Helm did for us; what it cost
 
 ## Phase 7: The literature matter (after phase 6)
 
@@ -72,7 +72,7 @@ A second corpus, about the project's own subject: recent research on AI agents m
 decisions that must be auditable. Added 2026-11-15 (see `docs/DECISIONS.md`). This list is
 a sketch; it is refined when the phase 7 spec is written, after phase 6 closes.
 
-- [ ] Collector for OpenAlex abstracts from a recorded list of broad search terms; each abstract stored with its OpenAlex work id, the harvest query, the harvest date and a content hash (the chain-of-custody record)
+- [x] Collector for OpenAlex abstracts from a recorded list of broad search terms; each abstract stored with its OpenAlex work id, the harvest query, the harvest date and a content hash (the chain-of-custody record)
 - [ ] Harvest recall estimated on its own: a list of known on-topic papers checked against what was harvested. Elusion measures the screen, not the harvest; a paper the query never returned is not in the null set
 - [ ] A screening criterion and prompt v1; review, judge and evaluate run unchanged
 - [ ] Report: the four metrics with intervals, plus a PRISMA-style count of records found, screened, excluded and kept
