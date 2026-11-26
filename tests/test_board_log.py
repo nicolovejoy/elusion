@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from elusion.board import log
 
@@ -138,6 +138,18 @@ def test_an_audit_allows_skips_then_one_verdict(board_engine, concept) -> None:
         "skip",
         "holds",
     ]
+
+
+def test_the_database_refuses_a_second_verdict_that_bypasses_add_audit(
+    board_engine, concept
+) -> None:
+    doc = "f" * 16
+    log.add_audit(board_engine, concept, 1, doc, "holds")
+    row = dict(kind="audit", concept=concept, concept_version=1, doc_id=doc, actor="owner")
+    with pytest.raises(IntegrityError), board_engine.begin() as conn:
+        conn.execute(sa.insert(log.concept_log).values(verdict="does_not_hold", **row))
+    with board_engine.begin() as conn:  # skips are not verdicts: still allowed
+        conn.execute(sa.insert(log.concept_log).values(verdict="skip", **row))
 
 
 def test_a_decision_needs_a_reason(board_engine, concept) -> None:

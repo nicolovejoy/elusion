@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Concept board{% endblock %}</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf7; --fg: #1d1c1a; --muted: #6a675f; --rule: #d9d5cb;
+    --card: #ffffff; --accent: #1f5f8b; --mark: #ffe58a; --warn: #8a3b12;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --fg: #e8e6e1; --muted: #9a978f; --rule: #34363b;
+      --card: #1e2024; --accent: #7fb6dd; --mark: #6b5a12; --warn: #e0a070;
+    }
+  }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 1.05rem/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 4rem; }
+  nav { display: flex; gap: 1.2rem; padding-bottom: .6rem; border-bottom: 1px solid var(--rule); }
+  nav a { color: var(--accent); text-decoration: none; }
+  nav a:hover { text-decoration: underline; }
+  h1 { font-size: 1.35rem; line-height: 1.3; margin: 1.4rem 0 .4rem; }
+  .muted { color: var(--muted); font-size: .95rem; }
+  .wording { border-left: 3px solid var(--accent); padding-left: .8rem; white-space: pre-line; }
+  .abstract { background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+    padding: .8rem 1rem; white-space: pre-line; }
+  mark { background: var(--mark); color: inherit; padding: 0 .1em; }
+  .buttons { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
+  .buttons form { margin: 0; }
+  button { font: inherit; padding: .5rem 1.1rem; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--card); color: var(--accent); }
+  button:hover { background: var(--accent); color: var(--bg); }
+  textarea { width: 100%; box-sizing: border-box; font: inherit; padding: .5rem;
+    background: var(--card); color: var(--fg); border: 1px solid var(--rule); border-radius: 6px; }
+  label { display: block; margin-top: .8rem; }
+  dl { margin: .5rem 0; } dt { color: var(--muted); font-size: .95rem; margin-top: .6rem; }
+  dd { margin: 0; }
+  .figure { margin: .8rem 0; } .figure strong { display: block; }
+</style>
+</head>
+<body>
+<main>
+  <nav>
+    <a href="{{ url_for('audit_page') }}">Audit</a>
+    <a href="{{ url_for('disagreements_page') }}">Disagreements</a>
+    <a href="{{ url_for('summary_page') }}">Summary</a>
+  </nav>
+  {% block body %}{% endblock %}
+</main>
+</body>
+</html>

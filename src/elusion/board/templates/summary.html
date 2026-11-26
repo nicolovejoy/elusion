@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Summary{% endblock %}
+{% block body %}
+<h1>Summary</h1>
+{% if not finished %}
+<p>{{ audited }} of {{ n }} papers have your verdict. The figures show once every paper has one.</p>
+<p><a href="{{ url_for('audit_page') }}">Back to the audit</a></p>
+{% else %}
+<div class="figure">
+  <strong>Agreement between you and the reader, before you saw its answers</strong>
+  {% if s.agreement %}{{ s.agreed }} of {{ s.compared }} papers
+  ({{ s.agreement.point | pct }}; 95% interval {{ s.agreement.low | pct }} to {{ s.agreement.high | pct }})
+  {% else %}nothing could be compared{% endif %}
+</div>
+<div class="figure">
+  <strong>Precision of the word search: papers that hold the concept, after your decisions</strong>
+  {% if s.precision %}{{ s.holds_final }} of {{ s.audited }} papers
+  ({{ s.precision.point | pct }}; 95% interval {{ s.precision.low | pct }} to {{ s.precision.high | pct }})
+  {% else %}no papers audited{% endif %}
+</div>
+<div class="figure">
+  <strong>Readings that failed</strong>
+  {{ s.failed_readings }} {{ "paper" if s.failed_readings == 1 else "papers" }}
+</div>
+<div class="figure">
+  <strong>Papers held back (kept for evaluation)</strong>
+  {{ s.held_back }} {{ "paper" if s.held_back == 1 else "papers" }}
+</div>
+<div class="figure">
+  <strong>Disagreements not yet settled</strong>
+  {{ s.unsettled }} {{ "disagreement" if s.unsettled == 1 else "disagreements" }} not yet settled
+  {% if s.unsettled %}<a href="{{ url_for('disagreements_page') }}">Settle them</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

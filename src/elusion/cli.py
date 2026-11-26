@@ -112,6 +112,49 @@ def first_read(
 
 
 @app.command()
+def board(
+    concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
+    port: Annotated[int, typer.Option(help="The local port to serve on.")] = 8010,
+    release_gold: Annotated[
+        bool,
+        typer.Option(
+            "--release-gold",
+            help="Also serve the papers held back as the criterion's gold set.",
+        ),
+    ] = False,
+) -> None:
+    """Serve the blind audit page for CONCEPT on this machine."""
+    from elusion.board import audit, log
+    from elusion.board.batch import held_back_ids, load_papers
+    from elusion.board.web import create_app
+    from elusion.collect.db import make_engine
+    from elusion.config import settings
+    from elusion.corpora import OPENALEX
+    from elusion.evaluate.gold import gold_path
+
+    engine = make_engine(settings.database_url)
+    log.ensure_schema(engine)
+    try:
+        entry = log.current_concept(engine, concept)
+        audit.reader_of(engine, concept, entry.concept_version)
+    except (log.UnknownConcept, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    read = {e.doc_id for e in log.entries(engine, concept, entry.concept_version, kind="reading")}
+    papers = {
+        p.doc_id: p for p in load_papers(OPENALEX.text_dir(settings.data_dir)) if p.doc_id in read
+    }
+    criterion = entry.detail.get("criterion")
+    held_back = set()
+    if criterion and not release_gold:
+        held_back = held_back_ids(gold_path(criterion, settings.data_dir))
+    n = len(held_back & papers.keys())
+    typer.echo(f"http://localhost:{port}")
+    typer.echo(f"{n} {'paper' if n == 1 else 'papers'} held back")
+    create_app(engine, concept, papers, held_back).run(host="127.0.0.1", port=port, debug=False)
+
+
+@app.command()
 def review(
     criterion: Annotated[
         Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")

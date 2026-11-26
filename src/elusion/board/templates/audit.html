@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Audit{% endblock %}
+{% block body %}
+<p class="muted">Paper {{ k }} of {{ n }}</p>
+<p class="wording">{{ wording }}</p>
+<h1>{{ paper.title }}</h1>
+<p class="abstract">{{ paper.text }}</p>
+<div class="buttons">
+  <form method="post" action="{{ url_for('give_verdict', doc_id=paper.doc_id) }}">
+    <button type="submit" name="verdict" value="holds">Holds</button>
+  </form>
+  <form method="post" action="{{ url_for('give_verdict', doc_id=paper.doc_id) }}">
+    <button type="submit" name="verdict" value="does_not_hold">Does not hold</button>
+  </form>
+  <form method="post" action="{{ url_for('give_verdict', doc_id=paper.doc_id) }}">
+    <button type="submit" name="verdict" value="skip">Skip</button>
+  </form>
+</div>
+{% endblock %}

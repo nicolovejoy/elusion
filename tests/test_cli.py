@@ -621,3 +621,101 @@ def test_first_read_budget_and_unknown_concept_exit_1_without_traceback(monkeypa
         assert result.exit_code == 1
         assert text in result.output
         assert "Traceback" not in result.output
+
+
+def _stub_board(monkeypatch, *, held=frozenset(), criterion="auditable-decisions"):
+    """Patch everything `board` touches, so no server starts and no database is reached."""
+    from types import SimpleNamespace
+
+    import elusion.board.audit as audit_mod
+    import elusion.board.batch as batch
+    import elusion.board.log as log
+    import elusion.board.web as web
+    import elusion.collect.db as db
+
+    seen = {}
+
+    class FakeApp:
+        def run(self, **kw):
+            seen["run"] = kw
+
+    papers = [SimpleNamespace(doc_id=d) for d in ("a", "b", "c")]
+    concept = SimpleNamespace(concept_version=2, detail={"criterion": criterion})
+    readings = [SimpleNamespace(doc_id=d) for d in ("a", "c", "zz")]
+    monkeypatch.setattr(db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(log, "ensure_schema", lambda engine: None)
+    monkeypatch.setattr(log, "current_concept", lambda engine, name: concept)
+    monkeypatch.setattr(log, "entries", lambda engine, name, version=None, kind=None: readings)
+    monkeypatch.setattr(audit_mod, "reader_of", lambda engine, name, version: seen.update(r=1))
+    monkeypatch.setattr(batch, "load_papers", lambda directory: papers)
+
+    def fake_held(path):
+        seen["gold"] = path
+        return set(held)
+
+    monkeypatch.setattr(batch, "held_back_ids", fake_held)
+
+    def fake_create(engine, name, kept, held_back):
+        seen.update(engine=engine, concept=name, papers=kept, held_back=held_back)
+        return FakeApp()
+
+    monkeypatch.setattr(web, "create_app", fake_create)
+    return seen
+
+
+def test_board_serves_the_papers_with_a_reading_and_holds_back_the_gold_set(monkeypatch) -> None:
+    seen = _stub_board(monkeypatch, held={"c"})
+    result = CliRunner().invoke(app, ["board", "--concept", "stopping"])
+    assert result.exit_code == 0, result.output
+    assert "http://localhost:8010" in result.output
+    assert "1 paper held back" in result.output
+    assert seen["gold"].parts[-2:] == ("gold", "auditable-decisions.csv")
+    assert (seen["concept"], seen["engine"]) == ("stopping", "engine")
+    assert sorted(seen["papers"]) == ["a", "c"]  # "b" has no reading, "zz" is not a paper
+    assert seen["held_back"] == {"c"}
+    assert seen["run"] == {"host": "127.0.0.1", "port": 8010, "debug": False}
+
+
+def test_board_release_gold_holds_nothing_back_and_takes_a_port(monkeypatch) -> None:
+    seen = _stub_board(monkeypatch, held={"c"})
+    result = CliRunner().invoke(
+        app, ["board", "--concept", "stopping", "--port", "8123", "--release-gold"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "http://localhost:8123" in result.output
+    assert "0 papers held back" in result.output
+    assert "gold" not in seen
+    assert seen["held_back"] == set()
+    assert seen["run"]["port"] == 8123
+
+
+def test_board_without_a_criterion_holds_nothing_back(monkeypatch) -> None:
+    seen = _stub_board(monkeypatch, held={"c"}, criterion=None)
+    result = CliRunner().invoke(app, ["board", "--concept", "stopping"])
+    assert result.exit_code == 0, result.output
+    assert "gold" not in seen and seen["held_back"] == set()
+
+
+def test_board_unknown_concept_and_unreadable_readings_exit_1(monkeypatch) -> None:
+    import elusion.board.audit as audit_mod
+    import elusion.board.log as log
+
+    seen = _stub_board(monkeypatch)
+
+    def unknown(engine, name):
+        raise log.UnknownConcept(name)
+
+    monkeypatch.setattr(log, "current_concept", unknown)
+    result = CliRunner().invoke(app, ["board", "--concept", "nope"])
+    assert result.exit_code == 1 and "nope" in result.output
+    assert "Traceback" not in result.output
+
+    seen = _stub_board(monkeypatch)
+
+    def no_reader(engine, name, version):
+        raise ValueError("no readings of stopping v2 yet")
+
+    monkeypatch.setattr(audit_mod, "reader_of", no_reader)
+    result = CliRunner().invoke(app, ["board", "--concept", "stopping"])
+    assert result.exit_code == 1 and "no readings" in result.output
+    assert "run" not in seen

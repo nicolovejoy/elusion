@@ -29,6 +29,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from elusion.board.quotes import find_quote
 
@@ -77,6 +78,19 @@ _reading_key = sa.Index(
     *(concept_log.c[name] for name in _READING_KEY),
     unique=True,
     postgresql_where=concept_log.c.kind == "reading",
+)
+
+# A blind verdict is given once. `add_audit` checks first for a clear error; this index is
+# what holds when two clicks arrive at the same moment and both pass that check.
+_audit_key = sa.Index(
+    "uq_concept_log_audit_verdict",
+    concept_log.c.concept,
+    concept_log.c.concept_version,
+    concept_log.c.doc_id,
+    unique=True,
+    postgresql_where=sa.and_(
+        concept_log.c.kind == "audit", concept_log.c.verdict.in_(("holds", "does_not_hold"))
+    ),
 )
 
 _REFUSE_FUNCTION = """
@@ -129,6 +143,7 @@ def ensure_schema(engine: Engine) -> None:
     """Create the table, its indexes and the triggers that refuse changes. Safe to repeat."""
     metadata.create_all(engine)
     with engine.begin() as conn:
+        _audit_key.create(conn, checkfirst=True)  # a table made before this index existed
         conn.execute(sa.text(_REFUSE_FUNCTION))
         for statement in _TRIGGERS:
             conn.execute(sa.text(statement))
@@ -264,6 +279,13 @@ def add_audit(engine: Engine, concept: str, version: int, doc_id: str, verdict: 
     skips may come before it."""
     if verdict not in ("holds", "does_not_hold", "skip"):
         raise ValueError(f"an audit's verdict is holds, does_not_hold or skip, not {verdict!r}")
+    try:
+        return _insert_audit(engine, concept, version, doc_id, verdict)
+    except IntegrityError as exc:  # the unique index: a second verdict slipped past the check
+        raise AlreadyAudited(f"{doc_id} already has a verdict under {concept} v{version}") from exc
+
+
+def _insert_audit(engine: Engine, concept: str, version: int, doc_id: str, verdict: str) -> int:
     c = concept_log.c
     with engine.begin() as conn:
         if verdict != "skip":
