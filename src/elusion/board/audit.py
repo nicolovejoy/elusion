@@ -114,9 +114,10 @@ def next_blind(engine: Engine, concept: str, version: int, doc_ids: Sequence[str
     return min(latest_skip, key=latest_skip.__getitem__)
 
 
-def _latest_decisions(
+def latest_decisions(
     engine: Engine, concept: str, version: int, doc_ids: Sequence[str]
 ) -> dict[str, Entry]:
+    """Per paper, the owner's latest decision that carries a verdict."""
     wanted = set(doc_ids)
     latest: dict[str, Entry] = {}
     for e in log.entries(engine, concept, version, kind="decision"):
@@ -125,9 +126,10 @@ def _latest_decisions(
     return latest
 
 
-def _readings(
+def reader_readings(
     engine: Engine, concept: str, version: int, reader: ReaderKey, doc_ids: Sequence[str]
 ) -> dict[str, Entry]:
+    """Per paper, the reading made by `reader`."""
     wanted = set(doc_ids)
     return {
         e.doc_id: e
@@ -143,8 +145,8 @@ def disagreements(
     """The papers where the reader's verdict differs from the owner's blind verdict, in
     audit order. A reading that failed is never a disagreement: it said nothing to differ."""
     blind = blind_verdicts(engine, concept, version, doc_ids)
-    readings = _readings(engine, concept, version, reader, doc_ids)
-    decisions = _latest_decisions(engine, concept, version, doc_ids)
+    readings = reader_readings(engine, concept, version, reader, doc_ids)
+    decisions = latest_decisions(engine, concept, version, doc_ids)
     found = []
     for doc_id in audit_order(doc_ids, concept, version):
         reading = readings.get(doc_id)
@@ -160,7 +162,7 @@ def final_verdicts(
     """Per audited paper, the owner's verdict as it stands: his latest decision where he has
     made one, else his blind verdict."""
     final = {d: e.verdict for d, e in blind_verdicts(engine, concept, version, doc_ids).items()}
-    for doc_id, decision in _latest_decisions(engine, concept, version, doc_ids).items():
+    for doc_id, decision in latest_decisions(engine, concept, version, doc_ids).items():
         if doc_id in final:
             final[doc_id] = decision.verdict
     return final
@@ -177,7 +179,7 @@ def summary(
     """The figures of the audit. `doc_ids` never include the held-back papers; `held_back_n`
     only says how many there are."""
     blind = blind_verdicts(engine, concept, version, doc_ids)
-    readings = _readings(engine, concept, version, reader, doc_ids)
+    readings = reader_readings(engine, concept, version, reader, doc_ids)
     final = final_verdicts(engine, concept, version, doc_ids)
     comparable = [d for d in blind if d in readings and readings[d].verdict in VERDICTS]
     agreed = sum(1 for d in comparable if readings[d].verdict == blind[d].verdict)

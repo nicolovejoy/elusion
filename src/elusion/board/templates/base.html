@@ -40,6 +40,12 @@
   label { display: block; margin-top: .8rem; }
   dl { margin: .5rem 0; } dt { color: var(--muted); font-size: .95rem; margin-top: .6rem; }
   dd { margin: 0; }
+  h2 { font-size: 1.1rem; margin: 1.8rem 0 .4rem; }
+  ul.rows { list-style: none; padding: 0; margin: .4rem 0; }
+  ul.rows li { padding: .55rem 0; border-top: 1px solid var(--rule); }
+  .tag { font-size: .75rem; color: var(--muted); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 0 .35em; margin-right: .3em; white-space: nowrap; }
+  blockquote { margin: .3rem 0; padding-left: .8rem; border-left: 3px solid var(--rule); }
   .figure { margin: .8rem 0; } .figure strong { display: block; }
 </style>
 </head>
@@ -49,6 +55,7 @@
     <a href="{{ url_for('audit_page') }}">Audit</a>
     <a href="{{ url_for('disagreements_page') }}">Disagreements</a>
     <a href="{{ url_for('summary_page') }}">Summary</a>
+    <a href="{{ url_for('card_page') }}">Concept</a>
   </nav>
   {% block body %}{% endblock %}
 </main>

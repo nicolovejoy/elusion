@@ -4,6 +4,7 @@ The test that matters most is the blindness one: before the owner has given a ve
 every paper, no page may show anything of the reader's reading.
 """
 
+import re
 import uuid
 
 import pytest
@@ -21,12 +22,12 @@ def doc(i: int) -> str:
     return f"{i:016x}"
 
 
-def paper(i: int, text: str | None = None) -> Paper:
+def paper(i: int, text: str | None = None, date: str = "2025-01-01") -> Paper:
     return Paper(
         doc_id=doc(i),
         work_id=f"W{i}",
         title=f"Title of paper {i}",
-        publication_date="2025-01-01",
+        publication_date=date,
         text=text or f"Paper {i} sets a {QUOTE} for its review.",
     )
 
@@ -38,7 +39,7 @@ def concept(board_engine) -> str:
     return slug
 
 
-def read(engine, concept, p: Paper, verdict: str, quote: str | None = QUOTE) -> int:
+def read(engine, concept, p: Paper, verdict: str, quote: str | None = QUOTE, detail=None) -> int:
     return log.add_reading(
         engine,
         concept=concept,
@@ -50,15 +51,20 @@ def read(engine, concept, p: Paper, verdict: str, quote: str | None = QUOTE) -> 
         model="reader-model-9",
         prompt_version="first-read/v1",
         text=p.text,
+        detail=detail,
     )
 
 
-def make(engine, concept, n=3, held_back=(), verdicts=None, texts=None):
-    """An app over n papers, each read by the same reader; `verdicts` are the readings."""
+def make(engine, concept, n=3, held_back=(), verdicts=None, texts=None, dates=None, details=None):
+    """An app over n papers, each read by the same reader; `verdicts` are the readings,
+    `details` the readings' detail (a dict by paper number) and `dates` their dates."""
     verdicts = verdicts or ["holds"] * n
-    papers = {doc(i): paper(i, (texts or {}).get(i)) for i in range(n)}
+    papers = {
+        doc(i): paper(i, (texts or {}).get(i), (dates or {}).get(i, "2025-01-01")) for i in range(n)
+    }
     for i, v in enumerate(verdicts):
-        read(engine, concept, papers[doc(i)], v, quote=QUOTE if v == "holds" else None)
+        quote = QUOTE if v == "holds" else None
+        read(engine, concept, papers[doc(i)], v, quote=quote, detail=(details or {}).get(i))
     app = create_app(engine, concept, papers, {doc(i) for i in held_back})
     app.testing = True
     return app, papers
@@ -152,6 +158,29 @@ def test_a_second_verdict_is_409_and_a_bad_one_400_and_an_unknown_paper_404(
     assert client.post(f"/audit/{first}", data={}).status_code == 400
     assert client.post(f"/audit/{doc(99)}", data={"verdict": "holds"}).status_code == 404
     assert len(log.entries(board_engine, concept, kind="audit")) == 1
+
+
+def test_the_same_verdict_posted_again_redirects_and_stores_nothing_more(
+    board_engine, concept
+) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    client = app.test_client()
+    first = order_of(concept, 2)[0]
+    assert client.post(f"/audit/{first}", data={"verdict": "holds"}).status_code == 303
+    again = client.post(f"/audit/{first}", data={"verdict": "holds"})
+    assert again.status_code == 303 and again.headers["Location"].endswith("/audit")
+    assert client.post(f"/audit/{first}", data={"verdict": "does_not_hold"}).status_code == 409
+    assert len(log.entries(board_engine, concept, kind="audit")) == 1
+
+
+def test_a_skip_for_a_paper_that_has_a_verdict_is_not_written(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    client = app.test_client()
+    first = order_of(concept, 2)[0]
+    client.post(f"/audit/{first}", data={"verdict": "holds"})
+    response = client.post(f"/audit/{first}", data={"verdict": "skip"})
+    assert response.status_code == 303 and response.headers["Location"].endswith("/audit")
+    assert [e.verdict for e in log.entries(board_engine, concept, kind="audit")] == ["holds"]
 
 
 def test_a_held_back_paper_is_never_served_and_its_post_is_404(board_engine, concept) -> None:
@@ -382,3 +411,253 @@ def test_a_foreign_origin_cannot_post_a_decision_either(board_engine, concept) -
     )
     assert response.status_code == 403
     assert log.entries(board_engine, concept, kind="decision") == []
+
+
+def test_a_request_for_another_host_is_403_whatever_the_method(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    client = app.test_client()
+    first = order_of(concept, 2)[0]
+    for host in ("evil.example", "evil.example:5000", "localhost.evil.example", "127.0.0.2"):
+        assert client.get("/audit", headers={"Host": host}).status_code == 403
+        post = client.post(f"/audit/{first}", data={"verdict": "holds"}, headers={"Host": host})
+        assert post.status_code == 403
+    assert log.entries(board_engine, concept, kind="audit") == []
+    for host in ("localhost", "localhost:8000", "127.0.0.1:8000", "[::1]:8000", "LOCALHOST"):
+        assert client.get("/audit", headers={"Host": host}).status_code == 200
+
+
+# -- the concept card and the paper note ---------------------------------------------------
+
+ANSWER = "Stop when the interval is narrower than the stakes allow"
+
+
+def blind_step(client, concept, n, verdicts=None):
+    """The owner's blind verdicts (a dict by paper number); holds for any not named."""
+    verdicts = verdicts or {}
+    give_all(client, concept, {doc(i): verdicts.get(i, "holds") for i in range(n)})
+
+
+def sections(html: str) -> dict[str, str]:
+    """The card's parts by heading, so a test can say which part a paper is in."""
+    parts = html.split("<h2>")[1:]
+    return {part.split("</h2>")[0]: part for part in parts}
+
+
+def test_the_card_and_the_note_are_locked_until_every_paper_has_a_verdict(
+    board_engine, concept
+) -> None:
+    app, papers = make(board_engine, concept, n=3, details={0: {"answer": ANSWER}})
+    client = app.test_client()
+    first = order_of(concept, 3)[0]
+    client.post(f"/audit/{first}", data={"verdict": "holds"})
+    for url in ("/concept", f"/paper/{first}", f"/paper/{doc(99)}"):
+        html = page(client, url, status=423)
+        assert 'href="/audit"' in html and "blind audit" in html.lower()
+        for secret in (RATIONALE, "reader-model-9", "first-read/v1", ANSWER, "<mark"):
+            assert secret not in html
+        assert QUOTE not in html and "Title of paper" not in html
+    blind_step(client, concept, 3)
+    assert client.get("/concept").status_code == 200
+    assert client.get(f"/paper/{first}").status_code == 200
+
+
+def test_the_card_is_locked_when_there_is_nothing_to_audit(board_engine, concept) -> None:
+    app = create_app(board_engine, concept, {}, set())
+    assert app.test_client().get("/concept").status_code == 423
+
+
+def test_the_nav_leads_to_the_concept_card(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=1)
+    assert 'href="/concept"' in page(app.test_client(), "/audit")
+
+
+def test_the_card_shows_the_wording_the_figures_and_each_answer_with_its_source(
+    board_engine, concept
+) -> None:
+    app, papers = make(
+        board_engine,
+        concept,
+        n=4,
+        verdicts=["holds", "holds", "does_not_hold", "failed"],
+        dates={0: "2025-03-09", 1: "2025-03-30", 2: "2024-05-05", 3: "2024-01-01"},
+        details={0: {"answer": ANSWER}, 1: {"answer": "A second answer"}},
+    )
+    client = app.test_client()
+    blind_step(client, concept, 4, {2: "does_not_hold", 3: "does_not_hold"})
+    html = page(client, "/concept")
+    for tag in (">paper<", ">model<", ">decided<"):
+        assert tag in html
+    assert WORDING in html and "version 1" in html and "owner" in html
+    parts = sections(html)
+    answers = parts["Answers"]
+    assert ANSWER in answers and "A second answer" in answers
+    assert answers.count(QUOTE) == 2
+    assert f'href="/paper/{doc(0)}"' in answers and "Title of paper 0" in answers
+    assert "2025-03" in answers
+    assert "Title of paper 2" not in answers and "Title of paper 3" not in answers
+    assert "reader-model-9" in html and "first-read/v1" in html
+    counts = parts["Counts"]
+    for line in (
+        "Papers matching the words: 4",
+        "Held back: 0",
+        "Read: 4",
+        "Reader says holds: 2",
+        "Reader says does not hold: 1",
+        "Failed readings: 1",
+        "3 of 3",  # agreement: the failed reading is not compared
+        "2 of 4",  # precision: two papers hold after the decisions
+    ):
+        assert line in counts, line
+    assert "95% interval" in counts
+    assert "2025-03: 2 papers" in parts["The field's history"]
+
+
+def test_the_card_says_when_the_agreement_cannot_be_worked_out(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=2, verdicts=["failed", "failed"])
+    client = app.test_client()
+    blind_step(client, concept, 2)
+    counts = sections(page(client, "/concept"))["Counts"]
+    assert "not yet available" in counts
+    assert "Failed readings: 2" in counts
+
+
+def test_a_rejected_paper_is_listed_under_other_meanings_with_its_reason(
+    board_engine, concept
+) -> None:
+    app, papers = make(
+        board_engine,
+        concept,
+        n=3,
+        verdicts=["holds", "does_not_hold", "failed"],
+        details={0: {"answer": ANSWER}},
+    )
+    client = app.test_client()
+    blind_step(client, concept, 3, {1: "does_not_hold", 2: "does_not_hold"})
+    parts = sections(page(client, "/concept"))
+    other = parts["Other meanings of the words"]
+    assert "Title of paper 1" in other and RATIONALE in other
+    assert "Title of paper 2" in other  # the reading failed: no reason to show
+    assert "Title of paper 0" not in other
+    assert "Title of paper 1" not in parts["Answers"]
+
+
+def test_a_decision_that_overturned_the_blind_verdict_lists_the_paper_by_its_final_verdict(
+    board_engine, concept
+) -> None:
+    app, papers = make(
+        board_engine,
+        concept,
+        n=3,
+        verdicts=["holds", "does_not_hold", "does_not_hold"],
+        details={0: {"answer": ANSWER}},
+    )
+    client = app.test_client()
+    # reader / owner blind: 0 holds / no; 1 no / holds; 2 no / holds
+    blind_step(client, concept, 3, {0: "does_not_hold"})
+    for i, verdict in ((0, "holds"), (1, "does_not_hold"), (2, "holds")):
+        reply = client.post(
+            f"/audit/disagreements/{doc(i)}", data={"verdict": verdict, "reason": f"because {i}"}
+        )
+        assert reply.status_code == 303
+    parts = sections(page(client, "/concept"))
+    answers, other = parts["Answers"], parts["Other meanings of the words"]
+    assert "Title of paper 0" in answers and ANSWER in answers
+    assert "Title of paper 0" not in other
+    assert "Title of paper 1" in other and "Title of paper 1" not in answers
+    # the reader said does not hold and the owner's final verdict is holds: no answer shown
+    assert "Title of paper 2" in answers
+    row = answers.split("Title of paper 2")[1].split("</li>")[0]
+    assert "reader said it does not hold" in row.lower() and ANSWER not in row
+    assert ANSWER in answers.split("Title of paper 2")[0]
+
+
+def test_nothing_of_a_held_back_paper_is_on_the_card_or_reachable(board_engine, concept) -> None:
+    secret = "okapi passage only the held back paper has"
+    app, papers = make(
+        board_engine,
+        concept,
+        n=3,
+        held_back=(2,),
+        texts={2: f"A {QUOTE} with an {secret}."},
+        details={2: {"answer": "secret answer"}},
+    )
+    client = app.test_client()
+    blind_step(client, concept, 2)
+    html = page(client, "/concept")
+    for hidden in ("Title of paper 2", doc(2), "secret answer", secret):
+        assert hidden not in html
+    assert "Papers matching the words: 3" in html and "Held back: 1" in html
+    assert "Read: 2" in html
+    assert client.get(f"/paper/{doc(2)}").status_code == 404
+
+
+def test_the_paper_note_shows_the_abstract_marked_and_the_whole_story(
+    board_engine, concept
+) -> None:
+    hostile = f"<b>bold</b> & so on: it sets a {QUOTE} for <script>alert(1)</script> its review."
+    app, papers = make(
+        board_engine,
+        concept,
+        n=2,
+        texts={0: hostile, 1: hostile},
+        details={0: {"answer": ANSWER}, 1: {"answer": ANSWER}},
+    )
+    client = app.test_client()
+    first = finish_with_one_disagreement(client, papers, concept, 2)
+    client.post(f"/audit/disagreements/{first}", data={"verdict": "holds", "reason": "it does"})
+    p = papers[first]
+    html = page(client, f"/paper/{first}")
+    assert p.title in html and p.work_id in html and p.publication_date in html
+    assert f"<mark>{QUOTE}</mark>" in html
+    assert "&lt;b&gt;bold&lt;/b&gt; &amp; so on: it sets a <mark>" in html
+    assert "&lt;script&gt;" in html and "<script>" not in html
+    for shown in (ANSWER, RATIONALE, "reader-model-9", "first-read/v1", "it does"):
+        assert shown in html
+    assert "does not hold" in html.lower()  # the owner's blind verdict
+    assert ">paper<" in html and ">model<" in html and ">decided<" in html
+
+
+def test_the_paper_note_without_a_decision_has_none(board_engine, concept) -> None:
+    app, papers = make(board_engine, concept, n=1)
+    client = app.test_client()
+    blind_step(client, concept, 1)
+    html = page(client, f"/paper/{doc(0)}")
+    assert "No decision" in html
+    assert page(client, f"/paper/{doc(7)}", status=404)
+
+
+def test_the_note_of_a_failed_reading_shows_the_stop_reason_and_the_unverified_quote(
+    board_engine, concept
+) -> None:
+    detail = {"stop_reason": "quote_not_verbatim", "model_quote": "words the abstract lacks"}
+    app, _ = make(board_engine, concept, n=1, verdicts=["failed"], details={0: detail})
+    client = app.test_client()
+    blind_step(client, concept, 1)
+    html = page(client, f"/paper/{doc(0)}")
+    assert "quote_not_verbatim" in html
+    assert "words the abstract lacks" in html and "not verbatim" in html.lower()
+    assert "<mark" not in html
+
+
+def test_our_history_lists_every_entry_in_order_in_pacific_time(board_engine, concept) -> None:
+    app, papers = make(board_engine, concept, n=2, held_back=(), verdicts=["holds", "holds"])
+    client = app.test_client()
+    first = finish_with_one_disagreement(client, papers, concept, 2)
+    client.post(f"/audit/disagreements/{first}", data={"verdict": "holds", "reason": "stops here"})
+    history = sections(page(client, "/concept"))["Our history"]
+    kinds = re.findall(r"<b>(\w+)</b>", history)
+    assert kinds[0] == "concept" and kinds[-1] == "decision"
+    assert sorted(kinds) == sorted(["concept"] + ["reading"] * 2 + ["audit"] * 2 + ["decision"])
+    assert kinds.index("reading") < kinds.index("audit")  # the order they were written
+    assert history.count("<li") == 1 + 2 + 2 + 1
+    assert "stops here" in history and "reader-model-9" in history
+    assert "PST" in history or "PDT" in history
+
+
+def test_our_history_leaves_out_a_held_back_paper(board_engine, concept) -> None:
+    app, papers = make(board_engine, concept, n=3, held_back=(2,))
+    client = app.test_client()
+    blind_step(client, concept, 2)
+    history = sections(page(client, "/concept"))["Our history"]
+    assert history.count("<li") == 1 + 2 + 2
+    assert "Title of paper 2" not in history

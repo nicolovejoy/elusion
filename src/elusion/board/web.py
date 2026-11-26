@@ -1,4 +1,4 @@
-"""The audit pages: a small web app the owner runs on his own machine.
+"""The board's pages: a small web app the owner runs on his own machine.
 
 Flask is a Python library for writing web apps. You map a URL to a function, and the
 function returns a page. The pages are *server-rendered*: each is built on the server as
@@ -8,27 +8,34 @@ append-only `concept_log` and sends the browser on to the next page.
 
 Nothing is kept in the app between requests. Every page is computed from the log by
 `audit.py`, so restarting the app, or opening it in two tabs, cannot make a page disagree
-with the log. The app listens on 127.0.0.1 only, and refuses a POST that another site's
-page sent (its `Origin` header is not this page's own), so a web page elsewhere cannot
-make the owner's browser file verdicts here.
+with the log. The app listens on 127.0.0.1 only. It answers only requests addressed to
+`localhost`, `127.0.0.1` or `[::1]`: another site can make a browser send its own name to
+this address (*DNS rebinding*), and a page that thinks it is that site could then read
+these pages. It also refuses a POST that another site's page sent (its `Origin` header is
+not this page's own), so a web page elsewhere cannot make the owner's browser file
+verdicts here.
 
 Blindness is the point of the design. Until the owner has a verdict on every paper, the
 only pages that can be reached show the concept and an abstract, and a count. The reader's
-verdicts, quotes and reasons are not read by those routes at all.
+verdicts, quotes and reasons are not read by those routes at all. The concept card and the
+paper notes, which show them, answer "locked" until that step is done. A held-back paper
+(one kept for evaluation) never appears on any page.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from flask import Flask, abort, redirect, render_template, request, url_for
-from markupsafe import Markup, escape
 from sqlalchemy.engine import Engine
 
-from elusion.board import audit, log
+from elusion.board import audit, card, log
 from elusion.board.batch import Paper
-from elusion.board.quotes import find_quote
+from elusion.board.log import Entry
 
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _WORDS = {"holds": "Holds", "does_not_hold": "Does not hold", "skip": "Skip", "failed": "Failed"}
 
 
@@ -36,6 +43,7 @@ _WORDS = {"holds": "Holds", "does_not_hold": "Does not hold", "skip": "Skip", "f
 class _State:
     """What the log says right now about the papers being audited."""
 
+    entry: Entry  # the current wording of the concept
     version: int
     wording: str
     doc_ids: list[str]
@@ -47,16 +55,6 @@ class _State:
         return bool(self.doc_ids) and self.verdicts == len(self.doc_ids)
 
 
-def marked(text: str, quote: str | None) -> Markup:
-    """`text` as safe HTML with `quote` wrapped in <mark> where it appears. Everything is
-    escaped, the abstract and the quote alike."""
-    span = find_quote(text, quote) if quote else None
-    if span is None:
-        return Markup(escape(text))
-    start, end = span
-    return Markup("{}<mark>{}</mark>{}").format(text[:start], text[start:end], text[end:])
-
-
 def create_app(
     engine: Engine, concept: str, papers: dict[str, Paper], held_back: set[str]
 ) -> Flask:
@@ -65,6 +63,8 @@ def create_app(
     app = Flask(__name__)
     app.jinja_env.filters["words"] = lambda verdict: _WORDS[verdict]
     app.jinja_env.filters["pct"] = lambda share: f"{share * 100:.1f}%"
+    app.jinja_env.filters["when"] = card.display_time
+    app.jinja_env.filters["month"] = card.field_month
 
     def state() -> _State:
         entry = log.current_concept(engine, concept)
@@ -73,10 +73,12 @@ def create_app(
         doc_ids = sorted(d for d in papers if d in read and d not in held_back)
         verdicts = len(audit.blind_verdicts(engine, concept, version, doc_ids))
         held_back_n = len(read & held_back & papers.keys())
-        return _State(version, entry.body or "", doc_ids, verdicts, held_back_n)
+        return _State(entry, version, entry.body or "", doc_ids, verdicts, held_back_n)
 
     @app.before_request
-    def same_origin_only():
+    def local_requests_only():
+        if urlsplit(f"//{request.host}").hostname not in _LOCAL_HOSTS:
+            abort(403)
         origin = request.headers.get("Origin")
         if request.method == "POST" and origin is not None:
             if origin != f"{request.scheme}://{request.host}":
@@ -108,14 +110,29 @@ def create_app(
         verdict = request.form.get("verdict")
         if verdict not in ("holds", "does_not_hold", "skip"):
             abort(400)
-        try:
-            log.add_audit(engine, concept, s.version, doc_id, verdict)
-        except log.AlreadyAudited:
+
+        def stored():
+            return audit.blind_verdicts(engine, concept, s.version, [doc_id]).get(doc_id)
+
+        given = stored()
+        if given is None:
+            try:
+                log.add_audit(engine, concept, s.version, doc_id, verdict)
+            except log.AlreadyAudited:  # two clicks at once: the other one won
+                given = stored()
+            else:
+                return redirect(url_for("audit_page"), 303)
+        # The paper already has a verdict. The same one again is a double click or a resubmit,
+        # and a skip adds nothing to a paper that has been decided; a different one is refused.
+        if verdict not in ("skip", given.verdict):
             abort(409)
         return redirect(url_for("audit_page"), 303)
 
     def unfinished(s: _State):
         return render_template("wait.html", remaining=len(s.doc_ids) - s.verdicts), 409
+
+    def locked(s: _State):
+        return render_template("locked.html", remaining=len(s.doc_ids) - s.verdicts), 423
 
     @app.get("/audit/disagreements")
     def disagreements_page():
@@ -137,7 +154,7 @@ def create_app(
             wording=s.wording,
             d=d,
             paper=paper,
-            abstract=marked(paper.text, d.reading.quote),
+            abstract=card.mark_quotes(paper.text, [d.reading.quote or ""]),
             left=len(pending),
         )
 
@@ -179,5 +196,60 @@ def create_app(
         reader = audit.reader_of(engine, concept, s.version)
         figures = audit.summary(engine, concept, s.version, reader, s.doc_ids, s.held_back_n)
         return render_template("summary.html", finished=True, s=figures)
+
+    @app.get("/concept")
+    def card_page():
+        s = state()
+        if not s.finished:
+            return locked(s)
+        reader = audit.reader_of(engine, concept, s.version)
+        figures = audit.summary(engine, concept, s.version, reader, s.doc_ids, s.held_back_n)
+        readings = audit.reader_readings(engine, concept, s.version, reader, s.doc_ids)
+        final = audit.final_verdicts(engine, concept, s.version, s.doc_ids)
+
+        def rows(verdict: str):
+            """Papers whose final verdict is `verdict`, as (paper, its reading), by date."""
+            wanted = [papers[d] for d in s.doc_ids if final[d] == verdict]
+            wanted.sort(key=lambda p: (p.publication_date, p.doc_id))
+            return [(p, readings[p.doc_id]) for p in wanted]
+
+        holds = rows("holds")
+        by_reader = Counter(r.verdict for r in readings.values())
+        return render_template(
+            "card.html",
+            s=s,
+            reader=reader,
+            figures=figures,
+            matching=len(s.doc_ids) + s.held_back_n,
+            by_reader=by_reader,
+            answers=holds,
+            others=rows("does_not_hold"),
+            history=card.field_history(p for p, _ in holds),
+            log=[
+                (e, papers.get(e.doc_id))
+                for e in log.entries(engine, concept)
+                if e.doc_id not in held_back
+            ],
+        )
+
+    @app.get("/paper/<doc_id>")
+    def paper_page(doc_id: str):
+        s = state()
+        if not s.finished:
+            return locked(s)
+        if doc_id not in s.doc_ids:
+            abort(404)
+        reader = audit.reader_of(engine, concept, s.version)
+        ids = [doc_id]
+        reading = audit.reader_readings(engine, concept, s.version, reader, ids)[doc_id]
+        paper = papers[doc_id]
+        return render_template(
+            "paper.html",
+            paper=paper,
+            reading=reading,
+            abstract=card.mark_quotes(paper.text, [reading.quote or ""]),
+            blind=audit.blind_verdicts(engine, concept, s.version, ids)[doc_id],
+            decision=audit.latest_decisions(engine, concept, s.version, ids).get(doc_id),
+        )
 
     return app

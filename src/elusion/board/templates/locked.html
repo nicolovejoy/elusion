@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Locked{% endblock %}
+{% block body %}
+<h1>Locked</h1>
+<p>Finish the blind audit first. {{ remaining }} {{ "paper" if remaining == 1 else "papers" }}
+still without your verdict. This page shows the reader's answers, which would colour your own.</p>
+<p><a href="{{ url_for('audit_page') }}">Back to the audit</a></p>
+{% endblock %}
