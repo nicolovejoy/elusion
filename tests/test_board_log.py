@@ -213,3 +213,87 @@ def test_the_on_conflict_predicate_has_no_bind_parameter(board_engine, concept) 
         one_connection.dispose()
     [insert] = [s for s in sql if "ON CONFLICT" in s]
     assert "WHERE kind = 'reading'" in insert
+
+
+# -- flags ---------------------------------------------------------------------------------
+
+
+def test_a_flag_is_stored_with_its_note_in_body_and_no_verdict(board_engine, concept) -> None:
+    doc = "1" * 16
+    log.add_flag(
+        board_engine, concept=concept, version=1, doc_id=doc, actor="owner", note=" worth a look "
+    )
+    [entry] = log.entries(board_engine, concept, kind="flag")
+    assert (entry.kind, entry.doc_id, entry.actor, entry.verdict) == ("flag", doc, "owner", None)
+    assert entry.body == "worth a look"  # trimmed
+
+
+def test_a_flag_without_a_note_stores_null_and_a_paper_can_be_flagged_again(
+    board_engine, concept
+) -> None:
+    doc = "2" * 16
+    for note in (None, "  ", "second thoughts"):
+        log.add_flag(board_engine, concept=concept, version=1, doc_id=doc, actor="owner", note=note)
+    flags = log.entries(board_engine, concept, kind="flag")
+    assert [f.body for f in flags] == [None, None, "second thoughts"]
+    assert len({f.entry_id for f in flags}) == 3
+
+
+def test_a_flag_does_not_disturb_the_blind_verdict_or_other_kinds(board_engine, concept) -> None:
+    doc = "3" * 16
+    log.add_flag(board_engine, concept=concept, version=1, doc_id=doc, actor="owner")
+    log.add_audit(board_engine, concept, 1, doc, "holds")
+    log.add_flag(board_engine, concept=concept, version=1, doc_id=doc, actor="owner")
+    assert [e.kind for e in log.entries(board_engine, concept)] == ["flag", "audit", "flag"]
+    assert len(log.entries(board_engine, concept, kind="audit")) == 1
+
+
+def test_a_flag_is_append_only_like_the_rest(board_engine, concept) -> None:
+    log.add_flag(board_engine, concept=concept, version=1, doc_id="4" * 16, actor="owner")
+    with pytest.raises(DBAPIError, match="append-only"), board_engine.begin() as conn:
+        conn.execute(sa.delete(log.concept_log).where(log.concept_log.c.concept == concept))
+
+
+def test_an_unknown_kind_is_still_refused(board_engine, concept) -> None:
+    with pytest.raises(IntegrityError), board_engine.begin() as conn:
+        conn.execute(
+            sa.insert(log.concept_log).values(
+                kind="unflag", concept=concept, concept_version=1, actor="owner"
+            )
+        )
+
+
+def test_ensure_schema_upgrades_a_table_made_with_the_four_kind_constraint(board_engine) -> None:
+    """The real database holds a table from before `flag`. Make one in a scratch schema,
+    put the old constraint back on it and a row in it, and check that `ensure_schema`
+    widens the constraint and leaves the row alone."""
+    schema = f"old_{uuid.uuid4().hex[:8]}"
+    with board_engine.begin() as conn:
+        conn.execute(sa.text(f"CREATE SCHEMA {schema}"))
+    scoped = sa.create_engine(
+        board_engine.url, connect_args={"options": f"-c search_path={schema}"}
+    )
+    try:
+        log.ensure_schema(scoped)
+        with scoped.begin() as conn:
+            conn.execute(sa.text("ALTER TABLE concept_log DROP CONSTRAINT concept_log_kind"))
+            conn.execute(
+                sa.text(
+                    "ALTER TABLE concept_log ADD CONSTRAINT concept_log_kind "
+                    "CHECK (kind IN ('concept', 'reading', 'audit', 'decision'))"
+                )
+            )
+        log.add_concept(scoped, "old", "an old wording", "owner")
+        with pytest.raises(IntegrityError):
+            log.add_flag(scoped, concept="old", version=1, doc_id="5" * 16, actor="owner")
+
+        log.ensure_schema(scoped)
+        log.ensure_schema(scoped)  # a repeat changes nothing
+
+        log.add_flag(scoped, concept="old", version=1, doc_id="5" * 16, actor="owner")
+        assert [e.kind for e in log.entries(scoped, "old")] == ["concept", "flag"]
+        assert log.current_concept(scoped, "old").body == "an old wording"
+    finally:
+        scoped.dispose()
+        with board_engine.begin() as conn:
+            conn.execute(sa.text(f"DROP SCHEMA {schema} CASCADE"))

@@ -36,6 +36,7 @@ from elusion.board.batch import Paper
 from elusion.board.log import Entry
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_NOTE_MAX = 1000  # characters in a flag's note
 _WORDS = {"holds": "Holds", "does_not_hold": "Does not hold", "skip": "Skip", "failed": "Failed"}
 
 
@@ -84,6 +85,15 @@ def create_app(
             if origin != f"{request.scheme}://{request.host}":
                 abort(403)
 
+    def add_flag(s: _State, doc_id: str) -> None:
+        """Write the owner's flag on `doc_id`, with the note typed beside it (may be blank)."""
+        note = request.form.get("note", "").strip()
+        if len(note) > _NOTE_MAX:
+            abort(400)
+        log.add_flag(
+            engine, concept=concept, version=s.version, doc_id=doc_id, actor="owner", note=note
+        )
+
     @app.get("/")
     def home():
         return redirect(url_for("audit_page"))
@@ -121,6 +131,8 @@ def create_app(
             except log.AlreadyAudited:  # two clicks at once: the other one won
                 given = stored()
             else:
+                if request.form.get("flag"):
+                    add_flag(s, doc_id)
                 return redirect(url_for("audit_page"), 303)
         # The paper already has a verdict. The same one again is a double click or a resubmit,
         # and a skip adds nothing to a paper that has been decided; a different one is refused.
@@ -201,6 +213,17 @@ def create_app(
         figures = audit.summary(engine, concept, s.version, reader, s.doc_ids, s.held_back_n)
         return render_template("summary.html", finished=True, s=figures)
 
+    def flagged_papers(s: _State) -> list[tuple[Paper, list[str]]]:
+        """Each paper the owner flagged, once, with its notes, in the order it was first
+        flagged. Only papers the page serves: a held-back paper is not among them."""
+        found: dict[str, list[str]] = {}
+        for e in log.entries(engine, concept, kind="flag"):
+            if e.doc_id in s.doc_ids:
+                notes = found.setdefault(e.doc_id, [])
+                if e.body:
+                    notes.append(e.body)
+        return [(papers[d], notes) for d, notes in found.items()]
+
     @app.get("/concept")
     def card_page():
         s = state()
@@ -227,6 +250,7 @@ def create_app(
             matching=len(s.doc_ids) + s.held_back_n,
             by_reader=by_reader,
             answers=holds,
+            flagged=flagged_papers(s),
             others=rows("does_not_hold"),
             history=card.field_history(p for p, _ in holds),
             log=[
@@ -254,6 +278,17 @@ def create_app(
             abstract=card.mark_quotes(paper.text, [reading.quote or ""]),
             blind=audit.blind_verdicts(engine, concept, s.version, ids)[doc_id],
             decision=audit.latest_decisions(engine, concept, s.version, ids).get(doc_id),
+            flags=[e for e in log.entries(engine, concept, kind="flag") if e.doc_id == doc_id],
         )
+
+    @app.post("/paper/<doc_id>/flag")
+    def flag_paper(doc_id: str):
+        s = state()
+        if not s.finished:
+            return locked(s)
+        if doc_id not in s.doc_ids:
+            abort(404)
+        add_flag(s, doc_id)
+        return redirect(url_for("paper_page", doc_id=doc_id), 303)
 
     return app

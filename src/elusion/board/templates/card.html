@@ -52,6 +52,21 @@ on {{ s.entry.written_at | when }}.</p>
 <p>No paper holds the concept.</p>
 {% endif %}
 
+<h2>Flagged as interesting</h2>
+{% if flagged %}
+<ul class="rows">
+  {% for p, notes in flagged %}
+  <li>
+    <span class="tag">decided</span><a href="{{ url_for('paper_page', doc_id=p.doc_id) }}">{{ p.title }}</a>
+    <span class="muted">{{ p.publication_date | month }}</span>
+    {% for note in notes %}<div>{{ note }}</div>{% endfor %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No paper is flagged.</p>
+{% endif %}
+
 <h2>Other meanings of the words</h2>
 {% if others %}
 <ul class="rows">
@@ -93,7 +108,7 @@ on {{ s.entry.written_at | when }}.</p>
     <span class="tag">{{ "model" if e.kind == "reading" else "decided" }}</span><b>{{ e.kind }}</b> {{ e.model or e.actor }}
     {%- if e.kind == "concept" %}, wording version {{ e.concept_version }}{% endif %}
     {%- if e.verdict %}, {{ e.verdict | words }}{% endif %}
-    {%- if e.kind == "decision" and e.body %}: {{ e.body }}{% endif %}
+    {%- if e.kind in ("decision", "flag") and e.body %}: {{ e.body }}{% endif %}
     {%- if p and p.doc_id in s.doc_ids %}
     <a href="{{ url_for('paper_page', doc_id=p.doc_id) }}">{{ p.title }}</a>{% endif %}</li>
   {% endfor %}

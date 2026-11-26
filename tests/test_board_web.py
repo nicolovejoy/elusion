@@ -740,3 +740,163 @@ def test_a_decision_without_a_reason_prints_no_none_on_the_note(board_engine, co
     )
     html = page(client, f"/paper/{first}")
     assert "None" not in html
+
+
+# -- flagging a paper as interesting -------------------------------------------------------
+
+
+def flags(engine, concept):
+    return log.entries(engine, concept, kind="flag")
+
+
+def test_the_audit_page_is_one_form_with_a_flag_box_and_a_note_and_still_hides_the_reading(
+    board_engine, concept
+) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    html = page(app.test_client(), "/audit")
+    assert html.count("<form") == 1
+    assert 'type="checkbox" name="flag"' in html and "Flag as interesting" in html
+    assert 'name="note"' in html and "<script" not in html
+    for secret in ("<mark", RATIONALE, "reader-model-9", "first-read/v1"):
+        assert secret not in html
+    # Enter in the note field must not file a verdict: the form's first submit button is a skip
+    first_button = re.search(r"<button[^>]*>", html).group(0)
+    assert 'value="skip"' in first_button
+
+
+def test_a_verdict_with_the_box_ticked_writes_the_audit_and_a_flag_with_its_note(
+    board_engine, concept
+) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    client = app.test_client()
+    first = order_of(concept, 2)[0]
+    data = {"verdict": "holds", "flag": "1", "note": "  the stopping rule is a surprise "}
+    assert client.post(f"/audit/{first}", data=data).status_code == 303
+    [audited] = log.entries(board_engine, concept, kind="audit")
+    [flagged] = flags(board_engine, concept)
+    assert (audited.doc_id, audited.verdict) == (first, "holds")
+    assert (flagged.doc_id, flagged.actor, flagged.body) == (
+        first,
+        "owner",
+        "the stopping rule is a surprise",
+    )
+    assert flagged.concept_version == 1 and flagged.verdict is None
+
+
+def test_a_verdict_without_the_box_writes_no_flag_even_with_a_note(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    first = order_of(concept, 2)[0]
+    app.test_client().post(f"/audit/{first}", data={"verdict": "skip", "note": "typed, unticked"})
+    assert flags(board_engine, concept) == []
+    assert len(log.entries(board_engine, concept, kind="audit")) == 1
+
+
+def test_a_ticked_box_without_a_note_writes_a_flag_with_no_note(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    first = order_of(concept, 2)[0]
+    app.test_client().post(f"/audit/{first}", data={"verdict": "does_not_hold", "flag": "1"})
+    [flagged] = flags(board_engine, concept)
+    assert flagged.body is None
+
+
+def test_posting_the_same_verdict_again_does_not_flag_twice(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    client = app.test_client()
+    first = order_of(concept, 2)[0]
+    data = {"verdict": "holds", "flag": "1"}
+    client.post(f"/audit/{first}", data=data)
+    client.post(f"/audit/{first}", data=data)  # a double click
+    assert len(flags(board_engine, concept)) == 1
+
+
+def test_an_over_long_note_is_400_and_nothing_is_stored(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    first = order_of(concept, 2)[0]
+    response = app.test_client().post(
+        f"/audit/{first}", data={"verdict": "holds", "flag": "1", "note": "x" * 1001}
+    )
+    assert response.status_code == 400
+    assert flags(board_engine, concept) == []
+
+
+def test_the_paper_note_shows_its_flags_and_a_form_to_add_one(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=2)
+    client = app.test_client()
+    blind_step(client, concept, 2)
+    html = page(client, f"/paper/{doc(0)}")
+    assert "Not flagged" in html
+    assert f'action="/paper/{doc(0)}/flag"' in html and 'name="note"' in html
+    response = client.post(f"/paper/{doc(0)}/flag", data={"note": "<i>first</i> thought"})
+    assert response.status_code == 303 and response.headers["Location"].endswith(f"/paper/{doc(0)}")
+    client.post(f"/paper/{doc(0)}/flag", data={})  # no note: allowed, and it is a second flag
+    html = page(client, f"/paper/{doc(0)}")
+    part = sections(html)["Flagged as interesting"]
+    assert part.count("Flagged on ") == 2
+    assert "&lt;i&gt;first&lt;/i&gt; thought" in part and "<i>" not in part
+    assert "PST" in part or "PDT" in part
+    assert "Not flagged" not in part
+    assert "Not flagged" in page(client, f"/paper/{doc(1)}")  # another paper's flags stay apart
+    assert [f.doc_id for f in flags(board_engine, concept)] == [doc(0), doc(0)]
+
+
+def test_the_flag_post_is_locked_like_the_note_and_refuses_unknown_and_held_back_papers(
+    board_engine, concept
+) -> None:
+    app, _ = make(board_engine, concept, n=3, held_back=(2,))
+    client = app.test_client()
+    assert client.post(f"/paper/{doc(0)}/flag", data={"note": "early"}).status_code == 423
+    blind_step(client, concept, 2)
+    assert client.post(f"/paper/{doc(2)}/flag", data={}).status_code == 404  # held back
+    assert client.post(f"/paper/{doc(9)}/flag", data={}).status_code == 404  # unknown
+    assert client.post(f"/paper/{doc(0)}/flag", data={"note": "x" * 1001}).status_code == 400
+    assert flags(board_engine, concept) == []
+
+
+def test_the_flag_post_has_the_same_origin_and_host_protection(board_engine, concept) -> None:
+    app, _ = make(board_engine, concept, n=1)
+    client = app.test_client()
+    blind_step(client, concept, 1)
+    url = f"/paper/{doc(0)}/flag"
+    assert client.post(url, headers={"Origin": "https://evil.example"}).status_code == 403
+    assert client.post(url, headers={"Host": "evil.example"}).status_code == 403
+    assert flags(board_engine, concept) == []
+    assert client.post(url, headers={"Origin": "http://localhost"}).status_code == 303
+
+
+def test_the_card_lists_each_flagged_paper_once_with_its_notes_and_the_owners_tag(
+    board_engine, concept
+) -> None:
+    app, papers = make(board_engine, concept, n=3)
+    client = app.test_client()
+    blind_step(client, concept, 3)
+    assert "No paper is flagged" in sections(page(client, "/concept"))["Flagged as interesting"]
+    client.post(f"/paper/{doc(1)}/flag", data={"note": "a reason"})
+    client.post(f"/paper/{doc(1)}/flag", data={"note": "another reason"})
+    client.post(f"/paper/{doc(1)}/flag", data={})
+    client.post(f"/paper/{doc(2)}/flag", data={})
+    part = sections(page(client, "/concept"))["Flagged as interesting"]
+    rows = part.split("<li>")[1:]
+    assert len(rows) == 2 and part.count("Title of paper 1") == 1
+    assert "Title of paper 0" not in part
+    assert f'href="/paper/{doc(1)}"' in rows[0] and f'href="/paper/{doc(2)}"' in rows[1]
+    assert "a reason" in rows[0] and "another reason" in rows[0]
+    for row in rows:  # the owner's own entry, so the tag the card uses for those
+        assert re.findall(r'<span class="tag">(\w+)</span>', row) == ["decided"]
+
+
+def test_a_flagged_held_back_paper_is_on_neither_the_card_nor_its_history(
+    board_engine, concept
+) -> None:
+    app, _ = make(board_engine, concept, n=3, held_back=(2,))
+    client = app.test_client()
+    blind_step(client, concept, 2)
+    # a flag row for the held-back paper, written straight to the log
+    log.add_flag(
+        board_engine, concept=concept, version=1, doc_id=doc(2), actor="owner", note="sealed note"
+    )
+    client.post(f"/paper/{doc(0)}/flag", data={"note": "visible note"})
+    html = page(client, "/concept")
+    assert "Title of paper 2" not in html and doc(2) not in html and "sealed note" not in html
+    part = sections(html)["Flagged as interesting"]
+    assert "visible note" in part and part.count("<li>") == 1
+    assert "visible note" in sections(html)["Our history"]

@@ -44,4 +44,20 @@
   <dd>No decision.</dd>
   {% endif %}
 </dl>
+
+<h2>Flagged as interesting</h2>
+{% if flags %}
+<ul class="rows">
+  {% for f in flags %}
+  <li><span class="tag">decided</span>Flagged on {{ f.written_at | when }}{% if f.body %}: {{ f.body }}{% endif %}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>Not flagged.</p>
+{% endif %}
+<form method="post" action="{{ url_for('flag_paper', doc_id=paper.doc_id) }}">
+  <label>Note, optional
+    <input type="text" name="note" maxlength="300" autocomplete="off"></label>
+  <div class="buttons"><button type="submit">Flag as interesting</button></div>
+</form>
 {% endblock %}

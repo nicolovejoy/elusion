@@ -11,6 +11,9 @@ Every row has a `kind`:
 - `reading`: what the model made of one abstract under one concept version.
 - `audit`: the owner's own verdict on one abstract, given blind.
 - `decision`: a settled disagreement or a changed wording, with the reason.
+- `flag`: the owner marking one paper as interesting, with an optional note (kept in
+  `body`). Flags are never taken back: a changed mind is a later row, and a paper may be
+  flagged more than once.
 
 The rule is enforced by the database and not by this module. A *trigger* is a function
 Postgres runs by itself when a row is about to change. Two triggers here refuse every
@@ -33,8 +36,10 @@ from sqlalchemy.exc import IntegrityError
 
 from elusion.board.quotes import find_quote
 
-KINDS = ("concept", "reading", "audit", "decision")
+KINDS = ("concept", "reading", "audit", "decision", "flag")
 VERDICTS = ("holds", "does_not_hold", "skip", "failed")
+
+_KIND_CHECK = "kind IN (" + ", ".join(f"'{k}'" for k in KINDS) + ")"
 
 metadata = sa.MetaData()
 
@@ -48,7 +53,8 @@ concept_log = sa.Table(
     sa.Column("doc_id", sa.String(16)),
     sa.Column("verdict", sa.Text),
     sa.Column("quote", sa.Text),
-    sa.Column("body", sa.Text),  # concept: the wording; reading: the rationale; decision: why
+    # concept: the wording; reading: the rationale; decision: why; flag: the owner's note
+    sa.Column("body", sa.Text),
     sa.Column("actor", sa.Text, nullable=False),  # owner | claude | owner+claude | model
     sa.Column("model", sa.Text),
     sa.Column("prompt_version", sa.Text),
@@ -56,9 +62,7 @@ concept_log = sa.Table(
     sa.Column(
         "written_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     ),
-    sa.CheckConstraint(
-        "kind IN ('concept', 'reading', 'audit', 'decision')", name="concept_log_kind"
-    ),
+    sa.CheckConstraint(_KIND_CHECK, name="concept_log_kind"),
     sa.CheckConstraint(
         "verdict IS NULL OR verdict IN ('holds', 'does_not_hold', 'skip', 'failed')",
         name="concept_log_verdict",
@@ -144,9 +148,31 @@ def ensure_schema(engine: Engine) -> None:
     metadata.create_all(engine)
     with engine.begin() as conn:
         _audit_key.create(conn, checkfirst=True)  # a table made before this index existed
+        _widen_kind_check(conn)
         conn.execute(sa.text(_REFUSE_FUNCTION))
         for statement in _TRIGGERS:
             conn.execute(sa.text(statement))
+
+
+def _widen_kind_check(conn: sa.Connection) -> None:
+    """Bring the `concept_log_kind` constraint of a table made before `flag` existed up to
+    date: drop it by name and add it again, in the caller's transaction. Only the
+    constraint changes; Postgres checks the rows already there against the new rule and
+    touches none of them, and the append-only triggers do not fire for an ALTER TABLE.
+    Nothing is done when the constraint already allows every kind, so a repeat takes no
+    lock on a table the board may be reading."""
+    current = conn.execute(
+        sa.text(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conname = 'concept_log_kind' AND conrelid = 'concept_log'::regclass"
+        )
+    ).scalar_one_or_none()
+    if current is not None and all(f"'{k}'" in current for k in KINDS):
+        return
+    conn.execute(sa.text("ALTER TABLE concept_log DROP CONSTRAINT IF EXISTS concept_log_kind"))
+    conn.execute(
+        sa.text(f"ALTER TABLE concept_log ADD CONSTRAINT concept_log_kind CHECK ({_KIND_CHECK})")
+    )
 
 
 def _append(engine: Engine, **values: Any) -> int:
@@ -341,6 +367,29 @@ def add_decision(
         body=reason,
         actor=actor,
         detail={"rests_on": list(rests_on)},
+    )
+
+
+def add_flag(
+    engine: Engine,
+    *,
+    concept: str,
+    version: int,
+    doc_id: str,
+    actor: str,
+    note: str | None = None,
+) -> int:
+    """Record that `actor` finds a paper interesting. The note, if it has any words, is
+    stored in `body`; a blank one is stored as null. A flag is never taken back, and the
+    same paper may be flagged again."""
+    return _append(
+        engine,
+        kind="flag",
+        concept=concept,
+        concept_version=version,
+        doc_id=doc_id,
+        body=note.strip() if note and note.strip() else None,
+        actor=actor,
     )
 
 

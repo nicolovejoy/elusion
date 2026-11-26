@@ -84,6 +84,12 @@ after his fresh 30 blind labels.
    final verdict. At the end: agreement, and the precision of the word search with its
    interval.
 
+**Flagging.** Beside the three buttons the audit page has a box, "Flag as interesting", and
+an optional one-line note. The paper note has the same form, for papers already audited, and
+lists the paper's flags. The card has a section, "Flagged as interesting", with each flagged
+paper once and its notes. A flag is one `flag` row in `concept_log` (the note is in `body`),
+is never taken back, and a held-back paper's flags are never shown.
+
 **Next steps, in order.**
 
 1. Done 2026-11-26: the approach approved; `concept_log`, the first read, the audit page,
