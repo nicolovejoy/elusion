@@ -68,6 +68,127 @@ def harvest(
 
 
 @app.command()
+def concept(
+    name: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
+    wording: Annotated[str, typer.Option(help="The concept stated as a question.")],
+    term: Annotated[list[str], typer.Option(help="A search term; repeat it for several.")],
+    criterion: Annotated[
+        str,
+        typer.Option(
+            help="The criterion the concept belongs to: criteria/auditable-decisions.md or "
+            "auditable-decisions. The board holds back that criterion's gold set."
+        ),
+    ],
+    actor: Annotated[
+        str, typer.Option(help="Who wrote this wording: owner, claude ...")
+    ] = "claude",
+) -> None:
+    """Write a new wording of a concept into the concept log; prints its version."""
+    from elusion.board import log
+    from elusion.collect.db import make_engine
+    from elusion.config import settings
+    from elusion.corpora import UnknownCriterion, corpus_for
+
+    # The log is append-only, so a criterion that does not resolve is refused before anything
+    # is written: the board finds the gold set to hold back through this stem.
+    stem = Path(criterion).stem if criterion.endswith(".md") else criterion
+    try:
+        if not (Path("criteria") / f"{stem}.md").is_file():
+            raise UnknownCriterion(f"no criterion file criteria/{stem}.md")
+        corpus_for(stem)
+    except UnknownCriterion as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    engine = make_engine(settings.database_url)
+    log.ensure_schema(engine)
+    version = log.add_concept(
+        engine, name, wording, actor, {"search_terms": term, "criterion": stem}
+    )
+    typer.echo(f"{name} version {version}")
+
+
+@app.command(name="first-read")
+def first_read(
+    concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
+    model: Annotated[str, typer.Option(help="Pinned reader model id.")] = "claude-haiku-5-5",
+) -> None:
+    """Have a model read each abstract matching the concept's search terms, once."""
+    from elusion.board.log import UnknownConcept
+    from elusion.flows.first_read import first_read as first_read_flow
+    from elusion.flows.first_read import public_summary
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import AnthropicProvider
+
+    try:
+        summary = first_read_flow(concept, AnthropicProvider(model))
+    except (BudgetExceeded, UnknownConcept) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(public_summary(summary))
+
+
+@app.command()
+def board(
+    concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
+    port: Annotated[int, typer.Option(help="The local port to serve on.")] = 8010,
+    release_gold: Annotated[
+        bool,
+        typer.Option(
+            "--release-gold",
+            help="Also serve the papers held back as the criterion's gold set.",
+        ),
+    ] = False,
+) -> None:
+    """Serve the blind audit page for CONCEPT on this machine."""
+    from elusion.board import audit, log
+    from elusion.board.batch import held_back_ids, load_papers
+    from elusion.board.web import create_app
+    from elusion.collect.db import make_engine
+    from elusion.config import settings
+    from elusion.corpora import OPENALEX
+    from elusion.evaluate.gold import gold_path
+
+    engine = make_engine(settings.database_url)
+    log.ensure_schema(engine)
+    try:
+        entry = log.current_concept(engine, concept)
+        audit.reader_of(engine, concept, entry.concept_version)
+    except (log.UnknownConcept, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    read = {e.doc_id for e in log.entries(engine, concept, entry.concept_version, kind="reading")}
+    papers = {
+        p.doc_id: p for p in load_papers(OPENALEX.text_dir(settings.data_dir)) if p.doc_id in read
+    }
+    criterion = entry.detail.get("criterion")
+    held_back = set()
+    if not release_gold:
+        # Fail closed: with no gold file to read, nothing would be held back and the owner
+        # would be served the papers he labelled for evaluation.
+        if not criterion:
+            typer.echo(
+                f"error: concept {concept!r} names no criterion, so the gold set cannot be held "
+                "back; pass --release-gold to serve every paper",
+                err=True,
+            )
+            raise typer.Exit(1)
+        gold_csv = gold_path(criterion, settings.data_dir)
+        if not gold_csv.is_file():
+            typer.echo(
+                f"error: no gold file at {gold_csv}, so the gold set cannot be held back; "
+                "pass --release-gold to serve every paper",
+                err=True,
+            )
+            raise typer.Exit(1)
+        held_back = held_back_ids(gold_csv)
+    n = len(held_back & papers.keys())
+    typer.echo(f"http://localhost:{port}")
+    typer.echo(f"{n} {'paper' if n == 1 else 'papers'} held back")
+    create_app(engine, concept, papers, held_back).run(host="127.0.0.1", port=port, debug=False)
+
+
+@app.command()
 def review(
     criterion: Annotated[
         Path, typer.Option(help="Criterion file, e.g. criteria/cloud-concentration.md.")

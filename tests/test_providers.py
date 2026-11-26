@@ -9,6 +9,7 @@ from elusion.config import Settings
 from elusion.review.providers import (
     GRADE_SCHEMA,
     LABEL_SCHEMA,
+    READING_SCHEMA,
     VERDICT_SCHEMA,
     AnthropicProvider,
     Grade,
@@ -16,11 +17,14 @@ from elusion.review.providers import (
     Judge,
     Label,
     Provider,
+    Reader,
+    Reading,
     ReviewError,
     Verdict,
     grader_message,
+    reader_message,
 )
-from tests.fakes import FakeGrader, FakeJudge, FakeProvider
+from tests.fakes import FakeGrader, FakeJudge, FakeProvider, FakeReader
 
 
 def test_verdict_rejects_out_of_range_score():
@@ -269,3 +273,29 @@ def test_anthropic_prices_by_the_pinned_id_so_drift_reaches_the_echo_check(monke
     )
     r = provider.review("s", "p")
     assert r.model == "claude-haiku-5-5-20990101" and r.cost_usd > 0
+
+
+def test_fake_reader_satisfies_protocol():
+    assert isinstance(FakeReader(lambda m: None), Reader)
+
+
+def test_reading_rejects_extra_fields():
+    with pytest.raises(ValidationError):
+        Reading.model_validate({"holds": True, "quote": "", "answer": "", "rationale": "r", "x": 1})
+
+
+def test_read_request_sends_the_message_and_returns_the_reading(monkeypatch):
+    seen = {}
+    reading = Reading(holds=True, quote="a passage", answer="an answer", rationale="why")
+    provider = stub_create(monkeypatch, reading.model_dump_json(), seen=seen)
+    first = provider.read("READER SYSTEM", reader_message("the wording", "the abstract"))
+
+    fmt = seen["output_config"]["format"]
+    assert fmt == {"type": "json_schema", "schema": READING_SCHEMA}
+    assert fmt["schema"]["required"] == ["holds", "quote", "answer", "rationale"]
+    assert seen["system"][0]["text"] == "READER SYSTEM"
+    assert seen["messages"] == [
+        {"role": "user", "content": "CONCEPT:\nthe wording\n\nABSTRACT:\nthe abstract"}
+    ]
+    assert first.reading == reading
+    assert first.model == "claude-haiku-5-5"

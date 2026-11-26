@@ -19,6 +19,7 @@ dependencies = [
   "python-dotenv",
   "openai>=3.43.0",
   "httpx",
+  "flask",
 ]
 
 [project.optional-dependencies]

@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from elusion.review.providers import Grade, Grading, Judgement, Label, Review, Verdict
+from elusion.review.providers import (
+    FirstRead,
+    Grade,
+    Grading,
+    Judgement,
+    Label,
+    Reading,
+    Review,
+    Verdict,
+)
 
 
 class FakeProvider:
@@ -94,4 +103,28 @@ class FakeGrader:
             input_tokens=100,
             output_tokens=20,
             cost_usd=0.0,
+        )
+
+
+class FakeReader:
+    """Test-only first reader: answers from a function of the message it was sent.
+
+    The function returns a `Reading`, or an exception, which is raised. `calls` records
+    (system, message) exactly as sent.
+    """
+
+    name = "fake"
+
+    def __init__(self, answer, model: str = "claude-haiku-5-5") -> None:
+        self.model = model
+        self.answer = answer
+        self.calls: list[tuple[str, str]] = []
+
+    def read(self, system: str, message: str) -> FirstRead:
+        self.calls.append((system, message))
+        result: Reading | Exception = self.answer(message)
+        if isinstance(result, Exception):
+            raise result
+        return FirstRead(
+            reading=result, model=self.model, input_tokens=100, output_tokens=20, cost_usd=0.0
         )

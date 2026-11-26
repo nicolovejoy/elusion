@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Not yet{% endblock %}
+{% block body %}
+<h1>Not yet</h1>
+<p>{{ remaining }} {{ "paper" if remaining == 1 else "papers" }} still without your verdict.
+Give your own verdict on every paper first; the disagreements show after that.</p>
+<p><a href="{{ url_for('audit_page') }}">Back to the audit</a></p>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Disagreement{% endblock %}
+{% block body %}
+<p class="muted">{{ left }} {{ "disagreement" if left == 1 else "disagreements" }} left to settle</p>
+<p class="wording">{{ wording }}</p>
+<h1>{{ paper.title }}</h1>
+<p class="abstract">{{ abstract }}</p>
+<dl>
+  <dt>Your verdict</dt>
+  <dd>{{ d.blind.verdict | words }}</dd>
+  <dt>The reader's verdict</dt>
+  <dd>{{ d.reading.verdict | words }}{% if not d.reading.quote %} (no passage quoted){% endif %}</dd>
+  <dt>Its reason</dt>
+  <dd>{{ d.reading.body }}</dd>
+  <dt>Read by</dt>
+  <dd>{{ d.reading.model }}, prompt version {{ d.reading.prompt_version }}</dd>
+</dl>
+<form method="post" action="{{ url_for('settle', doc_id=paper.doc_id) }}">
+  <label>Why? <textarea name="reason" rows="3" required></textarea></label>
+  <div class="buttons">
+    <button type="submit" name="verdict" value="holds">Holds</button>
+    <button type="submit" name="verdict" value="does_not_hold">Does not hold</button>
+  </div>
+</form>
+{% endblock %}

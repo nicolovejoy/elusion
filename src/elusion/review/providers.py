@@ -29,6 +29,10 @@ judge prompt and returns a yes/no `Label` instead of a 0-4 `Verdict`. It is the 
 with a different output schema, so both go through one private `_call`: same cached system
 prompt, same `effort: low`, same `ReviewError` for unusable answers, same cost accounting.
 The judge is a separate `Judge` Protocol so the judge flow can take a fake in tests.
+
+The concept board's first read (`read()`) is one more such call: one paper abstract under
+a concept, answered as a `Reading` (does the paper hold the concept, the passage that
+shows it, the answer it gives, why), through the same `_call` and its own `Reader` Protocol.
 """
 
 from __future__ import annotations
@@ -91,6 +95,29 @@ class Grade(BaseModel):
 
 
 GRADE_SCHEMA = transform_schema(Grade.model_json_schema())
+
+
+class Reading(BaseModel):
+    """The first read's answer: does the abstract hold the concept, shown by which passage."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    holds: bool = Field(description="True if the paper holds the concept")
+    quote: str = Field(
+        description="Passage copied character for character from the abstract, or empty string"
+    )
+    answer: str = Field(
+        description="If the paper holds the concept, one sentence: the answer it gives; else empty"
+    )
+    rationale: str = Field(description="One sentence saying why the paper holds it or does not")
+
+
+READING_SCHEMA = transform_schema(Reading.model_json_schema())
+
+
+def reader_message(wording: str, abstract: str) -> str:
+    """The user turn for a first read: the concept's wording and one abstract, nothing else."""
+    return f"CONCEPT:\n{wording}\n\nABSTRACT:\n{abstract}"
 
 
 def grader_message(paragraph: str, verdict: Verdict) -> str:
@@ -162,6 +189,17 @@ class Grading:
     cache_read_input_tokens: int = 0
 
 
+@dataclass
+class FirstRead:
+    reading: Reading
+    model: str  # as served by the API, not as requested
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+
 # runtime_checkable: Prefect builds a pydantic schema from the flow signature, which
 # isinstance-checks parameters; a plain Protocol cannot be used with isinstance.
 @runtime_checkable
@@ -186,6 +224,14 @@ class Grader(Protocol):
     model: str
 
     def grade(self, system: str, paragraph: str, verdict: Verdict) -> Grading: ...
+
+
+@runtime_checkable
+class Reader(Protocol):
+    name: str
+    model: str
+
+    def read(self, system: str, message: str) -> FirstRead: ...
 
 
 _Out = TypeVar("_Out", bound=BaseModel)
@@ -213,6 +259,10 @@ class AnthropicProvider:
             system, grader_message(paragraph, verdict), Grade, GRADE_SCHEMA
         )
         return Grading(grade, model, **usage)
+
+    def read(self, system: str, message: str) -> FirstRead:
+        reading, model, usage = self._call(system, message, Reading, READING_SCHEMA)
+        return FirstRead(reading, model, **usage)
 
     def _call(
         self, system: str, paragraph: str, out: type[_Out], schema: dict

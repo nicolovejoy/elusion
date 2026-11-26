@@ -529,3 +529,287 @@ def test_harvest_command_runs_the_flow_and_prints_its_summary(monkeypatch) -> No
 
     assert CliRunner().invoke(app, ["harvest", "--seeds-only"]).exit_code == 0
     assert seen == {"max_pages": None, "seeds_only": True}
+
+
+def test_concept_command_adds_a_version_with_search_terms_and_criterion(monkeypatch) -> None:
+    import elusion.board.log as log
+    import elusion.collect.db as db
+
+    seen = {}
+    monkeypatch.setattr(db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(log, "ensure_schema", lambda engine: seen.update(schema=engine))
+
+    def fake_add(engine, concept, wording, actor, detail=None):
+        seen.update(engine=engine, concept=concept, wording=wording, actor=actor, detail=detail)
+        return 3
+
+    monkeypatch.setattr(log, "add_concept", fake_add)
+    result = CliRunner().invoke(
+        app,
+        [
+            "concept",
+            "--name",
+            "stopping",
+            "--wording",
+            "When should a review stop?",
+            "--term",
+            "stopping rule",
+            "--term",
+            "recall target",
+            "--criterion",
+            "auditable-decisions",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "schema": "engine",
+        "engine": "engine",
+        "concept": "stopping",
+        "wording": "When should a review stop?",
+        "actor": "claude",
+        "detail": {
+            "search_terms": ["stopping rule", "recall target"],
+            "criterion": "auditable-decisions",
+        },
+    }
+    assert "stopping" in result.output and "3" in result.output
+
+
+def _stub_concept(monkeypatch):
+    import elusion.board.log as log
+    import elusion.collect.db as db
+
+    seen = {}
+    monkeypatch.setattr(db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(log, "ensure_schema", lambda engine: None)
+
+    def fake_add(engine, concept, wording, actor, detail=None):
+        seen.update(detail=detail)
+        return 1
+
+    monkeypatch.setattr(log, "add_concept", fake_add)
+    return seen
+
+
+def _concept_args(*criterion):
+    return ["concept", "--name", "s", "--wording", "w?", "--term", "t", *criterion]
+
+
+def test_concept_stores_the_stem_of_a_path_form_criterion(monkeypatch) -> None:
+    seen = _stub_concept(monkeypatch)
+    result = CliRunner().invoke(
+        app, _concept_args("--criterion", "criteria/auditable-decisions.md")
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["detail"]["criterion"] == "auditable-decisions"
+
+
+def test_concept_refuses_a_criterion_with_no_file_or_no_corpus_and_writes_nothing(
+    monkeypatch, tmp_path
+) -> None:
+    seen = _stub_concept(monkeypatch)
+    result = CliRunner().invoke(app, _concept_args("--criterion", "nope"))
+    assert result.exit_code == 1
+    assert result.output.startswith("error: ") and "nope" in result.output
+    assert "Traceback" not in result.output
+    assert seen == {}
+
+    # A criteria file exists but the stem names no corpus.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "criteria").mkdir()
+    (tmp_path / "criteria" / "orphan.md").write_text("x")
+    result = CliRunner().invoke(app, _concept_args("--criterion", "criteria/orphan.md"))
+    assert result.exit_code == 1
+    assert result.output.startswith("error: ") and "orphan" in result.output
+    assert seen == {}
+
+
+def test_concept_requires_a_criterion(monkeypatch) -> None:
+    seen = _stub_concept(monkeypatch)
+    result = CliRunner().invoke(app, _concept_args())
+    assert result.exit_code != 0
+    assert seen == {}
+
+
+def test_first_read_command_builds_the_reader_and_prints_the_summary(monkeypatch) -> None:
+    import elusion.flows.first_read as mod
+    import elusion.review.providers as providers
+
+    seen = {}
+
+    class StubProvider:
+        def __init__(self, model):
+            self.model = model
+
+    def fake_flow(concept, reader, **kw):
+        seen.update(concept=concept, reader=reader, **kw)
+        return {
+            "matched": 5,
+            "already_read": 1,
+            "read": 2,
+            "holds": 1,
+            "does_not_hold": 1,
+            "failed": 0,
+            "cost_usd": 0.5,
+        }
+
+    monkeypatch.setattr(providers, "AnthropicProvider", StubProvider)
+    monkeypatch.setattr(mod, "first_read", fake_flow)
+    result = CliRunner().invoke(app, ["first-read", "--concept", "stopping"])
+    assert result.exit_code == 0, result.output
+    assert seen["concept"] == "stopping"
+    assert seen["reader"].model == "claude-haiku-5-5"
+    # The verdict counts are what the blind audit must not see before it is done.
+    assert "holds" not in result.output and "does_not_hold" not in result.output
+    assert "'read': 2" in result.output and "'matched': 5" in result.output
+
+    CliRunner().invoke(app, ["first-read", "--concept", "stopping", "--model", "other-model"])
+    assert seen["reader"].model == "other-model"
+
+
+def test_first_read_budget_and_unknown_concept_exit_1_without_traceback(monkeypatch) -> None:
+    import elusion.flows.first_read as mod
+    import elusion.review.providers as providers
+    from elusion.board.log import UnknownConcept
+    from elusion.flows.review import BudgetExceeded
+
+    monkeypatch.setattr(providers, "AnthropicProvider", lambda model: object())
+    for exc, text in [
+        (BudgetExceeded("projected cost $2 is above the limit of $1"), "above the limit"),
+        (UnknownConcept("nope"), "nope"),
+    ]:
+
+        def fake_flow(concept, reader, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(mod, "first_read", fake_flow)
+        result = CliRunner().invoke(app, ["first-read", "--concept", "nope"])
+        assert result.exit_code == 1
+        assert text in result.output
+        assert "Traceback" not in result.output
+
+
+def _stub_board(
+    monkeypatch, tmp_path, *, held=frozenset(), criterion="auditable-decisions", gold_exists=True
+):
+    """Patch everything `board` touches, so no server starts and no database is reached."""
+    from types import SimpleNamespace
+
+    import elusion.board.audit as audit_mod
+    import elusion.board.batch as batch
+    import elusion.board.log as log
+    import elusion.board.web as web
+    import elusion.collect.db as db
+    import elusion.evaluate.gold as gold_mod
+
+    seen = {}
+
+    class FakeApp:
+        def run(self, **kw):
+            seen["run"] = kw
+
+    papers = [SimpleNamespace(doc_id=d) for d in ("a", "b", "c")]
+    concept = SimpleNamespace(concept_version=2, detail={"criterion": criterion})
+    readings = [SimpleNamespace(doc_id=d) for d in ("a", "c", "zz")]
+    monkeypatch.setattr(db, "make_engine", lambda url: "engine")
+    monkeypatch.setattr(log, "ensure_schema", lambda engine: None)
+    monkeypatch.setattr(log, "current_concept", lambda engine, name: concept)
+    monkeypatch.setattr(log, "entries", lambda engine, name, version=None, kind=None: readings)
+    monkeypatch.setattr(audit_mod, "reader_of", lambda engine, name, version: seen.update(r=1))
+    monkeypatch.setattr(batch, "load_papers", lambda directory: papers)
+
+    def fake_held(path):
+        seen["gold"] = path
+        return set(held)
+
+    monkeypatch.setattr(batch, "held_back_ids", fake_held)
+    # The gold CSV the board looks for exists unless a test says it does not.
+    gold_dir = tmp_path / "gold"
+    gold_dir.mkdir(exist_ok=True)
+    if gold_exists:
+        (gold_dir / f"{criterion}.csv").write_text("")
+    monkeypatch.setattr(gold_mod, "gold_path", lambda c, data_dir: gold_dir / f"{c}.csv")
+
+    def fake_create(engine, name, kept, held_back):
+        seen.update(engine=engine, concept=name, papers=kept, held_back=held_back)
+        return FakeApp()
+
+    monkeypatch.setattr(web, "create_app", fake_create)
+    return seen
+
+
+def test_board_serves_the_papers_with_a_reading_and_holds_back_the_gold_set(
+    monkeypatch, tmp_path
+) -> None:
+    seen = _stub_board(monkeypatch, tmp_path, held={"c"})
+    result = CliRunner().invoke(app, ["board", "--concept", "stopping"])
+    assert result.exit_code == 0, result.output
+    assert "http://localhost:8010" in result.output
+    assert "1 paper held back" in result.output
+    assert seen["gold"].parts[-2:] == ("gold", "auditable-decisions.csv")
+    assert (seen["concept"], seen["engine"]) == ("stopping", "engine")
+    assert sorted(seen["papers"]) == ["a", "c"]  # "b" has no reading, "zz" is not a paper
+    assert seen["held_back"] == {"c"}
+    assert seen["run"] == {"host": "127.0.0.1", "port": 8010, "debug": False}
+
+
+def test_board_release_gold_holds_nothing_back_and_takes_a_port(monkeypatch, tmp_path) -> None:
+    seen = _stub_board(monkeypatch, tmp_path, held={"c"})
+    result = CliRunner().invoke(
+        app, ["board", "--concept", "stopping", "--port", "8123", "--release-gold"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "http://localhost:8123" in result.output
+    assert "0 papers held back" in result.output
+    assert "gold" not in seen
+    assert seen["held_back"] == set()
+    assert seen["run"]["port"] == 8123
+
+
+def test_board_without_a_criterion_refuses_to_start(monkeypatch, tmp_path) -> None:
+    seen = _stub_board(monkeypatch, tmp_path, held={"c"}, criterion=None)
+    result = CliRunner().invoke(app, ["board", "--concept", "stopping"])
+    assert result.exit_code == 1
+    assert result.output.startswith("error: ") and "criterion" in result.output
+    assert "run" not in seen
+
+
+def test_board_refuses_to_start_without_a_gold_file(monkeypatch, tmp_path) -> None:
+    seen = _stub_board(monkeypatch, tmp_path, held={"c"}, gold_exists=False)
+    result = CliRunner().invoke(app, ["board", "--concept", "stopping"])
+    assert result.exit_code == 1
+    assert result.output.startswith("error: ") and "gold" in result.output
+    assert "Traceback" not in result.output
+    assert "run" not in seen
+
+
+def test_board_release_gold_needs_no_criterion_and_no_gold_file(monkeypatch, tmp_path) -> None:
+    seen = _stub_board(monkeypatch, tmp_path, held={"c"}, criterion=None, gold_exists=False)
+    result = CliRunner().invoke(app, ["board", "--concept", "stopping", "--release-gold"])
+    assert result.exit_code == 0, result.output
+    assert seen["held_back"] == set()
+
+
+def test_board_unknown_concept_and_unreadable_readings_exit_1(monkeypatch, tmp_path) -> None:
+    import elusion.board.audit as audit_mod
+    import elusion.board.log as log
+
+    seen = _stub_board(monkeypatch, tmp_path)
+
+    def unknown(engine, name):
+        raise log.UnknownConcept(name)
+
+    monkeypatch.setattr(log, "current_concept", unknown)
+    result = CliRunner().invoke(app, ["board", "--concept", "nope"])
+    assert result.exit_code == 1 and "nope" in result.output
+    assert "Traceback" not in result.output
+
+    seen = _stub_board(monkeypatch, tmp_path)
+
+    def no_reader(engine, name, version):
+        raise ValueError("no readings of stopping v2 yet")
+
+    monkeypatch.setattr(audit_mod, "reader_of", no_reader)
+    result = CliRunner().invoke(app, ["board", "--concept", "stopping"])
+    assert result.exit_code == 1 and "no readings" in result.output
+    assert "run" not in seen

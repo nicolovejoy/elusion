@@ -1,14 +1,13 @@
 # Concept audit: design
 
-Status: drafted by Claude on 2026-11-18. **Not approved.** Nothing here is built, and nothing
-is built until the owner approves this page. It belongs with the concept board
-(`phase-7-concept-board-map.md`) and uses its words.
+Status: drafted by Claude on 2026-11-18; **approved by the owner on 2026-11-26** with the web
+approach below, and built the same day from `phase-7-concept-board-build.md`. It belongs
+with the concept board (`phase-7-concept-board-map.md`) and uses its words.
 
 **Changed by the owner on 2026-11-26** ("Decided by the owner, 2026-11-26" below): the
 audit runs in a local web page and not in the terminal, the first read is made by a pinned
 model, and "skip" is kept. Where an older line below says a terminal command, Claude in
-the session, or asks whether skip is wanted, that block governs. The page as a whole is
-still not approved: the web approach is to be talked through first.
+the session, or asks whether skip is wanted, that block governs.
 
 ## Intent
 
@@ -46,15 +45,25 @@ canvas, not in this repo; the views are described under "The three views" below.
 - **"Skip" is kept.** A skipped paper has no verdict; the disagreements step still waits
   until every paper has one, so a skipped paper comes round again.
 
-**Open: the web approach.** The owner wants to talk it through before anything is built.
-What is known: `fastapi`, `uvicorn` and `jinja2` are already installed, pulled in by
-Prefect and MLflow, so a small server-rendered page needs them declared in
-`pyproject.toml` and nothing new downloaded. Claude's starting proposal, not agreed: one
-FastAPI app started by `uv run elusion board`, bound to localhost, with server-rendered
-HTML templates and no JavaScript build; every page is a view computed from `concept_log`,
-and every button is one insert into it. The alternatives to weigh: Python's standard
-`http.server` (no declared dependency, more code by hand), or Flask (also already
-installed). Not proposed: Streamlit or a JavaScript front end, which are new packages.
+**The web approach (approved 2026-11-26).** One Flask app started by
+`uv run elusion board --concept stopping`, bound to localhost on port 8010, with
+server-rendered HTML templates and no JavaScript. Every page is a view computed from
+`concept_log`, and every button is one insert into it, so the page holds no state of its
+own. Flask and not FastAPI, which was Claude's first proposal: FastAPI cannot read a
+submitted HTML form without `python-multipart`, which is not installed, and Flask is
+(through MLflow), reads forms itself and is synchronous like the repo's `psycopg` code.
+The page refuses a request whose host is not localhost and a POST from another origin,
+so no other website can post verdicts to it.
+
+**The first read (approved 2026-11-26).** `claude-haiku-5-5` under prompt `first-read/v1`,
+one call per abstract, through `uv run elusion first-read --concept stopping`. The owner
+asked for the cheaper model; a quote that code cannot find verbatim in the abstract is
+stored as a failed reading and not repaired.
+
+**Held back.** Six of the 31 stopping abstracts are in the screen's gold draw, not one:
+the draw grew to 800 after this page was written. All 31 are read by the model; the six
+are kept off every page the owner sees until `elusion board --release-gold`, which is for
+after his fresh 30 blind labels.
 
 **The three views** (the mockups, in words).
 
@@ -75,19 +84,23 @@ installed). Not proposed: Streamlit or a JavaScript front end, which are new pac
    final verdict. At the end: agreement, and the precision of the word search with its
    interval.
 
+**Flagging.** Beside the three buttons the audit page has a box, "Flag as interesting", and
+an optional one-line note. The paper note has the same form, for papers already audited, and
+lists the paper's flags. The card has a section, "Flagged as interesting", with each flagged
+paper once and its notes. A flag is one `flag` row in `concept_log` (the note is in `body`),
+is never taken back, and a held-back paper's flags are never shown.
+
 **Next steps, in order.**
 
-1. Talk through the web approach and approve or change this page.
-2. Build `concept_log` (append-only, enforced by the database) with its tests.
-3. A versioned first-read prompt and a pinned model; read the 31 abstracts; each reading
-   stored with a quote that code confirms is verbatim.
-4. The audit page, blind step then disagreements; the owner audits the 31.
-5. The concept card and the paper note as views over the log.
-6. Then part B of the phase 7 spec (index, `ask`, `ask-eval`).
+1. Done 2026-11-26: the approach approved; `concept_log`, the first read, the audit page,
+   the concept card and the paper note built (`phase-7-concept-board-build.md`).
+2. The owner records the concept's wording, runs the first read, and audits blind.
+3. The owner settles the disagreements; the card and the paper notes open.
+4. Then part B of the phase 7 spec (index, `ask`, `ask-eval`).
 
-Still owed from part A: the owner's fresh 30 blind labels for the screen's judge. One of
-the 31 stopping abstracts (`W7223334133`) is in that gold draw, so it is held back from
-anything the owner reads until those labels are done.
+Still owed from part A: the owner's fresh 30 blind labels for the screen's judge. Six of
+the 31 stopping abstracts are in that gold draw, so they are held back from anything the
+owner reads until those labels are done.
 
 ## Goals
 
@@ -103,11 +116,9 @@ anything the owner reads until those labels are done.
 
 ## Not goals
 
-- A web page, a hosted service, or anything on Azure.
+- A hosted service, or anything on Azure.
 - Auditing links between concepts. Only "does this paper hold this concept" is audited.
 - Changing `elusion label`. It stays the audit of the screen's judge.
-- Deciding who does first reads from now on, a pinned model or Claude in the session. That
-  is item 3 under "Not decided yet" in the board doc.
 
 ## What would make it a failure
 
@@ -119,20 +130,23 @@ anything the owner reads until those labels are done.
 
 ## Constraints
 
-- Laptop only, from `compose.yaml`. No new service and no new dependency.
+- Laptop only, from `compose.yaml`. No new service. One dependency is declared, `flask`,
+  which was already installed through MLflow.
 - The log is a Postgres table that takes only inserts (agreed proposal 3).
-- The hard rules in `CLAUDE.md`. No model is called by the audit itself.
+- The hard rules in `CLAUDE.md`. No model is called by the audit page; the first read is a
+  separate command.
 
 ## Approaches
 
-1. **A terminal command over the log table.** Picked. It follows the pattern of
+1. **A terminal command over the log table.** Picked on 2026-11-18, replaced by approach
+   3 on 2026-11-26. It follows the pattern of
    `elusion label`, which the owner has used, and needs nothing new installed. Running in
    the terminal is Claude's call, not something the owner chose; he chose blind-then-open
    and the laptop.
 2. **Extend `elusion label`.** Not picked. It draws its sample from the screen's judged
    rows and appends to the gold CSV. These 31 have no judged rows, and the audit's verdicts
    belong in the log.
-3. **A local web page.** Not picked for now. It would show a quote in place inside its
+3. **A local web page.** Picked on 2026-11-26. It would show a quote in place inside its
    abstract, which a terminal does poorly, but it is more to build and adds a dependency.
    It is the likely next step once the board holds more than one concept.
 4. **A hosted page on Azure.** Not picked. There is one auditor and the data is in the

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Audit{% endblock %}
+{% block body %}
+<p class="muted">Paper {{ k }} of {{ n }}</p>
+<p class="wording">{{ wording }}</p>
+<h1>{{ paper.title }}</h1>
+<p class="abstract">{{ paper.text }}</p>
+<form method="post" action="{{ url_for('give_verdict', doc_id=paper.doc_id) }}">
+  {# Enter in the note field presses the first submit button of the form. That one is a
+     hidden skip, so Enter never files a verdict by accident. #}
+  <button type="submit" name="verdict" value="skip" hidden tabindex="-1">Skip</button>
+  <div class="buttons">
+    <button type="submit" name="verdict" value="holds">Holds</button>
+    <button type="submit" name="verdict" value="does_not_hold">Does not hold</button>
+    <button type="submit" name="verdict" value="skip">Skip</button>
+  </div>
+  <label class="check"><input type="checkbox" name="flag" value="1"> Flag as interesting</label>
+  <label>Note, optional
+    <input type="text" name="note" maxlength="300" autocomplete="off"></label>
+</form>
+{% endblock %}

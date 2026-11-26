@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Concept{% endblock %}
+{% block body %}
+{% macro interval(e) %}({{ e.point | pct }}; 95% interval {{ e.low | pct }} to {{ e.high | pct }}){% endmacro %}
+<h1>{{ s.entry.concept }}</h1>
+<p class="muted">Each statement carries where it comes from: <span class="tag">paper</span> a quote
+copied from an abstract, <span class="tag">model</span> a reading by the model,
+<span class="tag">decided</span> a wording or a decision of ours.</p>
+
+<h2>The wording</h2>
+<p class="wording"><span class="tag">decided</span>{{ s.wording }}</p>
+<p class="muted">Wording, version {{ s.version }}, written by {{ s.entry.actor }}
+on {{ s.entry.written_at | when }}.</p>
+
+<h2>Counts</h2>
+<p class="muted">Counted from the log.</p>
+<ul class="rows">
+  <li>Matched and read by the model: {{ matching }}</li>
+  <li>Held back until the gold labels are done: {{ s.held_back_n }}</li>
+  <li>Audited here: {{ s.doc_ids | length }}</li>
+  <li>Reader says holds: {{ by_reader["holds"] }}</li>
+  <li>Reader says does not hold: {{ by_reader["does_not_hold"] }}</li>
+  <li>Failed readings: {{ figures.failed_readings }}</li>
+  <li>Agreement of the reader with your blind verdicts:
+    {% if figures.agreement %}{{ figures.agreed }} of {{ figures.compared }} papers
+    {{ interval(figures.agreement) }}{% else %}not yet available{% endif %}</li>
+  <li>Precision of the word search, papers that hold after your decisions:
+    {% if figures.precision %}{{ figures.holds_final }} of {{ figures.audited }} papers
+    {{ interval(figures.precision) }}{% else %}not yet available{% endif %}</li>
+</ul>
+<p class="muted">Read by {{ reader.model }}, prompt version {{ reader.prompt_version }}.</p>
+
+<h2>Answers</h2>
+{% if answers %}
+<ul class="rows">
+  {% for p, r in answers %}
+  <li>
+    <a href="{{ url_for('paper_page', doc_id=p.doc_id) }}">{{ p.title }}</a>
+    <span class="muted">{{ p.publication_date | month }}</span>
+    {% if r.verdict == "holds" %}
+    <div><span class="tag">model</span>{{ r.detail.get("answer") or "No answer was given." }}</div>
+    <blockquote><span class="tag">paper</span>{{ r.quote }}</blockquote>
+    {% else %}
+    <div class="muted">{% if r.verdict == "does_not_hold" %}The reader said it does not hold,
+      and you decided it holds, so there is no answer.
+      {%- else %}The reading failed. Your verdict: holds.{% endif %}</div>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No paper holds the concept.</p>
+{% endif %}
+
+<h2>Flagged as interesting</h2>
+{% if flagged %}
+<ul class="rows">
+  {% for p, notes in flagged %}
+  <li>
+    <span class="tag">decided</span><a href="{{ url_for('paper_page', doc_id=p.doc_id) }}">{{ p.title }}</a>
+    <span class="muted">{{ p.publication_date | month }}</span>
+    {% for note in notes %}<div>{{ note }}</div>{% endfor %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No paper is flagged.</p>
+{% endif %}
+
+<h2>Other meanings of the words</h2>
+{% if others %}
+<ul class="rows">
+  {% for p, r in others %}
+  <li>
+    <a href="{{ url_for('paper_page', doc_id=p.doc_id) }}">{{ p.title }}</a>
+    <span class="muted">{{ p.publication_date | month }}</span>
+    {% if r.verdict == "holds" %}
+    <div class="muted">The reader said it holds, and you decided it does not.</div>
+    {% elif r.verdict == "failed" %}
+    <div class="muted">The reading failed.</div>
+    {% endif %}
+    {% if r.verdict != "failed" %}
+    {% if r.quote %}<blockquote><span class="tag">paper</span>{{ r.quote }}</blockquote>{% endif %}
+    {% if r.body %}<div><span class="tag">model</span>{{ r.body }}</div>{% endif %}
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No paper uses the words in another sense.</p>
+{% endif %}
+
+<h2>The field's history</h2>
+{% if history %}
+<ul class="rows">
+  {% for month, n in history %}
+  <li>{{ month }}: {{ n }} {{ "paper" if n == 1 else "papers" }}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No paper holds the concept.</p>
+{% endif %}
+
+<h2>Our history</h2>
+<ul class="rows">
+  {% for e, p in log %}
+  <li><span class="muted">{{ e.written_at | when }}</span>
+    <span class="tag">{{ "model" if e.kind == "reading" else "decided" }}</span><b>{{ e.kind }}</b> {{ e.model or e.actor }}
+    {%- if e.kind == "concept" %}, wording version {{ e.concept_version }}{% endif %}
+    {%- if e.verdict %}, {{ e.verdict | words }}{% endif %}
+    {%- if e.kind in ("decision", "flag") and e.body %}: {{ e.body }}{% endif %}
+    {%- if p and p.doc_id in s.doc_ids %}
+    <a href="{{ url_for('paper_page', doc_id=p.doc_id) }}">{{ p.title }}</a>{% endif %}</li>
+  {% endfor %}
+</ul>
+{% endblock %}

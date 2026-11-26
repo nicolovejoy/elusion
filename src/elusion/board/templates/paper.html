@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Paper{% endblock %}
+{% block body %}
+<h1>{{ paper.title }}</h1>
+<p class="muted">Work {{ paper.work_id }}, published {{ paper.publication_date }}</p>
+<p class="abstract">{{ abstract }}</p>
+
+<h2>The reading</h2>
+<dl>
+  <dt>Verdict</dt>
+  <dd><span class="tag">model</span>{{ reading.verdict | words }}</dd>
+  {% if reading.verdict == "failed" %}
+  <dt>Stop reason</dt>
+  <dd>{{ reading.detail.get("stop_reason", "not recorded") }}</dd>
+  {% if reading.detail.get("model_quote") %}
+  <dt>The model's quote, not verbatim, so not checked against the abstract</dt>
+  <dd><blockquote>{{ reading.detail["model_quote"] }}</blockquote></dd>
+  {% endif %}
+  {% elif reading.verdict == "holds" %}
+  <dt>Answer</dt>
+  <dd><span class="tag">model</span>{{ reading.detail.get("answer") or "No answer was given." }}</dd>
+  {% endif %}
+  {% if reading.quote %}
+  <dt>Quote</dt>
+  <dd><blockquote><span class="tag">paper</span>{{ reading.quote }}</blockquote></dd>
+  {% endif %}
+  {% if reading.body %}
+  <dt>Its reason</dt>
+  <dd><span class="tag">model</span>{{ reading.body }}</dd>
+  {% endif %}
+  <dt>Read by</dt>
+  <dd>{{ reading.model }}, prompt version {{ reading.prompt_version }}</dd>
+</dl>
+
+<h2>Your verdicts</h2>
+<dl>
+  <dt>Your blind verdict</dt>
+  <dd>{{ blind.verdict | words }}</dd>
+  <dt>Your decision</dt>
+  {% if decision %}
+  <dd><span class="tag">decided</span>{{ decision.verdict | words }}, on {{ decision.written_at | when }}{% if decision.body %}:
+    {{ decision.body }}{% endif %}</dd>
+  {% else %}
+  <dd>No decision.</dd>
+  {% endif %}
+</dl>
+
+<h2>Flagged as interesting</h2>
+{% if flags %}
+<ul class="rows">
+  {% for f in flags %}
+  <li><span class="tag">decided</span>Flagged on {{ f.written_at | when }}{% if f.body %}: {{ f.body }}{% endif %}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>Not flagged.</p>
+{% endif %}
+<form method="post" action="{{ url_for('flag_paper', doc_id=paper.doc_id) }}">
+  <label>Note, optional
+    <input type="text" name="note" maxlength="300" autocomplete="off"></label>
+  <div class="buttons"><button type="submit">Flag as interesting</button></div>
+</form>
+{% endblock %}
