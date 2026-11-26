@@ -654,3 +654,62 @@ def test_literature_report_file_has_the_sections(literature) -> None:
 
 def test_edgar_report_has_no_literature(sampled) -> None:
     assert sampled(flagged_n=5).literature is None
+
+
+# --- Gold ids the judge refused to answer about ---
+
+
+def refuse(data_dir, *doc_ids, model=JUDGE, prompt="c/judge-v1") -> None:
+    from elusion.evaluate.gold import append_refusals, refusals_path
+
+    append_refusals(refusals_path(gold_path("c", data_dir)), doc_ids, model, prompt)
+
+
+def test_a_recorded_refusal_is_left_out_and_counted(env) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+    scores = {**SCORES, "f04": 3}  # one more flagged doc, which the judge refused
+    reports = []
+    real = mod.render
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(mod, "scores_for", lambda e, m, p, y: dict(scores))
+        mp.setattr(mod, "render", lambda r: reports.append(r) or real(r))
+        with pytest.raises(mod.MissingLabels):
+            run(tmp_path, discard_n=16)
+        refuse(tmp_path, "f04")
+        with pytest.raises(mod.MissingLabels):  # the discard draw now lacks six labels
+            run(tmp_path, discard_n=16)
+        refuse(tmp_path, *(set(SCORES) - set(DRAW_10) - {"f00", "f01", "f02", "f03"}))
+        md = run(tmp_path, discard_n=16).read_text()
+    r = reports[-1]
+    assert (r.refused_flagged, r.refused_discard) == (1, 6)
+    assert (r.precision.k, r.precision.n) == (3, 4)
+    assert r.elusion.n == 10
+    assert r.n_flagged == 5  # the pile sizes still count every scored document
+    assert "refused by the judge: 1 flagged and 6 of the discard sample" in md
+
+
+def test_a_refusal_by_another_judge_or_prompt_does_not_count(env, monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+    monkeypatch.setattr(mod, "scores_for", lambda e, m, p, y: {**SCORES, "f04": 3})
+    refuse(tmp_path, "f04", model="other-judge")
+    refuse(tmp_path, "f04", prompt="c/judge-v0")
+    with pytest.raises(mod.MissingLabels):
+        run(tmp_path)
+
+
+def test_a_label_written_after_a_refusal_wins(env, monkeypatch) -> None:
+    import elusion.flows.evaluate as mod
+
+    tmp_path, _ = env
+    refuse(tmp_path, "f03")  # refused once, labeled since (the env's CSV has its row)
+    reports = []
+    real = mod.render
+    monkeypatch.setattr(mod, "render", lambda r: reports.append(r) or real(r))
+    md = run(tmp_path).read_text()
+    assert reports[-1].refused_flagged == 0
+    assert reports[-1].precision.n == 4
+    assert "refused by the judge" not in md

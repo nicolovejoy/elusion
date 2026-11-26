@@ -26,6 +26,7 @@ import json
 import random
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import astuple, dataclass, fields
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -155,6 +156,39 @@ def append_judge_run(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
+
+
+def refusals_path(gold_csv: Path) -> Path:
+    """The refusals ledger next to the gold CSV: <criterion>.judge-refusals.jsonl."""
+    return gold_csv.with_name(f"{gold_csv.stem}.judge-refusals.jsonl")
+
+
+def append_refusals(path: Path, doc_ids: Iterable[str], model: str, prompt_version: str) -> None:
+    """Record that `model`, under `prompt_version`, refused to answer about each id.
+
+    A *refusal* is the model declining to answer at all (the API's stop_reason
+    "refusal"), usually because of the document's subject. It is not a label, so it has
+    no row in the gold CSV; this file is the record that the id was asked about.
+    """
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    for doc_id in doc_ids:
+        append_judge_run(
+            path,
+            {"doc_id": doc_id, "model": model, "prompt_version": prompt_version, "at": now},
+        )
+
+
+def refused_ids(path: Path, model: str, prompt_version: str) -> set[str]:
+    """The ids `model` has refused under `prompt_version`, whether or not labeled since."""
+    if not path.is_file():
+        return set()
+    with path.open(encoding="utf-8") as f:
+        records = [json.loads(line) for line in f if line.strip()]
+    return {
+        r["doc_id"]
+        for r in records
+        if r["model"] == model and r["prompt_version"] == prompt_version
+    }
 
 
 def judge_cost_usd(path: Path) -> float:

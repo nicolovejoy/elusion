@@ -90,6 +90,7 @@ class BatchResult:
     failed: int = 0  # ReviewErrors: billed, no answer
     cost_usd: float = 0.0  # everything billed: answers and ReviewErrors
     errors: list[tuple[str, Exception]] = field(default_factory=list)  # anything else
+    refused: list[str] = field(default_factory=list)  # ids among `failed` the model refused
 
 
 def run_batch(call: Callable[[str], Any], texts: dict[str, str], concurrency: int) -> BatchResult:
@@ -115,6 +116,8 @@ def run_batch(call: Callable[[str], Any], texts: dict[str, str], concurrency: in
             if isinstance(out, ReviewError):
                 log.warning("no answer for %s (stop_reason=%s)", doc_id, out.stop_reason)
                 result.failed += 1
+                if out.stop_reason == "refusal":
+                    result.refused.append(doc_id)
                 try:
                     result.cost_usd += cost_usd(
                         out.model,

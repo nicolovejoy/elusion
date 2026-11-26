@@ -540,3 +540,19 @@ def test_a_new_judge_prompt_relabels_what_the_old_one_labeled(env, monkeypatch):
     assert (
         sorted(r.prompt_version for r in read_rows(csv)) == ["c/judge-v1"] * 2 + ["c/judge-v2"] * 2
     )
+
+
+def test_a_refusal_is_recorded_and_still_retried(env) -> None:
+    from elusion.evaluate.gold import refusals_path, refused_ids
+    from elusion.flows.evaluate import judge
+
+    path, texts = env
+    j = Flaky({texts["d002"]})
+    judge("c", years=YEARS, gold=gold_of(5), provider=j, gold_csv=path)
+    assert refused_ids(refusals_path(path), j.model, "c/judge-v1") == {"d002"}
+    assert refused_ids(refusals_path(path), "another-model", "c/judge-v1") == set()
+    assert refused_ids(refusals_path(path), j.model, "c/judge-v9") == set()
+
+    again = Flaky(set())
+    s = judge("c", years=YEARS, gold=gold_of(5), provider=again, gold_csv=path)
+    assert s.labeled == 1  # a recorded refusal is not a label: the id is tried again

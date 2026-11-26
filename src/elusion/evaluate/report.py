@@ -99,6 +99,9 @@ class RunReport:
     flagged_n: int | None = None
     precision_by_score: dict[int, Estimate] | None = None
     literature: Literature | None = None  # set for a criterion over the abstracts corpus
+    # Sampled ids the judge model refused to answer about: no label, in no figure.
+    refused_flagged: int = 0
+    refused_discard: int = 0
 
 
 def years_label(years: Iterable[int]) -> str:
@@ -144,6 +147,17 @@ def _flagged_sample(r: RunReport) -> list[str]:
     return [
         f"- flagged sample: {r.flagged_n} drawn with seed {r.seed} from the pair's "
         f"flagged pile; {labeled}"
+    ]
+
+
+def _refused(r: RunReport) -> list[str]:
+    """The refusals line; nothing when the judge answered about every sampled id."""
+    if not (r.refused_flagged or r.refused_discard):
+        return []
+    return [
+        f"- refused by the judge: {r.refused_flagged} flagged and {r.refused_discard} of the "
+        "discard sample have no label, because the judge model declined to answer about "
+        "them; they are in the pile sizes and in no metric below"
     ]
 
 
@@ -268,6 +282,7 @@ def render(r: RunReport) -> str:
         *_flagged_sample(r),
         f"- discard sample: {r.discard_n} drawn with seed {r.seed} from the pair's discard pile; "
         f"{r.elusion.n} labeled by the judge",
+        *_refused(r),
         "",
         *(_records(r, lit) if lit else []),
         "## Metrics",

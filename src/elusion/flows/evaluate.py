@@ -59,6 +59,7 @@ from elusion.evaluate.gold import (
     GoldRow,
     Pile,
     append_judge_run,
+    append_refusals,
     append_rows,
     gold_path,
     human_rows,
@@ -66,6 +67,8 @@ from elusion.evaluate.gold import (
     judge_rows_for,
     judge_runs_path,
     labeled_ids,
+    refusals_path,
+    refused_ids,
     select_gold,
     split_piles,
     with_seeds,
@@ -296,6 +299,9 @@ def judge(
             for d, j in res.answers
         ]
         summary.labeled += append_rows(path, rows)
+        # A refusal writes no label, so the id is tried again on the next run; the record
+        # lets `evaluate` tell an abstract the judge would not read from one never sent.
+        append_refusals(refusals_path(path), res.refused, provider.model, prompt.version)
         if res.errors:
             raise res.errors[0][1]
 
@@ -520,6 +526,11 @@ def evaluate(
     flagged = {d for d, pile in piles if pile == "flagged"}  # the whole pile without a limit
     judge_prompt = f"{criterion}/{judge_version(criterion)}"
     judged = {r.doc_id: r for r in judge_rows_for(csv, judge_model, judge_prompt)}
+    # Ids the judge refused to answer about and has not labeled since. They are left out
+    # of both samples and counted in the report; the pile sizes do not change.
+    refused = refused_ids(refusals_path(csv), judge_model, judge_prompt) - judged.keys()
+    refused_flagged = flagged & refused
+    flagged -= refused
     missing = flagged - judged.keys()
     if missing and flagged_n is not None:
         raise MissingLabels(
@@ -535,6 +546,8 @@ def evaluate(
         )
     flagged_rows = [judged[d] for d in sorted(flagged)]
     draw = {d for d, pile in piles if pile == "discard"}
+    refused_discard = draw & refused
+    draw -= refused
     missing_d = draw - judged.keys()
     if missing_d:
         raise MissingDiscardLabels(
@@ -620,6 +633,8 @@ def evaluate(
         review_envs=jobs["run_envs"],
         companies=[] if literature else company_counts(engine, relevant),
         literature=literature,
+        refused_flagged=len(refused_flagged),
+        refused_discard=len(refused_discard),
         **graded,
     )
     path = report_path(reports_dir, criterion, review_model, prompt_version, years)
