@@ -21,6 +21,39 @@ def requires_service(host: str, port: int, name: str):
     return pytest.mark.skipif(not _reachable(host, port), reason=f"{name} not reachable")
 
 
+@pytest.fixture(scope="session")
+def board_engine():
+    """An engine on a throwaway database with the `concept_log` table in it. The log
+    refuses UPDATE and DELETE, so tests cannot tidy up after themselves; a database made
+    for the run and dropped after it keeps them off the real one. Each test uses its own
+    concept slug, so tests do not see each other's rows."""
+    import uuid
+
+    import sqlalchemy as sa
+
+    from elusion.board import log
+    from elusion.collect.db import make_engine
+    from elusion.config import settings
+
+    if not _reachable("localhost", 5433):
+        pytest.skip("postgres not reachable")
+    name = f"elusion_test_{uuid.uuid4().hex[:8]}"
+    admin = make_engine(settings.database_url).execution_options(isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.execute(sa.text(f"CREATE DATABASE {name}"))
+    engine = make_engine(
+        sa.make_url(settings.database_url).set(database=name).render_as_string(False)
+    )
+    try:
+        log.ensure_schema(engine)
+        yield engine
+    finally:
+        engine.dispose()
+        with admin.connect() as conn:
+            conn.execute(sa.text(f"DROP DATABASE {name} WITH (FORCE)"))
+        admin.dispose()
+
+
 @pytest.fixture(autouse=True)
 def made_up_criteria(monkeypatch):
     """The flow tests review made-up criteria ("c", "s", "sys"); file them under the 10-K
