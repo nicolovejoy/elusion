@@ -695,11 +695,43 @@ Part A.
    Not affected: the index of task 7 takes every abstract the review flagged and nothing
    from the judge. "Works kept" in the report is then a list of thousands; how it is shown
    belongs to task 6.
+
+   **The gold set labeled, graded and evaluated, 2026-11-26.** `judge-v2` labeled 911 of
+   the 913 abstracts it had not read (943 gold ids: 400 flagged, 400 discarded, 143
+   flagged seeds outside the draw) for $4.26. It refused two, both in the flagged
+   sample, three times over: `18d5f853589c25ae` (a paper on coordinated LLM cyber
+   attacks) and `7fab3b23d6e54c47` (an in-silico autoimmune model). By the owner's
+   choice a refusal is recorded in `data/gold/auditable-decisions.judge-refusals.jsonl`,
+   left out of the metrics and counted in the report (`docs/DECISIONS.md`, 2026-11-26).
+   `grade` graded the same 398 for $2.37, against the $0.50 this spec expected, which
+   was written when the grader read far fewer rationales. The report is
+   `docs/reports/auditable-decisions-gpt-6-luna-v1-2025-2026.md`:
+
+   - precision 0.734 [0.687, 0.776] (292 of 398); by score, 0.546 at 3 and 0.912 at 4
+   - elusion 0.295 [0.251, 0.342] (118 of 400)
+   - richness 0.493 [0.447, 0.538]; recall 0.671 [0.622, 0.717]
+   - harvest recall 0.256 [0.181, 0.344]: of 121 seeds flagged and judged relevant, a
+     search term also returned 31
+   - judge against the owner: 20 of 30 on his blind labels, 23 of 30 after his three
+     revisions
+   - 36 of the 23,521 abstracts have no score and were not screened. They are left
+     unscored: scoring them now would change the piles and so the seeded draw.
+
+   Not yet done: the owner's fresh 30 blind labels, for an agreement figure the judge
+   prompt was not fitted to.
 6. **Report.** `evaluate` adds, for an `openalex` population: the PRISMA counts
    (identified per term and per route, duplicates removed, screened, excluded,
    included), harvest recall with its interval and its stated limit, and the vocabulary
    table of call 14. "Companies found" becomes "works kept", listed by OpenAlex id and
    title. The 10-K reports do not change. Pull request for part A.
+
+   **Results (2026-11-26).** Built in `evaluate/report.py` (`Literature`) and
+   `flows/evaluate.py` (`_literature`). The record counts are queries over
+   `harvest_custody`. Harvest recall is counted by work, over the seeds the review
+   flagged and the judge labeled relevant. "Works kept" lists the works of the flagged
+   sample the judge labeled relevant (292), not the whole flagged pile of 10,577. The
+   report also prints the blind agreement beside the revised one. A 10-K report has no
+   `Literature` and renders as before.
 
 Part B.
 

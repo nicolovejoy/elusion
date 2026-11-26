@@ -359,3 +359,23 @@ def test_literature_report_maps_the_vocabulary() -> None:
     assert "## Vocabulary" in md
     assert "| flagged | included | responsive |" in md
     assert "| discard pile | excluded | null set |" in md
+
+
+def test_agreement_prints_the_blind_figure_beside_the_revised_one() -> None:
+    md = render(
+        make_report(
+            agreement=Estimate(23 / 30, 0.577, 0.901, 23, 30),
+            agreement_blind=Estimate(20 / 30, 0.472, 0.827, 20, 30),
+            labels_revised=3,
+        )
+    )
+    assert "- agreement, blind labels: 0.667 [0.472, 0.827] (k/n = 20/30)" in md
+    assert "- agreement, after the owner revised 3 labels" in md
+    assert "(k/n = 23/30)" in md
+    assert "Fraction of the owner's blind labels the judge matched." not in md
+
+
+def test_agreement_without_revisions_reads_as_before() -> None:
+    md = render(make_report())
+    assert "Fraction of the owner's blind labels the judge matched." in md
+    assert "- agreement: 0.900 [0.683, 0.988] (k/n = 18/20)" in md

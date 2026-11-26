@@ -73,9 +73,9 @@ decisions that must be auditable. Added 2026-11-15 (see `docs/DECISIONS.md`). Th
 a sketch; it is refined when the phase 7 spec is written, after phase 6 closes.
 
 - [x] Collector for OpenAlex abstracts from a recorded list of broad search terms; each abstract stored with its OpenAlex work id, the harvest query, the harvest date and a content hash (the chain-of-custody record)
-- [ ] Harvest recall estimated on its own: a list of known on-topic papers checked against what was harvested. Elusion measures the screen, not the harvest; a paper the query never returned is not in the null set
-- [ ] A screening criterion and prompt v1; review, judge and evaluate run unchanged
-- [ ] Report: the four metrics with intervals, plus a PRISMA-style count of records found, screened, excluded and kept
+- [x] Harvest recall estimated on its own: a list of known on-topic papers checked against what was harvested. Elusion measures the screen, not the harvest; a paper the query never returned is not in the null set
+- [x] A screening criterion and prompt v1; review, judge and evaluate run unchanged
+- [x] Report: the four metrics with intervals, plus a PRISMA-style count of records found, screened, excluded and kept
 - [ ] `ask` command: answers built only from quoted passages with their document ids; question, retrieved passages, model and prompt version logged
 - [ ] A gold question set, kept out of every prompt and retrieval context; recall@k and groundedness with Clopper-Pearson intervals
 - [ ] Note: what screening kept and missed; how far an answer can be trusted; the field's vocabulary in your own words

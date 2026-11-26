@@ -569,6 +569,13 @@ def evaluate(
     humans = human_rows(csv)
     shared = [h for h in humans if h.doc_id in judged]
     agreement = metrics.agreement(shared, list(judged.values())) if shared else None
+    # The owner's labels as first given, where he has revised any since.
+    first = {h.doc_id: h for h in human_rows(csv, blind=True)}
+    labels_revised = sum(1 for h in shared if first[h.doc_id].label != h.label)
+    agreement_blind = None
+    if labels_revised:
+        blind = [first[h.doc_id] for h in shared]
+        agreement_blind = metrics.agreement(blind, list(judged.values()))
 
     wall_clock = timedelta(seconds=jobs["busy_s"]) if jobs["jobs"] else None
     relevant = [r.doc_id for r in flagged_rows if r.label == 1]
@@ -625,6 +632,8 @@ def evaluate(
         richness=metrics.richness(precision, elusion, n_flagged, n_discard),
         recall=metrics.recall(precision, elusion, n_flagged, n_discard),
         agreement=agreement,
+        agreement_blind=agreement_blind,
+        labels_revised=labels_revised,
         review_cost_usd=scores_cost_usd(engine, review_model, version, years),
         judge_cost_criterion_usd=judge_cost_usd(judge_runs_path(csv)),
         review_jobs=jobs["jobs"],

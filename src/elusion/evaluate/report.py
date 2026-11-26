@@ -100,6 +100,10 @@ class RunReport:
     precision_by_score: dict[int, Estimate] | None = None
     literature: Literature | None = None  # set for a criterion over the abstracts corpus
     # Sampled ids the judge model refused to answer about: no label, in no figure.
+    # Set when the owner changed labels after reading the judge's disagreements:
+    # `agreement` is then on the revised labels, and this is the count on the blind ones.
+    agreement_blind: Estimate | None = None
+    labels_revised: int = 0
     refused_flagged: int = 0
     refused_discard: int = 0
 
@@ -322,6 +326,17 @@ def render(r: RunReport) -> str:
     ]
     if r.agreement is None:
         lines.append("No human audit labels yet; run `elusion label` to add some.")
+    elif r.agreement_blind is not None:
+        lines += [
+            "Fraction of the owner's labels the judge matched. The blind figure is on his",
+            "labels as first given; the other is after he re-read the judge's disagreements",
+            "and changed some, so it is not a blind measurement.",
+            "",
+            metric_line("agreement, blind labels", r.agreement_blind),
+            metric_line(
+                f"agreement, after the owner revised {r.labels_revised} labels", r.agreement
+            ),
+        ]
     else:
         lines += [
             "Fraction of the owner's blind labels the judge matched.",
