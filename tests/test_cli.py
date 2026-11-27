@@ -721,8 +721,20 @@ def test_index_command_passes_the_pair_and_prints_the_summary(monkeypatch, tmp_p
     assert result.exit_code == 0, result.output
     assert (seen["review_model"], seen["threshold"], seen["max_usd"]) == ("other", 4, 2.5)
 
-    missing = CliRunner().invoke(app, ["index", "--criterion", "nope.md", "--prompt-version", "v1"])
-    assert missing.exit_code != 0
+    missing = CliRunner().invoke(
+        app,
+        [
+            "index",
+            "--criterion",
+            "nope.md",
+            "--prompt-version",
+            "v1",
+            "--review-model",
+            "gpt-6-luna",
+        ],
+    )
+    assert missing.exit_code == 2
+    assert "criterion file not found" in missing.output
 
 
 def test_index_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) -> None:
@@ -761,6 +773,32 @@ def test_index_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) -> None:
     result = CliRunner().invoke(app, args)
     assert result.exit_code == 1
     assert "OPENAI_API_KEY is not set" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_index_with_an_unpriced_embedding_model_exits_1_before_touching_anything(
+    monkeypatch, tmp_path
+) -> None:
+    """The real flow, not a stub: it refuses before it makes an engine, so no database is
+    reached. The error names the model, and there is no traceback."""
+    import elusion.ask.embed as embed
+
+    class Unpriced:
+        name = "stub"
+        model = "no-such-embedding-model"
+
+        def embed(self, texts):
+            raise AssertionError("must not be called")
+
+    monkeypatch.setattr(embed, "OpenAIEmbedder", Unpriced)
+    crit = tmp_path / "auditable-decisions.md"
+    crit.write_text("x")
+    result = CliRunner().invoke(
+        app,
+        ["index", "--criterion", str(crit), "--prompt-version", "v1", "--review-model", "m"],
+    )
+    assert result.exit_code == 1, result.output
+    assert "error:" in result.output and "no-such-embedding-model" in result.output
     assert "Traceback" not in result.output
 
 

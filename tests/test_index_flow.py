@@ -5,6 +5,7 @@ import sqlalchemy as sa
 from prefect.testing.utilities import prefect_test_harness
 
 from elusion.ask import index
+from elusion.ask.embed import Embedded
 from elusion.evaluate.gold import GoldRow, append_refusals, append_rows, refusals_path
 from elusion.flows.review import BudgetExceeded
 from elusion.review import db as review_db
@@ -226,3 +227,148 @@ def test_papers_without_text_are_counted_and_skipped(index_engine, tmp_path) -> 
     assert indexed(index_engine) == ["a", "b"]
     assert summary["screened_in"] == 3
     assert summary["no_text"] == 1
+
+
+class Unpriced:
+    """An embedder whose model has no price row."""
+
+    name = "stub"
+    model = "unpriced-embedding-model"
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts):
+        self.calls.append(list(texts))
+        raise AssertionError("must not be called")
+
+
+def test_an_unpriced_embedder_is_refused_before_any_write(index_engine, tmp_path) -> None:
+    seed(index_engine, tmp_path, {"a": 4, "b": 4})
+    embedder = Unpriced()
+    with pytest.raises(ValueError, match="unpriced-embedding-model"):
+        run(index_engine, tmp_path, embedder)
+    assert embedder.calls == []
+    assert index.count_indexed(index_engine) == 0
+
+
+def test_the_spend_guard_refuses_before_any_write(index_engine, tmp_path, monkeypatch) -> None:
+    monkeypatch.setitem(
+        PRICES, "pricey", {"input": 1000.0, "output": 0.0, "cache_write": 0.0, "cache_read": 0.0}
+    )
+    seed(index_engine, tmp_path, {"a": 4, "b": 4, "c": 4})
+    run(index_engine, tmp_path, FakeEmbedder())  # a free model: three rows indexed
+    gold(tmp_path, ("a", 1))  # a is now held back and would be dropped
+    write_year(
+        tmp_path / "abstracts",
+        2025,
+        [{"doc_id": "z", "text": "A new abstract."}],
+    )
+    review_db.insert_scores(index_engine, [score("z", 4)])
+    with pytest.raises(BudgetExceeded):
+        run(index_engine, tmp_path, FakeEmbedder("pricey"), max_usd=0.0001)
+    assert indexed(index_engine) == ["a", "b", "c"]  # nothing dropped, nothing added
+
+
+def test_seven_or_more_batches_and_a_second_run_that_embeds_nothing(
+    index_engine, tmp_path, monkeypatch
+) -> None:
+    import elusion.flows.index as flow_mod
+
+    monkeypatch.setattr(flow_mod, "BATCH", 2)
+    ids = [f"d{i:02d}" for i in range(15)]
+    seed(index_engine, tmp_path, {d: 4 for d in ids})
+    first = FakeEmbedder()
+    summary = run(index_engine, tmp_path, first)
+    assert len(first.calls) == 8
+    assert summary["embedded"] == 15
+    assert index.count_vectors(index_engine, "fake-embedder") == 15
+    second = FakeEmbedder()
+    summary = run(index_engine, tmp_path, second)
+    assert second.calls == []
+    assert summary["rows_added"] == 0 and summary["embedded"] == 0
+    assert summary["already_embedded"] == 15
+
+
+def test_a_batch_is_cut_at_the_token_estimate() -> None:
+    import elusion.flows.index as flow_mod
+
+    texts = [(f"d{i}", "x" * 299) for i in range(5)]  # 100 estimated tokens each
+    assert flow_mod.estimate_tokens("x" * 299) == 100
+    original = flow_mod.BATCH_MAX_TOKENS
+    try:
+        flow_mod.BATCH_MAX_TOKENS = 250
+        assert [len(b) for b in flow_mod.batches(texts)] == [2, 2, 1]
+        flow_mod.BATCH_MAX_TOKENS = 50  # one text over the limit still goes, alone
+        assert [len(b) for b in flow_mod.batches(texts)] == [1, 1, 1, 1, 1]
+    finally:
+        flow_mod.BATCH_MAX_TOKENS = original
+    assert flow_mod.batches([]) == []
+
+
+def test_the_flow_sends_token_limited_batches(index_engine, tmp_path, monkeypatch) -> None:
+    import elusion.flows.index as flow_mod
+
+    monkeypatch.setattr(flow_mod, "BATCH_MAX_TOKENS", 30)  # each text is about 12 tokens
+    seed(index_engine, tmp_path, {d: 4 for d in "abcde"})
+    embedder = FakeEmbedder()
+    run(index_engine, tmp_path, embedder)
+    assert len(embedder.calls) > 1
+    assert sum(len(c) for c in embedder.calls) == 5
+    assert all(
+        sum(flow_mod.estimate_tokens(t) for t in call) <= 30 or len(call) == 1
+        for call in embedder.calls
+    )
+
+
+class Misbehaving(FakeEmbedder):
+    """Answers its second call wrongly: `mode` is `count` (a vector missing) or `length`."""
+
+    def __init__(self, mode: str) -> None:
+        super().__init__()
+        self.mode = mode
+
+    def embed(self, texts):
+        result = super().embed(texts)
+        if len(self.calls) == 2:
+            if self.mode == "count":
+                result.vectors.pop()
+            else:
+                result.vectors[0] = result.vectors[0][:5]
+        return result
+
+
+@pytest.mark.parametrize("mode", ["count", "length"])
+def test_a_wrong_answer_stops_the_run_and_keeps_earlier_batches(
+    index_engine, tmp_path, monkeypatch, mode
+) -> None:
+    import elusion.flows.index as flow_mod
+
+    monkeypatch.setattr(flow_mod, "BATCH", 2)
+    seed(index_engine, tmp_path, {d: 4 for d in "abcde"})
+    with pytest.raises(ValueError, match="the embedding API returned"):
+        run(index_engine, tmp_path, Misbehaving(mode))
+    assert index.count_vectors(index_engine, "fake-embedder") == 2  # batch one only
+
+
+def test_the_served_model_is_stored_and_a_drift_does_not_stop_the_run(
+    index_engine, tmp_path
+) -> None:
+    class Drifting(FakeEmbedder):
+        def embed(self, texts):
+            result = super().embed(texts)
+            return Embedded(
+                result.vectors, "fake-embedder-2026-11-01", result.input_tokens, result.cost_usd
+            )
+
+    seed(index_engine, tmp_path, {"a": 4, "b": 4})
+    run(index_engine, tmp_path, Drifting())
+    with index_engine.connect() as conn:
+        pairs = set(
+            conn.execute(
+                sa.select(
+                    index.abstract_vectors.c.embedding_model, index.abstract_vectors.c.served_model
+                )
+            ).all()
+        )
+    assert pairs == {("fake-embedder", "fake-embedder-2026-11-01")}

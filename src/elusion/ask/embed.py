@@ -24,7 +24,10 @@ from elusion.ask.models import EMBEDDING_MODEL
 from elusion.review.pricing import cost_usd
 from elusion.review.providers import MAX_RETRIES, REQUEST_TIMEOUT_S, ProviderConfigError
 
-BATCH = 100  # texts per request
+BATCH = 100  # most texts in one request
+# Most estimated tokens in one request (see `flows.index.estimate_tokens`): a run of very
+# long abstracts is split into smaller requests so none passes the API's per-request limit.
+BATCH_MAX_TOKENS = 200_000
 
 
 @dataclass(frozen=True)

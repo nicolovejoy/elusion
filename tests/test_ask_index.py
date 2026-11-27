@@ -161,3 +161,28 @@ def test_screened_in_ids_reads_scores_of_the_pair_only(index_engine) -> None:
     )
     assert index.screened_in_ids(index_engine, "gpt-6-luna", "auditable-decisions/v1") == ["a", "c"]
     assert index.screened_in_ids(index_engine, "gpt-6-luna", "auditable-decisions/v1", 4) == ["c"]
+
+
+def test_the_served_model_is_stored_beside_the_pinned_one(index_engine) -> None:
+    add(index_engine, paper("a"), paper("b"))
+    index.add_vectors(index_engine, "m", {"a": vec(1.0)}, served_model="m-2026-11-01")
+    index.add_vectors(index_engine, "m", {"b": vec(1.0)})  # no served model given: the pinned id
+    with index_engine.connect() as conn:
+        rows = conn.execute(
+            sa.select(
+                index.abstract_vectors.c.doc_id, index.abstract_vectors.c.served_model
+            ).order_by("doc_id")
+        ).all()
+    assert rows == [("a", "m-2026-11-01"), ("b", "m")]
+
+
+def test_inserts_cross_the_chunk_size(index_engine, monkeypatch) -> None:
+    monkeypatch.setattr(index, "_ROWS_PER_INSERT", 2)
+    papers = [paper(d) for d in "abcde"]
+    assert add(index_engine, *papers) == 5
+    assert add(index_engine, *papers, paper("f")) == 1
+    assert index.count_indexed(index_engine) == 6
+    assert index.add_vectors(index_engine, "m", {d: vec(1.0) for d in "abcde"}) == 5
+    assert index.add_vectors(index_engine, "m", {d: vec(1.0) for d in "abcdef"}) == 1
+    assert index.count_vectors(index_engine, "m") == 6
+    assert index.indexed_ids(index_engine) == set("abcdef")

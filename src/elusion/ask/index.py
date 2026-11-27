@@ -113,6 +113,8 @@ abstract_vectors = sa.Table(
         primary_key=True,
     ),
     sa.Column("embedding_model", sa.Text, primary_key=True),
+    # The model id the API answered with for the batch, stored beside the pinned one.
+    sa.Column("served_model", sa.Text, nullable=False),
     sa.Column("embedding", Vector(EMBEDDING_DIM), nullable=False),
     sa.Column(
         "embedded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
@@ -228,11 +230,22 @@ def unembedded(engine: Engine, embedding_model: str) -> list[tuple[str, str]]:
         return [(doc_id, document_text(title, text)) for doc_id, title, text in conn.execute(stmt)]
 
 
+def indexed_ids(engine: Engine) -> set[str]:
+    """Every `doc_id` in the index."""
+    with engine.connect() as conn:
+        return set(conn.execute(sa.select(abstract_index.c.doc_id)).scalars())
+
+
 def add_vectors(
-    engine: Engine, embedding_model: str, vectors: Mapping[str, Sequence[float]]
+    engine: Engine,
+    embedding_model: str,
+    vectors: Mapping[str, Sequence[float]],
+    *,
+    served_model: str | None = None,
 ) -> int:
     """Store the vectors (`ON CONFLICT DO NOTHING`: a key that has one keeps it). Returns the
-    rows inserted. A vector of the wrong length raises `ValueError` before anything is
+    rows inserted. `served_model` is the id the API answered with; it defaults to the pinned
+    `embedding_model`. A vector of the wrong length raises `ValueError` before anything is
     inserted."""
     for doc_id, vector in vectors.items():
         if len(vector) != EMBEDDING_DIM:
@@ -240,7 +253,12 @@ def add_vectors(
                 f"vector for {doc_id} has {len(vector)} numbers; the column holds {EMBEDDING_DIM}"
             )
     rows = [
-        {"doc_id": doc_id, "embedding_model": embedding_model, "embedding": list(vector)}
+        {
+            "doc_id": doc_id,
+            "embedding_model": embedding_model,
+            "served_model": served_model or embedding_model,
+            "embedding": list(vector),
+        }
         for doc_id, vector in vectors.items()
     ]
     added = 0
