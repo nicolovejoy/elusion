@@ -33,6 +33,13 @@ The judge is a separate `Judge` Protocol so the judge flow can take a fake in te
 The concept board's first read (`read()`) is one more such call: one paper abstract under
 a concept, answered as a `Reading` (does the paper hold the concept, the passage that
 shows it, the answer it gives, why), through the same `_call` and its own `Reader` Protocol.
+
+`complete()` is the generic form of all of these: any pydantic output model, any
+`max_tokens`, one `Completion` dataclass and one `Completer` Protocol. `ask`, the answer
+judge and the question draft use it, so each does not need its own dataclass and Protocol.
+It goes through the same `_call`, so it sends the same parameters and none of those that
+`claude-sonnet-5-5` and `claude-opus-5-5` reject with a 400 (thinking turned off or given a
+budget, a forced `tool_choice`, an assistant prefill).
 """
 
 from __future__ import annotations
@@ -60,6 +67,14 @@ GENERATION_SETTINGS: dict[str, dict] = {
 }
 REQUEST_TIMEOUT_S = 60.0
 MAX_RETRIES = 5  # the SDK retries 429/5xx with exponential backoff
+# For the long structured calls of `ask`, `ask-draft` and `ask-eval` (up to 16,000 output
+# tokens, thinking included): a 60 second timeout would cut a slow answer off, and the SDK
+# would send the same request again, each attempt possibly billed. 600 seconds is what the SDK
+# itself allows a non-streaming 16,000-token request. Two retries, not five, for the same
+# reason: a retry of a call that did finish on the server is paid for twice. The bulk review,
+# judge, grade and first-read paths keep the two constants above.
+LONG_CALL_TIMEOUT_S = 600.0
+LONG_CALL_MAX_RETRIES = 2
 
 
 class Verdict(BaseModel):
@@ -155,6 +170,16 @@ class ReviewError(Exception):
         self.cache_creation_input_tokens = cache_creation_input_tokens
         self.cache_read_input_tokens = cache_read_input_tokens
 
+    def cost_usd(self, model: str) -> float:
+        """What the failed call was billed, priced by the pinned `model` id."""
+        return cost_usd(
+            model,
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_creation_input_tokens,
+            self.cache_read_input_tokens,
+        )
+
 
 @dataclass
 class Review:
@@ -200,6 +225,20 @@ class FirstRead:
     cache_read_input_tokens: int = 0
 
 
+_Out = TypeVar("_Out", bound=BaseModel)
+
+
+@dataclass
+class Completion[T: BaseModel]:
+    parsed: T
+    model: str  # as served by the API, not as requested
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+
 # runtime_checkable: Prefect builds a pydantic schema from the flow signature, which
 # isinstance-checks parameters; a plain Protocol cannot be used with isinstance.
 @runtime_checkable
@@ -234,17 +273,29 @@ class Reader(Protocol):
     def read(self, system: str, message: str) -> FirstRead: ...
 
 
-_Out = TypeVar("_Out", bound=BaseModel)
+@runtime_checkable
+class Completer(Protocol):
+    name: str
+    model: str
+
+    def complete(
+        self, system: str, message: str, out: type[_Out], *, max_tokens: int = MAX_TOKENS
+    ) -> Completion[_Out]: ...
 
 
 class AnthropicProvider:
     name = "anthropic"
 
-    def __init__(self, model: str, client: anthropic.Anthropic | None = None) -> None:
+    def __init__(
+        self,
+        model: str,
+        client: anthropic.Anthropic | None = None,
+        *,
+        timeout: float = REQUEST_TIMEOUT_S,
+        max_retries: int = MAX_RETRIES,
+    ) -> None:
         self.model = model
-        self.client = client or anthropic.Anthropic(
-            max_retries=MAX_RETRIES, timeout=REQUEST_TIMEOUT_S
-        )
+        self.client = client or anthropic.Anthropic(max_retries=max_retries, timeout=timeout)
 
     def review(self, system: str, paragraph: str) -> Review:
         verdict, model, usage = self._call(system, paragraph, Verdict, VERDICT_SCHEMA)
@@ -264,8 +315,21 @@ class AnthropicProvider:
         reading, model, usage = self._call(system, message, Reading, READING_SCHEMA)
         return FirstRead(reading, model, **usage)
 
+    def complete(
+        self, system: str, message: str, out: type[_Out], *, max_tokens: int = MAX_TOKENS
+    ) -> Completion[_Out]:
+        parsed, model, usage = self._call(
+            system, message, out, transform_schema(out.model_json_schema()), max_tokens=max_tokens
+        )
+        return Completion(parsed, model, **usage)
+
     def _call(
-        self, system: str, paragraph: str, out: type[_Out], schema: dict
+        self,
+        system: str,
+        paragraph: str,
+        out: type[_Out],
+        schema: dict,
+        max_tokens: int = MAX_TOKENS,
     ) -> tuple[_Out, str, dict]:
         """One structured-output call. Returns (parsed answer, served model, usage fields).
 
@@ -274,7 +338,7 @@ class AnthropicProvider:
         """
         resp = self.client.messages.create(
             model=self.model,
-            max_tokens=MAX_TOKENS,
+            max_tokens=max_tokens,
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": paragraph}],
             output_config={

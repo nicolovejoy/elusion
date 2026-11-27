@@ -76,6 +76,6 @@ a sketch; it is refined when the phase 7 spec is written, after phase 6 closes.
 - [x] Harvest recall estimated on its own: a list of known on-topic papers checked against what was harvested. Elusion measures the screen, not the harvest; a paper the query never returned is not in the null set
 - [x] A screening criterion and prompt v1; review, judge and evaluate run unchanged
 - [x] Report: the four metrics with intervals, plus a PRISMA-style count of records found, screened, excluded and kept
-- [ ] `ask` command: answers built only from quoted passages with their document ids; question, retrieved passages, model and prompt version logged
-- [ ] A gold question set, kept out of every prompt and retrieval context; recall@k and groundedness with Clopper-Pearson intervals
+- [x] `ask` command: answers built only from quoted passages with their document ids; question, retrieved passages, model and prompt version logged
+- [x] A gold question set, kept out of every prompt and retrieval context; recall@k and groundedness with Clopper-Pearson intervals (drafted and cut by models, not by the owner; see `docs/DECISIONS.md`, 2026-11-26)
 - [ ] Note: what screening kept and missed; how far an answer can be trusted; the field's vocabulary in your own words

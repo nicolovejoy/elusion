@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Papers you have seen{% endblock %}
+{% block body %}
+{% macro line(x) %}
+  <li>
+    <a href="{{ url_for('seen_paper_page', doc_id=x.paper.doc_id) }}">{{ x.paper.title }}</a>
+    {% if x.verdict %}<span class="muted">{{ x.verdict | words }}</span>
+    {% else %}<span class="tag skipped">Skipped, no verdict yet</span>{% endif %}
+    {% if x.flags %}<div><span class="tag">flagged</span>Flagged as interesting
+      {%- for f in x.flags if f.body %}{{ ": " if loop.first else "; " }}{{ f.body }}{% endfor %}</div>{% endif %}
+  </li>
+{% endmacro %}
+<p><a href="{{ url_for('audit_page') }}">Back to the next paper</a></p>
+<h1>Papers you have seen</h1>
+<p class="muted">{{ decided | length }} with a verdict, {{ skipped | length }} skipped,
+  {{ unseen }} not seen yet.</p>
+
+<h2>Skipped, no verdict yet</h2>
+{% if skipped %}
+<ul class="rows">{% for x in skipped %}{{ line(x) }}{% endfor %}</ul>
+{% else %}
+<p>None.</p>
+{% endif %}
+
+<h2>With a verdict</h2>
+{% if decided %}
+<ul class="rows">{% for x in decided %}{{ line(x) }}{% endfor %}</ul>
+{% else %}
+<p>None yet.</p>
+{% endif %}
+{% endblock %}

@@ -54,6 +54,47 @@ def board_engine():
         admin.dispose()
 
 
+@pytest.fixture
+def index_engine():
+    """An engine on a throwaway database holding the index tables, the review tables, the
+    `ask_log` and the `ask-eval` tables.
+
+    One database per test, because the index flow tests need different pairs and a fresh
+    database costs a fraction of a second. `CREATE EXTENSION vector` is run by the code
+    under test (`ask.index.ensure_schema`), not here, so this fixture proves the code makes
+    the extension itself. A server without pgvector fails the test with Postgres's own
+    message; it is not skipped, because a silent skip would hide a wrong image."""
+    import uuid
+
+    import sqlalchemy as sa
+
+    from elusion.ask import index, log, results
+    from elusion.collect.db import make_engine
+    from elusion.config import settings
+    from elusion.review import db as review_db
+
+    if not _reachable("localhost", 5433):
+        pytest.skip("postgres not reachable")
+    name = f"elusion_test_{uuid.uuid4().hex[:8]}"
+    admin = make_engine(settings.database_url).execution_options(isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.execute(sa.text(f"CREATE DATABASE {name}"))
+    engine = make_engine(
+        sa.make_url(settings.database_url).set(database=name).render_as_string(False)
+    )
+    try:
+        index.ensure_schema(engine)
+        review_db.ensure_schema(engine)
+        log.ensure_schema(engine)
+        results.ensure_schema(engine)
+        yield engine
+    finally:
+        engine.dispose()
+        with admin.connect() as conn:
+            conn.execute(sa.text(f"DROP DATABASE {name} WITH (FORCE)"))
+        admin.dispose()
+
+
 @pytest.fixture(autouse=True)
 def made_up_criteria(monkeypatch):
     """The flow tests review made-up criteria ("c", "s", "sys"); file them under the 10-K

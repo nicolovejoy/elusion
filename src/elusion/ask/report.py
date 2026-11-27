@@ -1,0 +1,195 @@
+"""The `ask-eval` report: one plain-text page that compares the three arms.
+
+Plain lists, no tables. It states what was run (the index, the models, the prompt versions,
+the fusion constants), then for each arm its figures with Clopper-Pearson 95% intervals and
+the counts behind them (recall, both groundedness figures and the correct refusals), then for
+each pair of arms how many questions one hit and the other missed, then one line per question
+by `question_id` and nothing else: the question texts, the source ids and the abstracts stay
+in the owner's files and the database, never in the report, which is committed. It ends with
+the caveats the figures need.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from elusion.ask.metrics import ArmReport, EvalRow, paired_counts
+from elusion.ask.questions import ANSWERABLE_N
+from elusion.evaluate.metrics import Estimate
+
+CAVEATS = (
+    "recall@5 is a lower bound: another abstract may also answer the question.",
+    "The questions were drafted from abstracts, so they share vocabulary with their source "
+    "even after rewording; this flatters lexical search.",
+    "The draft prompt asked for other words than the abstract's, which works against lexical "
+    "search, while the topic words the question and its source still share work for it; the "
+    "net direction of the vocabulary bias is not known.",
+    f"With only {ANSWERABLE_N} answerable questions the intervals are wide: a gap of a few "
+    "questions between two arms may be chance. The three arms answer the same questions, so "
+    "their intervals are correlated and overlap or no overlap is not the test; compare two "
+    "arms on the questions where one hit the source and the other missed it, counted under "
+    "Arms compared question by question.",
+    "Groundedness by claim treats the claims of one answer as independent, which they are "
+    "not; the by-question figure is the one to trust.",
+    "The answer model and the judge are different models, so no model grades itself.",
+    "Only abstracts the screen flagged are searched; one the screen discarded cannot be found.",
+)
+
+
+NOTES = (
+    "A search that finds no passage is refused without asking the model, because there is "
+    "nothing to read. Nobody decided that refusal, so it is not counted as a correct or a "
+    "wrong refusal; it is shown beside them.",
+    "A result is kept per retrieval version of its arm. Results asked with an older version of "
+    "an arm's search stay in the database and are in no figure here.",
+    "An ask that was paid for but not recorded as a result (a failure in the one insert after "
+    "it) is asked again on the next run, at a few cents.",
+)
+
+
+@dataclass(frozen=True)
+class Setup:
+    """What was run, as the header prints it."""
+
+    criterion: str
+    date: str  # from `flows.evaluate.report_date`
+    index_size: int
+    review_model: str  # the pair and threshold that screened the index
+    review_prompt_version: str
+    threshold: int
+    k: int
+    embedding_model: str
+    answer_model: str
+    prompt_version: str
+    judge_model: str
+    judge_prompt_version: str
+    rrf_c: int
+    fusion_depth: int
+    retrieval: str = ""  # each arm's retrieval version, e.g. "lexical r2, vector r1, hybrid r2"
+
+
+def report_path(reports_dir: Path, criterion: str, answer_model: str, prompt_version: str) -> Path:
+    """docs/reports/ask-eval-<criterion>-<answer model>-<prompt version, / as ->.md."""
+    # The same character cleaning as `flows.evaluate.report_path`.
+    name = re.sub(r'[<>:"/\\|?*]', "-", f"{criterion}-{answer_model}-{prompt_version}")
+    return reports_dir / f"ask-eval-{name}.md"
+
+
+def _interval(e: Estimate) -> str:
+    return f"{e.point:.3f} (95% interval {e.low:.3f} to {e.high:.3f})"
+
+
+def _ratio(label: str, k: int, n: int, e: Estimate | None) -> str:
+    if e is None:
+        return f"- {label}: none to measure ({k} of {n})"
+    return f"- {label}: {k} of {n}, {_interval(e)}"
+
+
+def _arm_lines(r: ArmReport) -> list[str]:
+    claims = r.groundedness_claims
+    questions = r.groundedness_questions
+    lines = [
+        f"## {r.arm}",
+        "",
+        _ratio(f"recall@{r.k}", r.recall_at_k.k, r.recall_at_k.n, r.recall_at_k),
+        _ratio(
+            "groundedness by claim",
+            r.claims_supported,
+            claims.n if claims else 0,
+            claims,
+        ),
+        _ratio(
+            "groundedness by question (every claim supported)",
+            r.fully_grounded,
+            questions.n if questions else 0,
+            questions,
+        ),
+        f"- claims in all answers: {r.claims_total}; answered questions with a claim: "
+        f"{r.answered_questions}",
+        _ratio(
+            "correct refusals (the model refused an unanswerable question)",
+            r.refusals_correct,
+            r.n_unanswerable,
+            r.refusals_correct_estimate,
+        )
+        + f"; no passage retrieved, so no model was asked: {r.no_passage_unanswerable}",
+        f"- wrong refusals (the model refused an answerable question): {r.refusals_wrong} of "
+        f"{r.n_answerable}; no passage retrieved, so no model was asked: "
+        f"{r.no_passage_answerable}",
+        f"- errors (no usable answer from the model): {r.errors}",
+        f"- not judged (the judge gave no usable answer): {r.judge_unusable} claims, "
+        f"{r.questions_not_judged} questions; they are in no groundedness figure",
+        f"- cost: ${r.cost_usd:.4f}",
+        "",
+    ]
+    return lines
+
+
+def _paired_lines(rows_by_arm: Mapping[str, Sequence[EvalRow]]) -> list[str]:
+    lines = ["## Arms compared question by question", ""]
+    for p in paired_counts(rows_by_arm):
+        lines.append(
+            f"- {p.first} and {p.second}, {p.n} answerable questions asked of both: "
+            f"{p.first} hit and {p.second} missed {p.first_only}; "
+            f"{p.second} hit and {p.first} missed {p.second_only}; "
+            f"both hit {p.both_hit}; both missed {p.both_missed}"
+        )
+    lines.append("")
+    return lines
+
+
+def _question_lines(rows_by_arm: Mapping[str, Sequence[EvalRow]]) -> list[str]:
+    arms = list(rows_by_arm)
+    by_arm = {arm: {r.question_id: r for r in rows} for arm, rows in rows_by_arm.items()}
+    ids = sorted({qid for rows in by_arm.values() for qid in rows})
+    lines = ["## Per question", ""]
+    for qid in ids:
+        parts = []
+        for arm in arms:
+            r = by_arm[arm].get(qid)
+            if r is None:
+                parts.append(f"{arm} not run")
+            else:
+                outcome = "refused, no passage" if r.no_passages else r.outcome
+                if r.source_hit is None:
+                    parts.append(f"{arm} {outcome}")
+                else:
+                    parts.append(f"{arm} {'hit' if r.source_hit else 'miss'}, {outcome}")
+        lines.append(f"- {qid}: " + "; ".join(parts))
+    lines.append("")
+    return lines
+
+
+def render(
+    reports: Sequence[ArmReport], rows_by_arm: Mapping[str, Sequence[EvalRow]], setup: Setup
+) -> str:
+    """The whole report as Markdown text."""
+    s = setup
+    lines = [
+        f"# ask-eval: {s.criterion}, {s.answer_model}, {s.prompt_version}",
+        "",
+        f"- date: {s.date}",
+        f"- index: {s.index_size} abstracts, screened in by {s.review_model} under "
+        f"{s.review_prompt_version} at threshold {s.threshold}",
+        f"- k: {s.k} abstracts read per question",
+        f"- embedding model: {s.embedding_model}",
+        f"- answer model: {s.answer_model}, prompt version {s.prompt_version}",
+        f"- judge model: {s.judge_model}, prompt version {s.judge_prompt_version}",
+        f"- reciprocal rank fusion: constant {s.rrf_c}, each arm read {s.fusion_depth} deep "
+        "before fusing",
+    ]
+    if s.retrieval:
+        lines.append(f"- retrieval versions: {s.retrieval}")
+    lines.append("")
+    for r in reports:
+        lines += _arm_lines(r)
+    lines += _paired_lines(rows_by_arm)
+    lines += _question_lines(rows_by_arm)
+    lines += ["## Notes", ""]
+    lines += [f"- {n}" for n in NOTES]
+    lines += ["", "## Read this with", ""]
+    lines += [f"- {c}" for c in CAVEATS]
+    return "\n".join(lines) + "\n"

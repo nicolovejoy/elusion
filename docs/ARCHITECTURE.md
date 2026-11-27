@@ -318,6 +318,151 @@ Everything in Azure and in the cluster is declared in a committed file, because 
 resource made by hand is one that `terraform destroy` does not know about. The two
 Secrets are the one exception, since their values cannot be in a file.
 
+## Phase 7 part B: the index, ask and ask-eval (code built, no paid run yet)
+
+Part A of phase 7 screened a second corpus, recent research abstracts, with the same review
+flow. Part B lets a person ask a question of the abstracts that passed the screen and get an
+answer whose every sentence points at a quote. It adds three things: an index, the `ask`
+command, and `ask-eval`, which measures three ways of searching. Nothing here changes a
+10-K score or a report. A few terms first.
+
+- An **embedding** is a list of numbers (a vector) that a model produces for a text, so that
+  texts with similar meaning get nearby vectors. Cosine similarity measures how nearby: 1
+  for the same direction, 0 for unrelated.
+- **pgvector** is a Postgres extension that adds a `vector` column type and distance
+  operators. The search compares the question's vector with every stored vector (an exact
+  scan). That is about ten thousand comparisons, and it cannot miss. An approximate index
+  would skip most of them and could miss; this phase builds none.
+- A **tsvector** is Postgres's form of a text reduced to its normalised words: stemmed
+  ("auditing" becomes "audit") and stripped of stop words. A full-text query ranks rows by
+  how well their tsvector matches. It finds exact words and misses paraphrase.
+- **Reciprocal rank fusion** (RRF) merges ranked lists. A document's score is the sum, over
+  the lists, of 1 / (60 + its rank in that list). No score from one list is ever compared
+  with a score from another.
+- An **arm** is one way of searching: `lexical` (full-text), `vector`, or `hybrid` (RRF of
+  the two). A **passage** is one whole abstract; nothing is chunked.
+- **recall@k** is the fraction of questions for which the one known source abstract is among
+  the top k retrieved. k is 5 here and `ask-eval` has no flag to change it.
+- A **claim** is one sentence of an answer, with the id of the abstract it rests on and one
+  quote from it. **Groundedness** is the share of claims whose quote really supports them,
+  as judged by a second model.
+
+```
+Postgres `scores` (one review model + prompt version pair)   data/gold/ (CSV, refusals file)
+        │  score >= threshold (default 3)                            │  ids only, never labels
+        ▼                                                            ▼
+   screened-in ids  ─────────  minus  held-back ids  ─────────────────
+        │
+        │  text from the OpenAlex abstracts Parquet (phase 7 part A)
+        ▼
+Prefect flow `build_index` (`elusion index`) ──▶ abstract_index     one row per abstract: text, tsvector
+        │  one embedding call per batch                             key: doc_id
+        └──────────────────────────────────────▶ abstract_vectors   one row per (abstract, embedding model)
+                                                                    key: (doc_id, embedding_model)
+
+question ──▶ `ask` ──▶ check before spending (arm, k, index exists, prices known)
+                │
+                ├──▶ embed the question (vector and hybrid arms only)
+                ├──▶ `retrieve`: top 5 doc ids from abstract_index / abstract_vectors
+                ├──▶ ONE answer call: question + the five abstracts; the model returns
+                │       answerable yes/no and claims (doc id + quote)
+                ├──▶ Python quote check: each quote must be found in the stored abstract
+                │       text (only whitespace may differ) and each cited id must be one of
+                │       the five shown; no retry, no repair call
+                └──▶ ONE row in `ask_log`  (outcome: answered, refused, failed or error)
+
+data/gold/<criterion>.questions.csv ──▶ `ask-eval` ──▶ every question x 3 arms via `ask`
+                                              ├──▶ ask_eval_results   one row per (question, arm, retrieval version)
+                                              ├──▶ ask_judgements     one row per claim
+                                              ├──▶ docs/reports/ask-eval-*.md
+                                              └──▶ MLflow experiment `elusion/ask`, one run per arm
+```
+
+### The new tables
+
+All of them are made by the code's own `ensure_schema`, including `CREATE EXTENSION IF NOT
+EXISTS vector`, so nobody runs SQL by hand. The `postgres` service in `compose.yaml` is the
+pgvector image, on the same Postgres 16 line as before.
+
+- **`abstract_index`** holds one row per screened-in abstract: `doc_id`, work id, title,
+  publication date, the abstract text, a `tsv` column that Postgres computes from title and
+  text (so the two cannot disagree), the review model, prompt version and threshold that
+  screened it in, and when it was indexed. A GIN index on `tsv` serves the lexical arm. It
+  exists so that `ask` searches only the pile that already passed the review, and so that
+  the quote check has the exact stored text to look in. Key: `doc_id`.
+- **`abstract_vectors`** holds one embedding per (abstract, embedding model), with the model
+  id the API answered with (`served_model`) beside the pinned one. It is separate so that a
+  new embedding model adds rows beside the old ones instead of rewriting the index. Key:
+  (`doc_id`, `embedding_model`). Deleting an abstract from the index deletes its vector.
+- **`ask_log`** holds one row per `ask`, whatever the outcome: the question as typed, the
+  arm, k, the retrieved ids with ranks and scores, the pinned and served answer model, the
+  prompt version, the outcome, the answer as parsed, the quote checks, token counts, cost
+  and a `detail` field. It is append-only by database triggers that refuse UPDATE, DELETE
+  and TRUNCATE. It exists because an answer is only worth reading if you can later see
+  which passages and which model produced it. There is no idempotence key: asking twice
+  makes two rows, on purpose.
+- **`ask_eval_results`** holds one row per (question text, arm, answer model, prompt
+  version): which `ask_log` row answered it, k, the question's kind (answerable or not),
+  and, for an answerable one, whether the source abstract was among the retrieved ids. It
+  exists so that a re-run of `ask-eval` finds the work done and pays nothing. Key: the
+  four columns named. A question whose text is edited is a new question and is asked again.
+- **`ask_judgements`** holds one row per (ask, claim, judge model, judge prompt version):
+  whether the judge found the claim supported by its quote, with a rationale, tokens and
+  the served model. A judge call that gave no usable answer was still billed, so it keeps
+  its key with `supported` empty and is reported as "not judged", never as supported or
+  unsupported. Key: (`ask_id`, `claim_index`, `judge_model`, `judge_prompt_version`).
+
+### The models and the prompts
+
+Every call carries a pinned model id from `src/elusion/ask/models.py` and a prompt version
+string, and both are stored with the result. `text-embedding-3-small` embeds, a Claude
+Sonnet model answers (`ask/v1`), and a Claude Opus model judges groundedness
+(`ask/judge-v1`) and drafts gold questions (`ask/draft-v1`). The answer model and the judge
+are never the same model. Prompt files under `src/elusion/review/prompts/ask/` are never
+edited once a call has used them; a change is a new version.
+
+### The gold questions and what must never read them
+
+`ask-draft` shows an Opus model the text of 40 indexed abstracts and asks for one question
+each, written into `data/gold/<criterion>.questions-draft.csv`. The 40 are drawn once and
+written as pending rows before the first call. The owner edits that file by hand, then
+`ask-questions` turns it into `data/gold/<criterion>.questions.csv`: 25 questions whose
+answer is in one known abstract, and 5 that the index cannot answer, which the owner
+writes himself. Both files are in `data/gold/`, which is gitignored.
+
+The questions file is an answer key, like the gold CSV. Its source abstract id appears in
+two places only: the two questions files, and the Python comparison in `ask-eval` against
+the retrieved ids. The eval result row keeps only the outcome of that comparison, hit or
+miss. The id is never in a prompt, never passed to `retrieve` or `ask`, and never stored in
+the index tables. `ask-draft` sees abstract text only, not the
+id or the title. The index leaves out the abstracts held back for the gold set (the gold CSV
+and the judge refusals file, read by id; labels are never read), so a gold-set abstract is
+never in a retrieval context. A source abstract of a gold question is in the index like any
+other; that is what makes its question answerable.
+
+### How `ask-eval` measures
+
+Every gold question goes through all three arms with `ask`, k = 5. For each arm it reports
+recall@5 (over the answerable questions), groundedness (supported claims over judged
+claims, and the share of questions with every claim supported) and how many unanswerable
+questions were refused, each with a Clopper-Pearson 95% interval and the sample behind it. A
+claim the judge could not decide is left out of both denominators and counted separately.
+The refusal figure is the correct refusals over the unanswerable questions, with its
+interval; a search that found no passage is refused without a model call and counted beside
+them, in neither the correct nor the wrong count.
+
+With 25 answerable questions the intervals are wide, and the report says so. It also says the
+direction of the vocabulary bias (questions drafted from the abstracts, told to avoid their
+distinctive words) is not known, and that the three arms answer the same questions, so
+their intervals are correlated. Two arms are therefore compared on the questions where one
+found the source and the other did not, and the report prints that count for each pair of
+arms, both ways. The report lists question ids only, never question text, source ids, titles
+or abstract text.
+
+Calls of `ask`, `ask-draft` and `ask-eval` can run long (up to 16,000 output tokens,
+thinking included), so their Anthropic client waits 600 seconds and retries twice; the bulk
+review, judge, grade and first-read calls keep 60 seconds and five retries.
+
 ## Where each phase reads and writes
 
 | Phase | Reads | Writes |
@@ -328,12 +473,13 @@ Secrets are the one exception, since their values cannot be in a file.
 | 4 leaderboard | report, scores, prompt file, `data/grades/`, MLflow registry | MLflow run (params, metrics, report, prompt, `reviewer` model); registry versions and alias; `data/grades/<criterion>.csv`, `.grade-runs.jsonl` |
 | 5 dedupe (planned) | Parquet | Delta table of clusters; `scores` for members |
 | 6 production | same as 1 and 2, in the cluster: HuggingFace JSONL, the cluster's Kafka, `documents`, `scores`, Parquet text on the blob mount | the cluster's Postgres, Kafka and blob container; then `scores` and `review_jobs` copied to `data/exports/` and into the local Postgres |
+| 7 part B index, ask, ask-eval | `scores`, the OpenAlex abstracts Parquet, `data/gold/` (held-back ids and the questions file), `abstract_index`, `abstract_vectors` | `abstract_index`, `abstract_vectors`, `ask_log`, `ask_eval_results`, `ask_judgements`, `data/gold/<criterion>.questions-draft.csv` and `.questions.csv`, `docs/reports/ask-eval-*.md`, MLflow experiment `elusion/ask` |
 
 ## Local services
 
 | Service | Host port | Container port | Used by |
 |---|---|---|---|
-| Postgres 16 | 5433 | 5432 | collect, review, evaluate |
+| Postgres 16 (the pgvector image) | 5433 | 5432 | collect, review, evaluate, index, ask |
 | Redpanda (Kafka) | 9092 | 9092 external, 29092 internal | collect (produce), review (consume) |
 | MLflow 3.17 | 5001 | 5000 | leaderboard |
 | Prefect 3.9 | 4200 | 4200 | every flow |

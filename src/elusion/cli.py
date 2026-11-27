@@ -108,6 +108,20 @@ def concept(
     typer.echo(f"{name} version {version}")
 
 
+def _require_keys(*names: str) -> None:
+    """Raise `ProviderConfigError` for the first of `names` that is not in the environment.
+
+    The Anthropic client only notices a missing key at its first request, which for `ask` is
+    after the question's embedding was paid for: the commands that call a model check first."""
+    import os
+
+    from elusion.review.providers import ProviderConfigError
+
+    for name in names:
+        if not os.environ.get(name):
+            raise ProviderConfigError(f"{name} is not set; run with op run --env-file=.env.tpl --")
+
+
 @app.command(name="first-read")
 def first_read(
     concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
@@ -126,6 +140,326 @@ def first_read(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(public_summary(summary))
+
+
+@app.command()
+def index(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+    prompt_version: Annotated[
+        str, typer.Option(help="Review prompt version whose scores define the screened-in set.")
+    ],
+    review_model: Annotated[str, typer.Option(help="Pinned review model of the pair.")],
+    threshold: Annotated[int, typer.Option(help="Score at or above this is screened in.")] = 3,
+    max_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+) -> None:
+    """Index the screened-in abstracts for `ask`: full text plus one embedding each, once."""
+    import openai
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from elusion.ask.embed import OpenAIEmbedder
+    from elusion.ask.index import IndexPairMismatch
+    from elusion.corpora import UnknownCriterion
+    from elusion.flows.index import build_index
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import ProviderConfigError
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    try:
+        summary = build_index(
+            criterion.stem,
+            OpenAIEmbedder(),
+            review_model=review_model,
+            prompt_version=prompt_version,
+            threshold=threshold,
+            max_usd=max_usd,
+        )
+    except (
+        BudgetExceeded,
+        IndexPairMismatch,
+        ProviderConfigError,
+        UnknownCriterion,
+        ValueError,
+        OSError,
+        SQLAlchemyError,
+    ) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    except openai.APIError as exc:
+        # A rate limit (429) after the SDK's own retries, or a network failure. Every batch that
+        # came back was stored before the next was sent, so nothing paid for is lost.
+        typer.echo(f"error: {exc}", err=True)
+        typer.echo(
+            "the batches already embedded are stored: run the same command again to continue",
+            err=True,
+        )
+        raise typer.Exit(1) from exc
+    typer.echo(summary)
+
+
+@app.command()
+def ask(
+    question: Annotated[str, typer.Argument(help="The question, in your own words.")],
+    arm: Annotated[
+        str | None,
+        typer.Option(help="lexical, vector or hybrid; default DEFAULT_ARM in ask/retrieve.py."),
+    ] = None,
+    k: Annotated[
+        int | None, typer.Option(help="How many abstracts to read; default K in ask/retrieve.py.")
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option(help="Pinned answer model id; default ANSWER_MODEL in ask/models.py."),
+    ] = None,
+) -> None:
+    """Answer one question from the index: retrieve once, ask a model once, check every quote."""
+    import anthropic
+    import openai
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from elusion.ask import log as ask_log
+    from elusion.ask.answer import REFUSAL
+    from elusion.ask.answer import ask as ask_question
+    from elusion.ask.models import ANSWER_MODEL
+    from elusion.ask.retrieve import ARMS, DEFAULT_ARM, K
+    from elusion.collect import db
+    from elusion.config import settings
+    from elusion.review.providers import (
+        LONG_CALL_MAX_RETRIES,
+        LONG_CALL_TIMEOUT_S,
+        AnthropicProvider,
+        ProviderConfigError,
+    )
+
+    # The defaults are read from their modules when the command runs, not copied here, so
+    # changing the one constant `DEFAULT_ARM` changes what `elusion ask` does. They are looked up
+    # inside the command because importing them at the top would load the Anthropic SDK for
+    # every `elusion --help`.
+    arm = DEFAULT_ARM if arm is None else arm
+    k = K if k is None else k
+    model = ANSWER_MODEL if model is None else model
+    try:
+        if arm not in ARMS:
+            raise ValueError(f"unknown arm {arm!r}; the arms are {', '.join(ARMS)}")
+        _require_keys("ANTHROPIC_API_KEY", *(() if arm == "lexical" else ("OPENAI_API_KEY",)))
+        embedder = None
+        if arm != "lexical":
+            from elusion.ask.embed import OpenAIEmbedder
+
+            embedder = OpenAIEmbedder()
+        engine = db.make_engine(settings.database_url)
+        ask_log.ensure_schema(engine)
+        answerer = AnthropicProvider(
+            model, timeout=LONG_CALL_TIMEOUT_S, max_retries=LONG_CALL_MAX_RETRIES
+        )
+        result = ask_question(engine, question, answerer, embedder, arm=arm, k=k)
+    except (
+        ProviderConfigError,
+        ValueError,
+        SQLAlchemyError,
+        anthropic.APIError,
+        openai.APIError,
+    ) as exc:
+        # An API error after the question was embedded still left an `error` row in ask_log.
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if result.outcome == "error":
+        typer.echo(
+            f"error: the model gave no usable answer (stop_reason={result.stop_reason}); "
+            f"ask {result.ask_id} holds the cost",
+            err=True,
+        )
+        raise typer.Exit(1)
+    typer.echo(f"ask {result.ask_id}: {result.outcome}, arm {arm}, k {k}, ${result.cost_usd:.4f}")
+    if result.outcome == "refused":
+        typer.echo(REFUSAL)
+        return
+    answer = result.answer
+    for n, (claim, check) in enumerate(zip(answer.claims, result.checks, strict=True), start=1):
+        typer.echo(f"{n}. {claim.claim}")
+        typer.echo(f'   [{claim.doc_id}] "{claim.quote}"')
+        if not check.retrieved:
+            typer.echo("   check failed: not among the retrieved passages")
+        elif not check.verbatim:
+            typer.echo("   check failed: quote not found in the abstract")
+        else:
+            typer.echo("   check: ok")
+    if answer.answerable != bool(answer.claims):
+        typer.echo("the model's answer contradicted itself: answerable and claims disagree")
+    if result.outcome == "failed":
+        raise typer.Exit(1)
+
+
+@app.command(name="ask-draft")
+def ask_draft(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+    max_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+) -> None:
+    """Draft one gold question from each of 40 indexed abstracts, into a file you edit by hand.
+
+    The 40 abstracts are drawn once and written to the draft file as pending rows before the
+    first model call; a re-run drafts only the rows still pending. A row you set back to
+    `pending` is drafted, and paid for, again. Deleting a row does not redraw it.
+    """
+    import csv
+
+    import anthropic
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from elusion.ask import questions
+    from elusion.ask.index import ensure_schema
+    from elusion.ask.models import DRAFT_MODEL
+    from elusion.board.batch import held_back_ids
+    from elusion.collect import db
+    from elusion.config import settings
+    from elusion.evaluate.gold import gold_path
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import (
+        LONG_CALL_MAX_RETRIES,
+        LONG_CALL_TIMEOUT_S,
+        AnthropicProvider,
+        ProviderConfigError,
+    )
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    path = questions.draft_path(criterion.stem, settings.data_dir)
+    try:
+        _require_keys("ANTHROPIC_API_KEY")
+        drafter = AnthropicProvider(
+            DRAFT_MODEL, timeout=LONG_CALL_TIMEOUT_S, max_retries=LONG_CALL_MAX_RETRIES
+        )
+        engine = db.make_engine(settings.database_url)
+        ensure_schema(engine)
+        held_back = held_back_ids(gold_path(criterion.stem, settings.data_dir))
+        summary = questions.draft_questions(
+            engine, drafter, path, held_back=held_back, max_usd=max_usd
+        )
+    except (
+        BudgetExceeded,
+        ProviderConfigError,
+        ValueError,
+        OSError,
+        csv.Error,
+        SQLAlchemyError,
+        anthropic.APIError,
+    ) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(summary)
+    typer.echo(f"draft file: {path}")
+
+
+@app.command(name="ask-questions")
+def ask_questions(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+) -> None:
+    """Turn the hand-edited draft into the final questions file (25 answerable, 5 not)."""
+    import csv
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from elusion.ask import questions
+    from elusion.ask.index import ensure_schema
+    from elusion.board.batch import held_back_ids
+    from elusion.collect import db
+    from elusion.config import settings
+    from elusion.evaluate.gold import gold_path
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    draft = questions.draft_path(criterion.stem, settings.data_dir)
+    final = questions.questions_path(criterion.stem, settings.data_dir)
+    try:
+        engine = db.make_engine(settings.database_url)
+        ensure_schema(engine)
+        held_back = held_back_ids(gold_path(criterion.stem, settings.data_dir))
+        summary = questions.finalize_questions(draft, final, engine, held_back=held_back)
+    except (OSError, ValueError, csv.Error, SQLAlchemyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(summary)
+    typer.echo(f"questions file: {final}")
+
+
+@app.command(name="ask-eval")
+def ask_eval(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+    max_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+    no_mlflow: Annotated[
+        bool, typer.Option("--no-mlflow", help="Write the report but log no MLflow runs.")
+    ] = False,
+) -> None:
+    """Ask every gold question of all three arms, judge each claim, report, one MLflow run per arm.
+
+    k is fixed at 5 and all three arms always run, so there is no option for either. A second
+    run finds every result and judgement stored and pays nothing.
+    """
+    import csv
+
+    import anthropic
+    import openai
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import elusion.flows.ask_eval as flow
+    from elusion.ask.embed import OpenAIEmbedder
+    from elusion.ask.models import ANSWER_MODEL, JUDGE_MODEL
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import (
+        LONG_CALL_MAX_RETRIES,
+        LONG_CALL_TIMEOUT_S,
+        AnthropicProvider,
+        ProviderConfigError,
+    )
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    options = {"timeout": LONG_CALL_TIMEOUT_S, "max_retries": LONG_CALL_MAX_RETRIES}
+    try:
+        _require_keys("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+        result = flow.ask_eval(
+            criterion.stem,
+            AnthropicProvider(ANSWER_MODEL, **options),
+            AnthropicProvider(JUDGE_MODEL, **options),
+            OpenAIEmbedder(),
+            max_usd=max_usd,
+            log_mlflow=not no_mlflow,
+        )
+    except (
+        BudgetExceeded,
+        FileNotFoundError,
+        ProviderConfigError,
+        ValueError,
+        RuntimeError,
+        OSError,
+        csv.Error,
+        SQLAlchemyError,
+        anthropic.APIError,
+        openai.APIError,
+    ) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"report: {result.report_path}")
+    for arm, run_id in result.run_ids.items():
+        typer.echo(f"mlflow run {arm} {run_id}")
+    typer.echo(f"asked {result.asked}, judged {result.judged}, ${result.cost_usd:.4f}")
 
 
 @app.command()

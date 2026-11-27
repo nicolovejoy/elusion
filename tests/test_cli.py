@@ -689,6 +689,119 @@ def test_first_read_budget_and_unknown_concept_exit_1_without_traceback(monkeypa
         assert "Traceback" not in result.output
 
 
+def test_index_command_passes_the_pair_and_prints_the_summary(monkeypatch, tmp_path) -> None:
+    import elusion.ask.embed as embed
+    import elusion.flows.index as mod
+
+    seen = {}
+
+    class StubEmbedder:
+        model = "stub-embedder"
+
+    def fake_flow(criterion, embedder, **kw):
+        seen.update(criterion=criterion, embedder=embedder, **kw)
+        return {"screened_in": 5, "embedded": 4, "cost_usd": 0.01}
+
+    monkeypatch.setattr(embed, "OpenAIEmbedder", StubEmbedder)
+    monkeypatch.setattr(mod, "build_index", fake_flow)
+    args = ["index", "--criterion", _crit(tmp_path), "--prompt-version", "v1"]
+    result = CliRunner().invoke(app, [*args, "--review-model", "gpt-6-luna"])
+    assert result.exit_code == 0, result.output
+    assert seen["criterion"] == "c"
+    assert isinstance(seen["embedder"], StubEmbedder)
+    assert seen["review_model"] == "gpt-6-luna"
+    assert seen["prompt_version"] == "v1"
+    assert seen["threshold"] == 3
+    assert seen["max_usd"] is None
+    assert "'screened_in': 5" in result.output and "'embedded': 4" in result.output
+
+    result = CliRunner().invoke(
+        app, [*args, "--review-model", "other", "--threshold", "4", "--max-usd", "2.5"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (seen["review_model"], seen["threshold"], seen["max_usd"]) == ("other", 4, 2.5)
+
+    missing = CliRunner().invoke(
+        app,
+        [
+            "index",
+            "--criterion",
+            "nope.md",
+            "--prompt-version",
+            "v1",
+            "--review-model",
+            "gpt-6-luna",
+        ],
+    )
+    assert missing.exit_code == 2
+    assert "criterion file not found" in missing.output
+
+
+def test_index_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) -> None:
+    import elusion.ask.embed as embed
+    import elusion.flows.index as mod
+    from elusion.ask.index import IndexPairMismatch
+    from elusion.corpora import UnknownCriterion
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import ProviderConfigError
+
+    monkeypatch.setattr(embed, "OpenAIEmbedder", lambda: object())
+    args = ["index", "--criterion", _crit(tmp_path), "--prompt-version", "v1"]
+    args += ["--review-model", "gpt-6-luna"]
+    for exc, text in [
+        (BudgetExceeded("projected cost $2 is above the limit of $1"), "above the limit"),
+        (IndexPairMismatch("index holds another pair"), "another pair"),
+        (UnknownCriterion("no corpus"), "no corpus"),
+        (ValueError("ask searches abstracts only"), "abstracts only"),
+    ]:
+
+        def fake_flow(criterion, embedder, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(mod, "build_index", fake_flow)
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 1, result.output
+        assert text in result.output
+        assert "Traceback" not in result.output
+
+    def no_key():
+        raise ProviderConfigError(
+            "OPENAI_API_KEY is not set; run with op run --env-file=.env.tpl --"
+        )
+
+    monkeypatch.setattr(embed, "OpenAIEmbedder", no_key)
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1
+    assert "OPENAI_API_KEY is not set" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_index_with_an_unpriced_embedding_model_exits_1_before_touching_anything(
+    monkeypatch, tmp_path
+) -> None:
+    """The real flow, not a stub: it refuses before it makes an engine, so no database is
+    reached. The error names the model, and there is no traceback."""
+    import elusion.ask.embed as embed
+
+    class Unpriced:
+        name = "stub"
+        model = "no-such-embedding-model"
+
+        def embed(self, texts):
+            raise AssertionError("must not be called")
+
+    monkeypatch.setattr(embed, "OpenAIEmbedder", Unpriced)
+    crit = tmp_path / "auditable-decisions.md"
+    crit.write_text("x")
+    result = CliRunner().invoke(
+        app,
+        ["index", "--criterion", str(crit), "--prompt-version", "v1", "--review-model", "m"],
+    )
+    assert result.exit_code == 1, result.output
+    assert "error:" in result.output and "no-such-embedding-model" in result.output
+    assert "Traceback" not in result.output
+
+
 def _stub_board(
     monkeypatch, tmp_path, *, held=frozenset(), criterion="auditable-decisions", gold_exists=True
 ):
@@ -813,3 +926,631 @@ def test_board_unknown_concept_and_unreadable_readings_exit_1(monkeypatch, tmp_p
     result = CliRunner().invoke(app, ["board", "--concept", "stopping"])
     assert result.exit_code == 1 and "no readings" in result.output
     assert "run" not in seen
+
+
+def _stub_ask(monkeypatch, result, seen=None, embedder_error=None):
+    """Stub everything `elusion ask` builds, and `ask` itself, so no database or model is used."""
+    import elusion.ask.answer as answer_mod
+    import elusion.ask.embed as embed
+    import elusion.ask.log as ask_log
+    import elusion.collect.db as collect_db
+    import elusion.review.providers as providers
+
+    seen = {} if seen is None else seen
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
+
+    class StubProvider:
+        def __init__(self, model, **options):
+            self.model = model
+            seen["provider_options"] = options
+
+    class StubEmbedder:
+        model = "stub-embedder"
+
+        def __init__(self):
+            if embedder_error is not None:
+                raise embedder_error
+            seen["embedder_built"] = True
+
+    def fake_ask(engine, question, answerer, embedder, **kw):
+        seen.update(question=question, answerer=answerer, embedder=embedder, **kw)
+        return result
+
+    monkeypatch.setattr(providers, "AnthropicProvider", StubProvider)
+    monkeypatch.setattr(embed, "OpenAIEmbedder", StubEmbedder)
+    monkeypatch.setattr(collect_db, "make_engine", lambda url: object())
+    monkeypatch.setattr(ask_log, "ensure_schema", lambda engine: None)
+    monkeypatch.setattr(answer_mod, "ask", fake_ask)
+    return seen
+
+
+def _ask_result(outcome, claims=(), checks=(), answerable=True, **kw):
+    from elusion.ask.answer import Answer, AskResult, Claim, ClaimCheck
+
+    answer = Answer(answerable=answerable, claims=[Claim(**c) for c in claims])
+    return AskResult(
+        ask_id=12,
+        outcome=outcome,
+        answer=answer,
+        checks=[ClaimCheck(*c) for c in checks],
+        retrieved=[],
+        cost_usd=0.012345,
+        **kw,
+    )
+
+
+CLAIMS = [
+    {"claim": "It ends at a recall target.", "doc_id": "a", "quote": "a fixed recall"},
+    {"claim": "It is logged.", "doc_id": "b", "quote": "every decision"},
+]
+
+
+def test_ask_prints_claims_and_checks(monkeypatch) -> None:
+    result = _ask_result("answered", CLAIMS, [(0, "a", True, True), (1, "b", True, True)])
+    seen = _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "when does a review stop?"])
+    assert out.exit_code == 0, out.output
+    assert out.output.splitlines() == [
+        "ask 12: answered, arm hybrid, k 5, $0.0123",
+        "1. It ends at a recall target.",
+        '   [a] "a fixed recall"',
+        "   check: ok",
+        "2. It is logged.",
+        '   [b] "every decision"',
+        "   check: ok",
+    ]
+    assert seen["question"] == "when does a review stop?"
+    assert seen["answerer"].model == "claude-sonnet-5-5"
+    assert seen["arm"] == "hybrid" and seen["k"] == 5
+    assert seen["embedder"] is not None
+
+    CliRunner().invoke(
+        app, ["ask", "q", "--arm", "vector", "--k", "3", "--model", "claude-opus-5-5"]
+    )
+    assert (seen["arm"], seen["k"], seen["answerer"].model) == ("vector", 3, "claude-opus-5-5")
+
+
+def test_ask_refusal_text_is_exact(monkeypatch) -> None:
+    result = _ask_result("refused", answerable=False)
+    _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 0, out.output
+    assert out.output.splitlines() == [
+        "ask 12: refused, arm hybrid, k 5, $0.0123",
+        "The passages do not answer the question.",
+    ]
+
+
+def test_failed_ask_exits_1(monkeypatch) -> None:
+    result = _ask_result("failed", CLAIMS, [(0, "a", True, False), (1, "zz", False, False)])
+    _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 1
+    assert out.output.splitlines() == [
+        "ask 12: failed, arm hybrid, k 5, $0.0123",
+        "1. It ends at a recall target.",
+        '   [a] "a fixed recall"',
+        "   check failed: quote not found in the abstract",
+        "2. It is logged.",
+        '   [b] "every decision"',
+        "   check failed: not among the retrieved passages",
+    ]
+    assert "Traceback" not in out.output
+
+
+def test_a_failed_ask_with_a_contradictory_answer_says_so(monkeypatch) -> None:
+    result = _ask_result("failed", [], [])
+    _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 1
+    assert "contradict" in out.output
+
+
+def test_an_error_ask_names_the_stop_reason_and_the_ask(monkeypatch) -> None:
+    from elusion.ask.answer import AskResult
+
+    result = AskResult(12, "error", None, [], [], 0.5, stop_reason="max_tokens")
+    _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 1
+    assert (
+        "error: the model gave no usable answer (stop_reason=max_tokens); ask 12 holds the cost"
+        in out.output
+    )
+
+
+def test_ask_lexical_builds_no_embedder(monkeypatch) -> None:
+    seen = _stub_ask(monkeypatch, _ask_result("refused", answerable=False))
+    out = CliRunner().invoke(app, ["ask", "q", "--arm", "lexical"])
+    assert out.exit_code == 0, out.output
+    assert seen["embedder"] is None and "embedder_built" not in seen
+    assert seen["arm"] == "lexical"
+
+
+def test_ask_user_errors_exit_1_without_traceback(monkeypatch) -> None:
+    from elusion.review.providers import ProviderConfigError
+
+    _stub_ask(
+        monkeypatch,
+        _ask_result("refused", answerable=False),
+        embedder_error=ProviderConfigError("OPENAI_API_KEY is not set"),
+    )
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 1
+    assert "error: OPENAI_API_KEY is not set" in out.output
+    assert "Traceback" not in out.output
+
+    out = CliRunner().invoke(app, ["ask", "q", "--arm", "fuzzy"])
+    assert out.exit_code == 1
+    assert "error: unknown arm" in out.output
+    assert "Traceback" not in out.output
+
+
+def _stub_ask_draft(monkeypatch, tmp_path, flow, provider_error=None, schema_error=None):
+    """Stub what `elusion ask-draft` builds (the provider, the engine, the schema) and the
+    drafting itself, and point the data directory at `tmp_path`."""
+    import dataclasses
+
+    import elusion.ask.index as ask_index
+    import elusion.ask.questions as questions
+    import elusion.collect.db as collect_db
+    import elusion.config as config
+    import elusion.review.providers as providers
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    options_seen = {}
+
+    class StubProvider:
+        def __init__(self, model, **options):
+            if provider_error is not None:
+                raise provider_error
+            self.model = model
+            options_seen.update(options)
+
+    def ensure_schema(engine):
+        if schema_error is not None:
+            raise schema_error
+
+    monkeypatch.setattr(providers, "AnthropicProvider", StubProvider)
+    monkeypatch.setattr(collect_db, "make_engine", lambda url: object())
+    monkeypatch.setattr(ask_index, "ensure_schema", ensure_schema)
+    monkeypatch.setattr(questions, "draft_questions", flow)
+    monkeypatch.setattr(
+        config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path / "data")
+    )
+    return options_seen
+
+
+def _database_down():
+    import sqlalchemy.exc
+
+    return sqlalchemy.exc.OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+
+def test_ask_draft_drafts_into_the_criterions_draft_path_and_prints_the_summary(
+    monkeypatch, tmp_path
+) -> None:
+    seen = {}
+
+    def fake_flow(engine, drafter, path, **kw):
+        seen.update(drafter=drafter, path=path, **kw)
+        return {"drawn": 40, "already_drafted": 0, "drafted": 40, "failed": 0, "cost_usd": 0.5}
+
+    _stub_ask_draft(monkeypatch, tmp_path, fake_flow)
+    args = ["ask-draft", "--criterion", _crit(tmp_path)]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert seen["drafter"].model == "claude-opus-5-5"
+    assert seen["path"] == tmp_path / "data" / "gold" / "c.questions-draft.csv"
+    assert seen["max_usd"] is None
+    assert seen["held_back"] == set()  # no gold file yet
+    assert "'drafted': 40" in result.output and "c.questions-draft.csv" in result.output
+
+    result = CliRunner().invoke(app, [*args, "--max-usd", "2.5"])
+    assert result.exit_code == 0, result.output
+    assert seen["max_usd"] == 2.5
+
+    missing = CliRunner().invoke(app, ["ask-draft", "--criterion", "nope.md"])
+    assert missing.exit_code == 2 and "criterion file not found" in missing.output
+
+
+def test_ask_draft_passes_the_held_back_ids_of_the_gold_files(monkeypatch, tmp_path) -> None:
+    seen = {}
+
+    def fake_flow(engine, drafter, path, **kw):
+        seen.update(kw)
+        return {}
+
+    _stub_ask_draft(monkeypatch, tmp_path, fake_flow)
+    gold = tmp_path / "data" / "gold"
+    gold.mkdir(parents=True)
+    (gold / "c.judge-refusals.jsonl").write_text('{"doc_id": "abc"}\n', encoding="utf-8")
+    result = CliRunner().invoke(app, ["ask-draft", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert seen["held_back"] == {"abc"}
+
+
+def test_ask_draft_help_says_what_a_pending_and_a_deleted_row_do() -> None:
+    result = CliRunner().invoke(app, ["ask-draft", "--help"])
+    assert "paid for, again" in " ".join(result.output.split())
+    assert "Deleting a row does not redraw it" in " ".join(result.output.split())
+
+
+def test_ask_draft_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) -> None:
+    import anthropic
+    import httpx
+
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import ProviderConfigError
+
+    api_error = anthropic.APIConnectionError(request=httpx.Request("POST", "https://x.test"))
+    failures = [
+        {"flow_error": BudgetExceeded("projected cost $9 is above the limit")},
+        {"flow_error": ValueError("the index holds 3 abstracts and the draw needs 40")},
+        {"flow_error": api_error},
+        {"flow_error": PermissionError("cannot write the draft file")},
+        {"provider_error": ProviderConfigError("no key")},
+        {"schema_error": _database_down()},
+    ]
+    for failure in failures:
+        error = failure.get("flow_error")
+
+        def fake_flow(engine, drafter, path, error=error, **kw):
+            raise error
+
+        _stub_ask_draft(
+            monkeypatch,
+            tmp_path,
+            fake_flow,
+            provider_error=failure.get("provider_error"),
+            schema_error=failure.get("schema_error"),
+        )
+        result = CliRunner().invoke(app, ["ask-draft", "--criterion", _crit(tmp_path)])
+        raised = error or failure.get("provider_error") or failure.get("schema_error")
+        assert result.exit_code == 1, result.output
+        assert f"error: {raised}" in result.output
+        assert "Traceback" not in result.output
+
+
+def _stub_ask_questions(monkeypatch, tmp_path, engine, schema_error=None):
+    import dataclasses
+
+    import elusion.ask.index as ask_index
+    import elusion.collect.db as collect_db
+    import elusion.config as config
+
+    def ensure_schema(_engine):
+        if schema_error is not None:
+            raise schema_error
+
+    monkeypatch.setattr(collect_db, "make_engine", lambda url: engine)
+    monkeypatch.setattr(ask_index, "ensure_schema", ensure_schema)
+    monkeypatch.setattr(
+        config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path / "data")
+    )
+
+
+def test_ask_questions_writes_the_final_file_and_prints_the_counts(
+    monkeypatch, tmp_path, index_engine
+) -> None:
+    from tests.test_ask_questions import fill_index, write_draft
+
+    fill_index(index_engine, 41)
+    _stub_ask_questions(monkeypatch, tmp_path, index_engine)
+    write_draft(tmp_path / "data" / "gold" / "c.questions-draft.csv")
+    args = ["ask-questions", "--criterion", _crit(tmp_path)]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    final = tmp_path / "data" / "gold" / "c.questions.csv"
+    assert final.is_file()
+    assert "'answerable': 25" in result.output and "'unanswerable': 5" in result.output
+    assert "c.questions.csv" in result.output
+
+    again = CliRunner().invoke(app, args)  # never overwrites
+    assert again.exit_code == 1
+    assert "error:" in again.output and "exists" in again.output
+    assert "Traceback" not in again.output
+
+
+def test_ask_questions_refuses_a_held_back_source(monkeypatch, tmp_path, index_engine) -> None:
+    from tests.test_ask_questions import doc_id, fill_index, write_draft
+
+    fill_index(index_engine, 41)
+    _stub_ask_questions(monkeypatch, tmp_path, index_engine)
+    gold = tmp_path / "data" / "gold"
+    write_draft(gold / "c.questions-draft.csv")
+    (gold / "c.judge-refusals.jsonl").write_text(f'{{"doc_id": "{doc_id(2)}"}}\n', encoding="utf-8")
+    result = CliRunner().invoke(app, ["ask-questions", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 1
+    assert "held back as a gold label" in result.output
+    assert not (gold / "c.questions.csv").exists()
+
+
+def test_ask_questions_errors_exit_1_without_a_traceback(
+    monkeypatch, tmp_path, index_engine
+) -> None:
+    from tests.test_ask_questions import fill_index, write_draft
+
+    fill_index(index_engine, 41)
+    _stub_ask_questions(monkeypatch, tmp_path, index_engine)
+    args = ["ask-questions", "--criterion", _crit(tmp_path)]
+    nothing = CliRunner().invoke(app, args)  # no draft file yet
+    assert nothing.exit_code == 1 and "error:" in nothing.output
+    assert "Traceback" not in nothing.output
+
+    write_draft(tmp_path / "data" / "gold" / "c.questions-draft.csv", struck=14)
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1
+    assert (
+        "error: the draft keeps 26 answerable and 5 unanswerable questions; it must keep 25 and 5"
+        in result.output
+    )
+    assert not (tmp_path / "data" / "gold" / "c.questions.csv").exists()
+
+    down = _database_down()
+    _stub_ask_questions(monkeypatch, tmp_path, index_engine, schema_error=down)
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1 and f"error: {down}" in result.output
+    assert "Traceback" not in result.output
+
+
+def _stub_ask_eval(monkeypatch, result=None, error=None, embedder_error=None, seen=None):
+    """Stub the flow and the three clients `elusion ask-eval` builds."""
+    import elusion.ask.embed as embed
+    import elusion.flows.ask_eval as mod
+    import elusion.review.providers as providers
+
+    seen = {} if seen is None else seen
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
+
+    class StubProvider:
+        def __init__(self, model, **options):
+            self.model = model
+            seen.setdefault("models", []).append(model)
+            seen.setdefault("provider_options", []).append(options)
+
+    class StubEmbedder:
+        model = "stub-embedder"
+
+        def __init__(self):
+            if embedder_error is not None:
+                raise embedder_error
+
+    def fake_flow(criterion, answerer, judge, embedder, **kw):
+        seen.update(criterion=criterion, answerer=answerer, judge=judge, embedder=embedder, **kw)
+        if error is not None:
+            raise error
+        return result
+
+    monkeypatch.setattr(providers, "AnthropicProvider", StubProvider)
+    monkeypatch.setattr(embed, "OpenAIEmbedder", StubEmbedder)
+    monkeypatch.setattr(mod, "ask_eval", fake_flow)
+    return seen
+
+
+def test_ask_eval_has_no_k_option(monkeypatch, tmp_path) -> None:
+    seen = _stub_ask_eval(monkeypatch)
+    for option in (["--k", "3"], ["--arm", "lexical"]):
+        result = CliRunner().invoke(app, ["ask-eval", "--criterion", _crit(tmp_path), *option])
+        assert result.exit_code == 2, result.output
+        assert "No such option" in result.output
+    assert "criterion" not in seen  # the flow was never reached
+
+
+def test_ask_eval_prints_the_report_and_runs(monkeypatch, tmp_path) -> None:
+    from pathlib import Path
+
+    from elusion.ask.models import ANSWER_MODEL, JUDGE_MODEL
+    from elusion.flows.ask_eval import EvalResult
+
+    run_ids = {"lexical": "a" * 32, "vector": "b" * 32, "hybrid": "c" * 32}
+    outcome = EvalResult(Path("docs/reports/ask-eval-c.md"), run_ids, 90, 200, 1.2345)
+    seen = _stub_ask_eval(monkeypatch, outcome)
+    result = CliRunner().invoke(app, ["ask-eval", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert seen["criterion"] == "c" and seen["max_usd"] is None and seen["log_mlflow"] is True
+    assert seen["models"] == [ANSWER_MODEL, JUDGE_MODEL]
+    assert seen["answerer"].model == ANSWER_MODEL and seen["judge"].model == JUDGE_MODEL
+    lines = result.output.splitlines()
+    assert "docs/reports/ask-eval-c.md" in lines[0]
+    assert lines[1:4] == [f"mlflow run {arm} {run_id}" for arm, run_id in run_ids.items()]
+    assert "asked 90, judged 200, $1.2345" in result.output
+
+    result = CliRunner().invoke(
+        app, ["ask-eval", "--criterion", _crit(tmp_path), "--max-usd", "2.5", "--no-mlflow"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (seen["max_usd"], seen["log_mlflow"]) == (2.5, False)
+
+    missing = CliRunner().invoke(app, ["ask-eval", "--criterion", "nope.md"])
+    assert missing.exit_code == 2 and "criterion file not found" in missing.output
+
+
+def test_ask_eval_errors_exit_1(monkeypatch, tmp_path) -> None:
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import ProviderConfigError
+
+    args = ["ask-eval", "--criterion", _crit(tmp_path)]
+    for exc, text in [
+        (BudgetExceeded("projected cost $12 is above the limit of $10"), "above the limit"),
+        (FileNotFoundError("no questions file: run `elusion ask-questions`"), "ask-questions"),
+        (ValueError("the index is empty"), "index is empty"),
+        (RuntimeError("report written to r.md, but MLflow logging failed: down"), "MLflow"),
+    ]:
+        _stub_ask_eval(monkeypatch, error=exc)
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 1, result.output
+        assert f"error: {exc}" in result.output and text in result.output
+        assert "Traceback" not in result.output
+
+    key = ProviderConfigError("OPENAI_API_KEY is not set; run with op run --env-file=.env.tpl --")
+    _stub_ask_eval(monkeypatch, embedder_error=key)
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1 and "OPENAI_API_KEY is not set" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_ask_eval_without_an_api_key_exits_1_before_anything_is_built(
+    monkeypatch, tmp_path
+) -> None:
+    seen = _stub_ask_eval(monkeypatch)
+    args = ["ask-eval", "--criterion", _crit(tmp_path)]
+    for missing in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        _stub_ask_eval(monkeypatch, seen=seen)
+        monkeypatch.delenv(missing)
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 1, result.output
+        assert f"error: {missing} is not set; run with op run --env-file=.env.tpl --" in (
+            result.output
+        )
+        assert "Traceback" not in result.output
+    assert "criterion" not in seen and "models" not in seen  # no provider, no flow
+
+
+def test_ask_defaults_are_the_constants_not_copies(monkeypatch) -> None:
+    """Task E changes the one constant `DEFAULT_ARM`; `elusion ask` must follow it."""
+    import elusion.ask.models as models
+    import elusion.ask.retrieve as retrieve
+
+    seen = _stub_ask(monkeypatch, _ask_result("refused", answerable=False))
+    CliRunner().invoke(app, ["ask", "q"])
+    assert (seen["arm"], seen["k"], seen["answerer"].model) == (
+        retrieve.DEFAULT_ARM,
+        retrieve.K,
+        models.ANSWER_MODEL,
+    )
+    monkeypatch.setattr(retrieve, "DEFAULT_ARM", "lexical")
+    monkeypatch.setattr(retrieve, "K", 7)
+    monkeypatch.setattr(models, "ANSWER_MODEL", "some-other-model")
+    CliRunner().invoke(app, ["ask", "q"])
+    assert (seen["arm"], seen["k"], seen["answerer"].model) == ("lexical", 7, "some-other-model")
+
+
+def test_the_long_structured_calls_get_the_long_timeout_and_two_retries(
+    monkeypatch, tmp_path
+) -> None:
+    from pathlib import Path
+
+    from elusion.flows.ask_eval import EvalResult
+
+    long_call = {"timeout": 600.0, "max_retries": 2}
+
+    seen = _stub_ask(monkeypatch, _ask_result("refused", answerable=False))
+    CliRunner().invoke(app, ["ask", "q"])
+    assert seen["provider_options"] == long_call
+
+    options = _stub_ask_draft(monkeypatch, tmp_path, lambda *a, **kw: {})
+    result = CliRunner().invoke(app, ["ask-draft", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert options == long_call
+
+    outcome = EvalResult(Path("docs/reports/ask-eval-c.md"), {}, 0, 0, 0.0)
+    seen = _stub_ask_eval(monkeypatch, outcome)
+    result = CliRunner().invoke(app, ["ask-eval", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert seen["provider_options"] == [long_call, long_call]
+
+
+def test_ask_and_ask_draft_without_an_api_key_exit_1_before_building_anything(
+    monkeypatch, tmp_path
+) -> None:
+    seen = _stub_ask(monkeypatch, _ask_result("refused", answerable=False))
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    for args in (["ask", "q"], ["ask", "q", "--arm", "lexical"]):
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 1, result.output
+        assert "error: ANTHROPIC_API_KEY is not set; run with op run --env-file=.env.tpl --" in (
+            result.output
+        )
+        assert "Traceback" not in result.output
+    assert "embedder_built" not in seen and "question" not in seen  # nothing was built or asked
+
+    _stub_ask(monkeypatch, _ask_result("refused", answerable=False), seen)
+    monkeypatch.delenv("OPENAI_API_KEY")
+    result = CliRunner().invoke(app, ["ask", "q"])  # the hybrid arm embeds the question
+    assert result.exit_code == 1 and "error: OPENAI_API_KEY is not set" in result.output
+    assert "Traceback" not in result.output
+    lexical = CliRunner().invoke(app, ["ask", "q", "--arm", "lexical"])  # the lexical arm does not
+    assert lexical.exit_code == 0, lexical.output
+
+    flow_called = []
+    _stub_ask_draft(monkeypatch, tmp_path, lambda *a, **kw: flow_called.append(1) or {})
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    result = CliRunner().invoke(app, ["ask-draft", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 1
+    assert "error: ANTHROPIC_API_KEY is not set" in result.output
+    assert "Traceback" not in result.output and flow_called == []
+
+
+def test_ask_with_the_database_down_exits_1_without_a_traceback(monkeypatch) -> None:
+    import elusion.ask.log as ask_log
+
+    _stub_ask(monkeypatch, _ask_result("refused", answerable=False))
+
+    def down(engine):
+        raise _database_down()
+
+    monkeypatch.setattr(ask_log, "ensure_schema", down)
+    result = CliRunner().invoke(app, ["ask", "q"])
+    assert result.exit_code == 1 and "error:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_ask_with_a_provider_api_error_exits_1_without_a_traceback(monkeypatch) -> None:
+    import anthropic
+    import httpx
+    import openai
+
+    import elusion.ask.answer as answer_mod
+
+    _stub_ask(monkeypatch, _ask_result("refused", answerable=False))
+    request = httpx.Request("POST", "https://x.test")
+    for exc in (
+        anthropic.APIConnectionError(request=request),
+        openai.APIConnectionError(request=request),
+    ):
+
+        def boom(*a, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(answer_mod, "ask", boom)
+        result = CliRunner().invoke(app, ["ask", "q"])
+        assert result.exit_code == 1 and f"error: {exc}" in result.output
+        assert "Traceback" not in result.output
+
+
+def test_index_with_an_api_error_says_a_rerun_continues(monkeypatch, tmp_path) -> None:
+    import httpx
+    import openai
+
+    import elusion.ask.embed as embed
+    import elusion.flows.index as mod
+
+    request = httpx.Request("POST", "https://x.test/embeddings")
+    rate_limited = openai.RateLimitError(
+        "Rate limit reached for text-embedding-3-small",
+        response=httpx.Response(429, request=request),
+        body=None,
+    )
+
+    def fake_flow(criterion, embedder, **kw):
+        raise rate_limited
+
+    monkeypatch.setattr(embed, "OpenAIEmbedder", lambda: object())
+    monkeypatch.setattr(mod, "build_index", fake_flow)
+    args = ["index", "--criterion", _crit(tmp_path), "--prompt-version", "v1"]
+    result = CliRunner().invoke(app, [*args, "--review-model", "gpt-6-luna"])
+    assert result.exit_code == 1, result.output
+    assert "error: Rate limit reached" in result.output
+    assert "run the same command again to continue" in result.output
+    assert "Traceback" not in result.output
+
+    def down(criterion, embedder, **kw):
+        raise _database_down()
+
+    monkeypatch.setattr(mod, "build_index", down)
+    result = CliRunner().invoke(app, [*args, "--review-model", "gpt-6-luna"])
+    assert result.exit_code == 1 and "error:" in result.output
+    assert "Traceback" not in result.output
