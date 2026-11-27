@@ -80,7 +80,7 @@ paragraph is a near-copy of that one". It is optional. Phase 7 is a second corpu
 research on AI agents making decisions that must be auditable, screened with the same
 review, judge and evaluate flows.
 
-**Phase 7, part B (code written, not yet run).** Part B lets a person ask a question of the
+**Phase 7, part B.** Part B lets a person ask a question of the
 abstracts that passed the screen. `elusion index` stores each screened-in abstract with an
 embedding (a list of numbers a model makes for a text, so that similar meanings sit close
 together), in Postgres with the pgvector extension. `elusion ask` searches once, by words,
@@ -90,8 +90,11 @@ is really in that abstract; a claim that fails the check fails the whole answer.
 is logged. `elusion ask-eval` then asks 30 gold questions (25 with a known source abstract,
 5 with none) of all three ways of searching, has a second model judge each claim, and
 reports recall@5 and groundedness with Clopper-Pearson intervals, one MLflow run per arm.
-The paid runs have not been made yet, so there are no results to report. How it fits
-together: `docs/ARCHITECTURE.md`.
+It ran on 2026-11-26: on 25 answerable questions the source abstract was among the five
+retrieved for 16 by words, 12 by meaning and 17 by both, with intervals too wide to rank the
+three; every arm refused all 5 unanswerable questions. The first run exposed a defect in the
+word search, which was fixed and measured again. Figures and caveats:
+`docs/notes/phase-7.md`. How it fits together: `docs/ARCHITECTURE.md`.
 
 ## Status
 
