@@ -175,6 +175,63 @@ def index(
 
 
 @app.command()
+def ask(
+    question: Annotated[str, typer.Argument(help="The question, in your own words.")],
+    arm: Annotated[str, typer.Option(help="lexical, vector or hybrid.")] = "hybrid",
+    k: Annotated[int, typer.Option(help="How many abstracts to read.")] = 5,
+    model: Annotated[str, typer.Option(help="Pinned answer model id.")] = "claude-sonnet-5-5",
+) -> None:
+    """Answer one question from the index: retrieve once, ask a model once, check every quote."""
+    from elusion.ask import log as ask_log
+    from elusion.ask.answer import REFUSAL
+    from elusion.ask.answer import ask as ask_question
+    from elusion.ask.retrieve import ARMS
+    from elusion.collect import db
+    from elusion.config import settings
+    from elusion.review.providers import AnthropicProvider, ProviderConfigError
+
+    try:
+        if arm not in ARMS:
+            raise ValueError(f"unknown arm {arm!r}; the arms are {', '.join(ARMS)}")
+        embedder = None
+        if arm != "lexical":
+            from elusion.ask.embed import OpenAIEmbedder
+
+            embedder = OpenAIEmbedder()
+        engine = db.make_engine(settings.database_url)
+        ask_log.ensure_schema(engine)
+        result = ask_question(engine, question, AnthropicProvider(model), embedder, arm=arm, k=k)
+    except (ProviderConfigError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if result.outcome == "error":
+        typer.echo(
+            f"error: the model gave no usable answer (stop_reason={result.stop_reason}); "
+            f"ask {result.ask_id} holds the cost",
+            err=True,
+        )
+        raise typer.Exit(1)
+    typer.echo(f"ask {result.ask_id}: {result.outcome}, arm {arm}, k {k}, ${result.cost_usd:.4f}")
+    if result.outcome == "refused":
+        typer.echo(REFUSAL)
+        return
+    answer = result.answer
+    for n, (claim, check) in enumerate(zip(answer.claims, result.checks, strict=True), start=1):
+        typer.echo(f"{n}. {claim.claim}")
+        typer.echo(f'   [{claim.doc_id}] "{claim.quote}"')
+        if not check.retrieved:
+            typer.echo("   check failed: not among the retrieved passages")
+        elif not check.verbatim:
+            typer.echo("   check failed: quote not found in the abstract")
+        else:
+            typer.echo("   check: ok")
+    if answer.answerable != bool(answer.claims):
+        typer.echo("the model's answer contradicted itself: answerable and claims disagree")
+    if result.outcome == "failed":
+        raise typer.Exit(1)
+
+
+@app.command()
 def board(
     concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
     port: Annotated[int, typer.Option(help="The local port to serve on.")] = 8010,

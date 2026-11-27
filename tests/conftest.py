@@ -56,7 +56,8 @@ def board_engine():
 
 @pytest.fixture
 def index_engine():
-    """An engine on a throwaway database holding the index tables and the review tables.
+    """An engine on a throwaway database holding the index tables, the review tables and
+    the `ask_log`.
 
     One database per test, because the index flow tests need different pairs and a fresh
     database costs a fraction of a second. `CREATE EXTENSION vector` is run by the code
@@ -67,7 +68,7 @@ def index_engine():
 
     import sqlalchemy as sa
 
-    from elusion.ask import index
+    from elusion.ask import index, log
     from elusion.collect.db import make_engine
     from elusion.config import settings
     from elusion.review import db as review_db
@@ -84,7 +85,7 @@ def index_engine():
     try:
         index.ensure_schema(engine)
         review_db.ensure_schema(engine)
-        # Task C adds the ask tables' own ensure_schema here.
+        log.ensure_schema(engine)
         yield engine
     finally:
         engine.dispose()

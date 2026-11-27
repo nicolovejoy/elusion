@@ -926,3 +926,159 @@ def test_board_unknown_concept_and_unreadable_readings_exit_1(monkeypatch, tmp_p
     result = CliRunner().invoke(app, ["board", "--concept", "stopping"])
     assert result.exit_code == 1 and "no readings" in result.output
     assert "run" not in seen
+
+
+def _stub_ask(monkeypatch, result, seen=None, embedder_error=None):
+    """Stub everything `elusion ask` builds, and `ask` itself, so no database or model is used."""
+    import elusion.ask.answer as answer_mod
+    import elusion.ask.embed as embed
+    import elusion.ask.log as ask_log
+    import elusion.collect.db as collect_db
+    import elusion.review.providers as providers
+
+    seen = {} if seen is None else seen
+
+    class StubProvider:
+        def __init__(self, model):
+            self.model = model
+
+    class StubEmbedder:
+        model = "stub-embedder"
+
+        def __init__(self):
+            if embedder_error is not None:
+                raise embedder_error
+            seen["embedder_built"] = True
+
+    def fake_ask(engine, question, answerer, embedder, **kw):
+        seen.update(question=question, answerer=answerer, embedder=embedder, **kw)
+        return result
+
+    monkeypatch.setattr(providers, "AnthropicProvider", StubProvider)
+    monkeypatch.setattr(embed, "OpenAIEmbedder", StubEmbedder)
+    monkeypatch.setattr(collect_db, "make_engine", lambda url: object())
+    monkeypatch.setattr(ask_log, "ensure_schema", lambda engine: None)
+    monkeypatch.setattr(answer_mod, "ask", fake_ask)
+    return seen
+
+
+def _ask_result(outcome, claims=(), checks=(), answerable=True, **kw):
+    from elusion.ask.answer import Answer, AskResult, Claim, ClaimCheck
+
+    answer = Answer(answerable=answerable, claims=[Claim(**c) for c in claims])
+    return AskResult(
+        ask_id=12,
+        outcome=outcome,
+        answer=answer,
+        checks=[ClaimCheck(*c) for c in checks],
+        retrieved=[],
+        cost_usd=0.012345,
+        **kw,
+    )
+
+
+CLAIMS = [
+    {"claim": "It ends at a recall target.", "doc_id": "a", "quote": "a fixed recall"},
+    {"claim": "It is logged.", "doc_id": "b", "quote": "every decision"},
+]
+
+
+def test_ask_prints_claims_and_checks(monkeypatch) -> None:
+    result = _ask_result("answered", CLAIMS, [(0, "a", True, True), (1, "b", True, True)])
+    seen = _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "when does a review stop?"])
+    assert out.exit_code == 0, out.output
+    assert out.output.splitlines() == [
+        "ask 12: answered, arm hybrid, k 5, $0.0123",
+        "1. It ends at a recall target.",
+        '   [a] "a fixed recall"',
+        "   check: ok",
+        "2. It is logged.",
+        '   [b] "every decision"',
+        "   check: ok",
+    ]
+    assert seen["question"] == "when does a review stop?"
+    assert seen["answerer"].model == "claude-sonnet-5-5"
+    assert seen["arm"] == "hybrid" and seen["k"] == 5
+    assert seen["embedder"] is not None
+
+    CliRunner().invoke(
+        app, ["ask", "q", "--arm", "vector", "--k", "3", "--model", "claude-opus-5-5"]
+    )
+    assert (seen["arm"], seen["k"], seen["answerer"].model) == ("vector", 3, "claude-opus-5-5")
+
+
+def test_ask_refusal_text_is_exact(monkeypatch) -> None:
+    result = _ask_result("refused", answerable=False)
+    _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 0, out.output
+    assert out.output.splitlines() == [
+        "ask 12: refused, arm hybrid, k 5, $0.0123",
+        "The passages do not answer the question.",
+    ]
+
+
+def test_failed_ask_exits_1(monkeypatch) -> None:
+    result = _ask_result("failed", CLAIMS, [(0, "a", True, False), (1, "zz", False, False)])
+    _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 1
+    assert out.output.splitlines() == [
+        "ask 12: failed, arm hybrid, k 5, $0.0123",
+        "1. It ends at a recall target.",
+        '   [a] "a fixed recall"',
+        "   check failed: quote not found in the abstract",
+        "2. It is logged.",
+        '   [b] "every decision"',
+        "   check failed: not among the retrieved passages",
+    ]
+    assert "Traceback" not in out.output
+
+
+def test_a_failed_ask_with_a_contradictory_answer_says_so(monkeypatch) -> None:
+    result = _ask_result("failed", [], [])
+    _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 1
+    assert "contradict" in out.output
+
+
+def test_an_error_ask_names_the_stop_reason_and_the_ask(monkeypatch) -> None:
+    from elusion.ask.answer import AskResult
+
+    result = AskResult(12, "error", None, [], [], 0.5, stop_reason="max_tokens")
+    _stub_ask(monkeypatch, result)
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 1
+    assert (
+        "error: the model gave no usable answer (stop_reason=max_tokens); ask 12 holds the cost"
+        in out.output
+    )
+
+
+def test_ask_lexical_builds_no_embedder(monkeypatch) -> None:
+    seen = _stub_ask(monkeypatch, _ask_result("refused", answerable=False))
+    out = CliRunner().invoke(app, ["ask", "q", "--arm", "lexical"])
+    assert out.exit_code == 0, out.output
+    assert seen["embedder"] is None and "embedder_built" not in seen
+    assert seen["arm"] == "lexical"
+
+
+def test_ask_user_errors_exit_1_without_traceback(monkeypatch) -> None:
+    from elusion.review.providers import ProviderConfigError
+
+    _stub_ask(
+        monkeypatch,
+        _ask_result("refused", answerable=False),
+        embedder_error=ProviderConfigError("OPENAI_API_KEY is not set"),
+    )
+    out = CliRunner().invoke(app, ["ask", "q"])
+    assert out.exit_code == 1
+    assert "error: OPENAI_API_KEY is not set" in out.output
+    assert "Traceback" not in out.output
+
+    out = CliRunner().invoke(app, ["ask", "q", "--arm", "fuzzy"])
+    assert out.exit_code == 1
+    assert "error: unknown arm" in out.output
+    assert "Traceback" not in out.output

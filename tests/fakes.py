@@ -10,6 +10,7 @@ from elusion.ask.embed import Embedded
 from elusion.ask.models import EMBEDDING_DIM
 from elusion.review.pricing import register_free
 from elusion.review.providers import (
+    Completion,
     FirstRead,
     Grade,
     Grading,
@@ -134,6 +135,33 @@ class FakeReader:
             raise result
         return FirstRead(
             reading=result, model=self.model, input_tokens=100, output_tokens=20, cost_usd=0.0
+        )
+
+
+class FakeCompleter:
+    """Test-only generic completer: answers from a function of what it was sent.
+
+    `answer(system, message, out)` returns an instance of `out`, or an exception, which is
+    raised. `calls` records (system, message) exactly as sent. Its model is free.
+    """
+
+    name = "fake"
+
+    def __init__(self, answer, model: str = "fake-completer") -> None:
+        register_free(model)
+        self.model = model
+        self.answer = answer
+        self.calls: list[tuple[str, str]] = []
+        self.max_tokens: list[int] = []  # the max_tokens of each call
+
+    def complete(self, system: str, message: str, out, *, max_tokens: int = 1024) -> Completion:
+        self.calls.append((system, message))
+        self.max_tokens.append(max_tokens)
+        result = self.answer(system, message, out)
+        if isinstance(result, Exception):
+            raise result
+        return Completion(
+            parsed=result, model=self.model, input_tokens=100, output_tokens=20, cost_usd=0.0
         )
 
 

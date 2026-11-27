@@ -3,7 +3,8 @@ from types import SimpleNamespace
 
 import anthropic
 import pytest
-from pydantic import ValidationError
+from anthropic import transform_schema
+from pydantic import BaseModel, ValidationError
 
 from elusion.config import Settings
 from elusion.review.providers import (
@@ -12,6 +13,7 @@ from elusion.review.providers import (
     READING_SCHEMA,
     VERDICT_SCHEMA,
     AnthropicProvider,
+    Completer,
     Grade,
     Grader,
     Judge,
@@ -24,7 +26,7 @@ from elusion.review.providers import (
     grader_message,
     reader_message,
 )
-from tests.fakes import FakeGrader, FakeJudge, FakeProvider, FakeReader
+from tests.fakes import FakeCompleter, FakeGrader, FakeJudge, FakeProvider, FakeReader
 
 
 def test_verdict_rejects_out_of_range_score():
@@ -299,3 +301,94 @@ def test_read_request_sends_the_message_and_returns_the_reading(monkeypatch):
     ]
     assert first.reading == reading
     assert first.model == "claude-haiku-5-5"
+
+
+class Pair(BaseModel):
+    """A made-up output model with a nested one, to prove the generic call needs no schema
+    constant of its own."""
+
+    first: Verdict
+    note: str
+
+
+def test_complete_returns_the_parsed_model_and_usage(monkeypatch):
+    seen = {}
+    pair = Pair(first=Verdict(score=1, rationale="r", quote="q"), note="n")
+    big = 1_000_000
+    usage = dict(
+        input_tokens=big,
+        output_tokens=big,
+        cache_creation_input_tokens=big,
+        cache_read_input_tokens=big,
+    )
+    provider = stub_create(monkeypatch, pair.model_dump_json(), usage=usage, seen=seen)
+    done = provider.complete("SYSTEM", "the message", Pair)
+
+    assert done.parsed == pair
+    assert done.model == "claude-haiku-5-5"
+    assert (done.input_tokens, done.output_tokens) == (big, big)
+    assert (done.cache_creation_input_tokens, done.cache_read_input_tokens) == (big, big)
+    assert done.cost_usd == pytest.approx(0.735)
+    fmt = seen["output_config"]["format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["schema"] == transform_schema(Pair.model_json_schema())
+    assert fmt["schema"]["additionalProperties"] is False
+    assert seen["system"] == [
+        {"type": "text", "text": "SYSTEM", "cache_control": {"type": "ephemeral"}}
+    ]
+    assert seen["messages"] == [{"role": "user", "content": "the message"}]
+
+
+def test_complete_sends_none_of_the_parameters_the_newest_models_reject(monkeypatch):
+    """claude-sonnet-5-5 and claude-opus-5-5 return 400 for thinking turned off or given a
+    budget, for a forced tool_choice and for an assistant prefill (Anthropic docs,
+    2026-11-26). The one structured path sends none of them."""
+    seen = {}
+    pair = Pair(first=Verdict(score=1, rationale="r", quote="q"), note="n")
+    provider = stub_create(monkeypatch, pair.model_dump_json(), seen=seen)
+    provider.complete("s", "m", Pair)
+    assert set(seen) == {"model", "max_tokens", "system", "messages", "output_config"}
+    assert [m["role"] for m in seen["messages"]] == ["user"]
+
+
+def test_complete_passes_max_tokens(monkeypatch):
+    seen = {}
+    pair = Pair(first=Verdict(score=1, rationale="r", quote="q"), note="n")
+    provider = stub_create(monkeypatch, pair.model_dump_json(), seen=seen)
+    provider.complete("s", "m", Pair)
+    assert seen["max_tokens"] == 1024
+    provider.complete("s", "m", Pair, max_tokens=16000)
+    assert seen["max_tokens"] == 16000
+
+
+def test_complete_raises_review_error_on_truncation(monkeypatch):
+    provider = stub_create(monkeypatch, '{"first": {"sco', stop_reason="max_tokens")
+    with pytest.raises(ReviewError) as exc:
+        provider.complete("s", "m", Pair, max_tokens=16000)
+    e = exc.value
+    assert e.stop_reason == "max_tokens"
+    assert (e.input_tokens, e.output_tokens) == (10, 20)
+    assert (e.cache_creation_input_tokens, e.cache_read_input_tokens) == (0, 30)
+
+
+def test_complete_raises_review_error_on_a_refusal_and_on_invalid_json(monkeypatch):
+    for text, stop, expected in [
+        ("", "refusal", "refusal"),
+        ('{"nope": 1}', "end_turn", "invalid_json"),
+    ]:
+        provider = stub_create(monkeypatch, text, stop_reason=stop)
+        with pytest.raises(ReviewError) as exc:
+            provider.complete("s", "m", Pair)
+        assert exc.value.stop_reason == expected
+
+
+def test_fake_completer_satisfies_protocol():
+    answer = Pair(first=Verdict(score=1, rationale="r", quote="q"), note="n")
+    c: Completer = FakeCompleter(lambda system, message, out: answer)
+    done = c.complete("sys", "msg", Pair)
+    assert done.parsed == answer and done.model == "fake-completer"
+    assert (done.input_tokens, done.output_tokens, done.cost_usd) == (100, 20, 0.0)
+    assert c.calls == [("sys", "msg")]
+    boom = FakeCompleter(lambda system, message, out: ReviewError("refusal", "m", 1, 2))
+    with pytest.raises(ReviewError):
+        boom.complete("s", "m", Pair)
