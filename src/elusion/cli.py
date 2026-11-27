@@ -326,6 +326,67 @@ def ask_questions(
     typer.echo(f"questions file: {final}")
 
 
+@app.command(name="ask-eval")
+def ask_eval(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+    max_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+    no_mlflow: Annotated[
+        bool, typer.Option("--no-mlflow", help="Write the report but log no MLflow runs.")
+    ] = False,
+) -> None:
+    """Ask every gold question of all three arms, judge each claim, report, one MLflow run per arm.
+
+    k is fixed at 5 and all three arms always run, so there is no option for either. A second
+    run finds every result and judgement stored and pays nothing.
+    """
+    import csv
+
+    import anthropic
+    import openai
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import elusion.flows.ask_eval as flow
+    from elusion.ask.embed import OpenAIEmbedder
+    from elusion.ask.models import ANSWER_MODEL, JUDGE_MODEL
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import AnthropicProvider, ProviderConfigError
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    try:
+        result = flow.ask_eval(
+            criterion.stem,
+            AnthropicProvider(ANSWER_MODEL),
+            AnthropicProvider(JUDGE_MODEL),
+            OpenAIEmbedder(),
+            max_usd=max_usd,
+            log_mlflow=not no_mlflow,
+        )
+    except (
+        BudgetExceeded,
+        FileNotFoundError,
+        ProviderConfigError,
+        ValueError,
+        RuntimeError,
+        OSError,
+        csv.Error,
+        SQLAlchemyError,
+        anthropic.APIError,
+        openai.APIError,
+    ) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"report: {result.report_path}")
+    for arm, run_id in result.run_ids.items():
+        typer.echo(f"mlflow run {arm} {run_id}")
+    typer.echo(f"asked {result.asked}, judged {result.judged}, ${result.cost_usd:.4f}")
+
+
 @app.command()
 def board(
     concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],

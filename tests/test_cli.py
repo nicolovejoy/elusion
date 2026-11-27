@@ -1285,3 +1285,97 @@ def test_ask_questions_errors_exit_1_without_a_traceback(
     result = CliRunner().invoke(app, args)
     assert result.exit_code == 1 and f"error: {down}" in result.output
     assert "Traceback" not in result.output
+
+
+def _stub_ask_eval(monkeypatch, result=None, error=None, embedder_error=None, seen=None):
+    """Stub the flow and the three clients `elusion ask-eval` builds."""
+    import elusion.ask.embed as embed
+    import elusion.flows.ask_eval as mod
+    import elusion.review.providers as providers
+
+    seen = {} if seen is None else seen
+
+    class StubProvider:
+        def __init__(self, model):
+            self.model = model
+            seen.setdefault("models", []).append(model)
+
+    class StubEmbedder:
+        model = "stub-embedder"
+
+        def __init__(self):
+            if embedder_error is not None:
+                raise embedder_error
+
+    def fake_flow(criterion, answerer, judge, embedder, **kw):
+        seen.update(criterion=criterion, answerer=answerer, judge=judge, embedder=embedder, **kw)
+        if error is not None:
+            raise error
+        return result
+
+    monkeypatch.setattr(providers, "AnthropicProvider", StubProvider)
+    monkeypatch.setattr(embed, "OpenAIEmbedder", StubEmbedder)
+    monkeypatch.setattr(mod, "ask_eval", fake_flow)
+    return seen
+
+
+def test_ask_eval_has_no_k_option(monkeypatch, tmp_path) -> None:
+    seen = _stub_ask_eval(monkeypatch)
+    for option in (["--k", "3"], ["--arm", "lexical"]):
+        result = CliRunner().invoke(app, ["ask-eval", "--criterion", _crit(tmp_path), *option])
+        assert result.exit_code == 2, result.output
+        assert "No such option" in result.output
+    assert "criterion" not in seen  # the flow was never reached
+
+
+def test_ask_eval_prints_the_report_and_runs(monkeypatch, tmp_path) -> None:
+    from pathlib import Path
+
+    from elusion.ask.models import ANSWER_MODEL, JUDGE_MODEL
+    from elusion.flows.ask_eval import EvalResult
+
+    run_ids = {"lexical": "a" * 32, "vector": "b" * 32, "hybrid": "c" * 32}
+    outcome = EvalResult(Path("docs/reports/ask-eval-c.md"), run_ids, 90, 200, 1.2345)
+    seen = _stub_ask_eval(monkeypatch, outcome)
+    result = CliRunner().invoke(app, ["ask-eval", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert seen["criterion"] == "c" and seen["max_usd"] is None and seen["log_mlflow"] is True
+    assert seen["models"] == [ANSWER_MODEL, JUDGE_MODEL]
+    assert seen["answerer"].model == ANSWER_MODEL and seen["judge"].model == JUDGE_MODEL
+    lines = result.output.splitlines()
+    assert "docs/reports/ask-eval-c.md" in lines[0]
+    assert lines[1:4] == [f"mlflow run {arm} {run_id}" for arm, run_id in run_ids.items()]
+    assert "asked 90, judged 200, $1.2345" in result.output
+
+    result = CliRunner().invoke(
+        app, ["ask-eval", "--criterion", _crit(tmp_path), "--max-usd", "2.5", "--no-mlflow"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (seen["max_usd"], seen["log_mlflow"]) == (2.5, False)
+
+    missing = CliRunner().invoke(app, ["ask-eval", "--criterion", "nope.md"])
+    assert missing.exit_code == 2 and "criterion file not found" in missing.output
+
+
+def test_ask_eval_errors_exit_1(monkeypatch, tmp_path) -> None:
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import ProviderConfigError
+
+    args = ["ask-eval", "--criterion", _crit(tmp_path)]
+    for exc, text in [
+        (BudgetExceeded("projected cost $12 is above the limit of $10"), "above the limit"),
+        (FileNotFoundError("no questions file: run `elusion ask-questions`"), "ask-questions"),
+        (ValueError("the index is empty"), "index is empty"),
+        (RuntimeError("report written to r.md, but MLflow logging failed: down"), "MLflow"),
+    ]:
+        _stub_ask_eval(monkeypatch, error=exc)
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 1, result.output
+        assert f"error: {exc}" in result.output and text in result.output
+        assert "Traceback" not in result.output
+
+    key = ProviderConfigError("OPENAI_API_KEY is not set; run with op run --env-file=.env.tpl --")
+    _stub_ask_eval(monkeypatch, embedder_error=key)
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1 and "OPENAI_API_KEY is not set" in result.output
+    assert "Traceback" not in result.output
