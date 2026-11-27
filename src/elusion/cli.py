@@ -182,6 +182,9 @@ def ask(
     model: Annotated[str, typer.Option(help="Pinned answer model id.")] = "claude-sonnet-5-5",
 ) -> None:
     """Answer one question from the index: retrieve once, ask a model once, check every quote."""
+    import anthropic
+    import openai
+
     from elusion.ask import log as ask_log
     from elusion.ask.answer import REFUSAL
     from elusion.ask.answer import ask as ask_question
@@ -201,7 +204,8 @@ def ask(
         engine = db.make_engine(settings.database_url)
         ask_log.ensure_schema(engine)
         result = ask_question(engine, question, AnthropicProvider(model), embedder, arm=arm, k=k)
-    except (ProviderConfigError, ValueError) as exc:
+    except (ProviderConfigError, ValueError, anthropic.APIError, openai.APIError) as exc:
+        # An API error after the question was embedded still left an `error` row in ask_log.
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     if result.outcome == "error":

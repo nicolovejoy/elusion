@@ -1206,3 +1206,32 @@ def test_ask_questions_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) 
         in result.output
     )
     assert not (tmp_path / "data" / "gold" / "c.questions.csv").exists()
+
+
+def test_ask_api_and_index_errors_exit_1_without_traceback(monkeypatch) -> None:
+    import anthropic
+    import httpx
+    import openai
+
+    import elusion.ask.answer as answer_mod
+
+    _stub_ask(monkeypatch, _ask_result("refused", answerable=False))
+    request = httpx.Request("POST", "https://api.example.invalid/v1")
+    cases = [
+        (anthropic.APIConnectionError(request=request), "Connection error"),
+        (openai.APIConnectionError(request=request), "Connection error"),
+        (ValueError("the index does not exist yet; run elusion index first"), "elusion index"),
+        (ValueError("k must be between 1 and 1000, not 0"), "k must be between"),
+        (ValueError("no price for model 'x'; add it to review/pricing.py"), "no price"),
+    ]
+    for exc, text in cases:
+
+        def raising(engine, question, answerer, embedder, _exc=exc, **kw):
+            raise _exc
+
+        monkeypatch.setattr(answer_mod, "ask", raising)
+        out = CliRunner().invoke(app, ["ask", "q"])
+        assert out.exit_code == 1, out.output
+        assert out.output.startswith("error: "), out.output
+        assert text in out.output
+        assert "Traceback" not in out.output

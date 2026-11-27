@@ -147,10 +147,12 @@ class FakeCompleter:
 
     name = "fake"
 
-    def __init__(self, answer, model: str = "fake-completer") -> None:
+    def __init__(self, answer, model: str = "fake-completer", usage: dict | None = None) -> None:
         register_free(model)
         self.model = model
         self.answer = answer
+        # Fields of `Completion` to use instead of 100 input tokens, 20 output tokens, no cost.
+        self.usage = usage or {}
         self.calls: list[tuple[str, str]] = []
         self.max_tokens: list[int] = []  # the max_tokens of each call
 
@@ -160,9 +162,8 @@ class FakeCompleter:
         result = self.answer(system, message, out)
         if isinstance(result, Exception):
             raise result
-        return Completion(
-            parsed=result, model=self.model, input_tokens=100, output_tokens=20, cost_usd=0.0
-        )
+        usage = {"input_tokens": 100, "output_tokens": 20, "cost_usd": 0.0, **self.usage}
+        return Completion(parsed=result, model=self.model, **usage)
 
 
 class FakeEmbedder:

@@ -287,7 +287,14 @@ def test_an_unknown_arm_raises(papers) -> None:
 def test_a_question_with_a_nul_raises_before_anything_is_spent(papers) -> None:
     embedder = FakeEmbedder()
     with pytest.raises(ValueError, match="NUL"):
-        ask(papers, "bad\x00 question", answering(good()), embedder, arm="vector")
+        ask(
+            papers,
+            "bad\x00 question",
+            answering(good()),
+            embedder,
+            arm="vector",
+            embedding_model=embedder.model,
+        )
     assert embedder.calls == [] and log.asks(papers) == []
 
 
@@ -319,5 +326,228 @@ def test_pinned_and_served_model_are_both_stored(papers, caplog) -> None:
 def test_an_unknown_prompt_version_raises_before_anything_is_spent(papers) -> None:
     embedder = FakeEmbedder()
     with pytest.raises(FileNotFoundError):
-        ask(papers, QUESTION, answering(good()), embedder, arm="vector", prompt_version="v99")
+        ask(
+            papers,
+            QUESTION,
+            answering(good()),
+            embedder,
+            arm="vector",
+            embedding_model=embedder.model,
+            prompt_version="v99",
+        )
     assert embedder.calls == [] and log.asks(papers) == []
+
+
+# fix round 1: validate first, and never lose a paid call
+
+USAGE = {
+    "input_tokens": 111,
+    "output_tokens": 222,
+    "cache_creation_input_tokens": 333,
+    "cache_read_input_tokens": 444,
+    "cost_usd": 0.37,
+}
+
+
+def vectors(engine, embedder) -> None:
+    todo = index.unembedded(engine, embedder.model)
+    index.add_vectors(engine, embedder.model, {d: embedder.vector(t) for d, t in todo})
+
+
+def test_each_usage_figure_lands_in_its_own_column(papers) -> None:
+    completer = FakeCompleter(lambda s, m, o: good(), model="claude-sonnet-5-5", usage=USAGE)
+    result = run(papers, completer)
+    row = log.get_ask(papers, result.ask_id)
+    assert (row.input_tokens, row.output_tokens) == (111, 222)
+    assert (row.cache_creation_input_tokens, row.cache_read_input_tokens) == (333, 444)
+    assert row.cost_usd == pytest.approx(0.37)
+    assert result.cost_usd == pytest.approx(0.37)
+
+
+def test_the_error_row_keeps_each_figure_in_its_own_column(papers) -> None:
+    error = ReviewError("refusal", "claude-sonnet-5-5", 111, 222, 333, 444)
+    result = run(papers, answering(error))
+    row = log.get_ask(papers, result.ask_id)
+    assert (row.input_tokens, row.output_tokens) == (111, 222)
+    assert (row.cache_creation_input_tokens, row.cache_read_input_tokens) == (333, 444)
+    assert (row.stop_reason, row.served_model) == ("refusal", "claude-sonnet-5-5")
+
+
+def _outcome_cases():
+    refusal = Answer(answerable=False, claims=[])
+    return {
+        "answered": (good(), "QUESTION"),
+        "refused": (refusal, "QUESTION"),
+        "failed": (good(quote="not in the abstract"), "QUESTION"),
+        "error": (ReviewError("max_tokens", "claude-sonnet-5-5", 1, 2), "QUESTION"),
+        "no_passages": (good(), "zebra giraffe"),
+    }
+
+
+@pytest.mark.parametrize("case", ["answered", "refused", "failed", "error", "no_passages"])
+def test_exactly_one_row_is_written_for_each_outcome(papers, case) -> None:
+    result_value, question = _outcome_cases()[case]
+    question = QUESTION if question == "QUESTION" else question
+    result = run(papers, answering(result_value), question)
+    rows = log.asks(papers)
+    assert [r.ask_id for r in rows] == [result.ask_id]
+    assert rows[0].outcome == ("refused" if case == "no_passages" else case)
+
+
+def test_hits_with_none_in_the_index_are_a_refusal_with_no_call(papers, monkeypatch) -> None:
+    monkeypatch.setattr(answer, "passages", lambda engine, ids: {})
+    completer = answering(good())
+    result = run(papers, completer)
+    assert completer.calls == []
+    assert result.outcome == "refused"
+    assert {h.doc_id for h in result.retrieved} == {"a", "b"}
+    row = log.get_ask(papers, result.ask_id)
+    assert row.detail["no_passages"] is True
+    assert {h["doc_id"] for h in row.retrieved} == {"a", "b"}
+    assert len(log.asks(papers)) == 1
+
+
+def test_an_embedder_of_another_model_raises_before_any_spend(papers) -> None:
+    embedder = PricedEmbedder(model="some-other-embedder")
+    completer = answering(good())
+    with pytest.raises(ValueError, match="some-other-embedder"):
+        ask(papers, QUESTION, completer, embedder, arm="vector")  # default model differs
+    assert embedder.calls == [] and completer.calls == [] and log.asks(papers) == []
+
+
+@pytest.mark.parametrize("k", [0, -1, 1001])
+def test_k_outside_one_to_a_thousand_raises(papers, k) -> None:
+    completer = answering(good())
+    with pytest.raises(ValueError, match="k must be between 1 and 1000"):
+        run(papers, completer, k=k)
+    assert completer.calls == [] and log.asks(papers) == []
+
+
+def test_the_edges_of_k_are_allowed(papers) -> None:
+    assert run(papers, answering(good()), k=1).outcome == "answered"
+    assert run(papers, answering(good()), k=1000).outcome == "answered"
+
+
+def test_a_model_with_no_price_raises_before_any_spend(papers) -> None:
+    class Unpriced:
+        name = "stub"
+        model = "no-such-embedding-model"
+
+        def embed(self, texts):
+            raise AssertionError("no call may be made")
+
+    unpriced_answerer = FakeCompleter(lambda s, m, o: good(), model="claude-sonnet-5-5")
+    unpriced_answerer.model = "no-such-answer-model"  # bypass register_free
+    with pytest.raises(ValueError, match="no-such-answer-model"):
+        run(papers, unpriced_answerer)
+    assert unpriced_answerer.calls == []
+    completer = answering(good())
+    with pytest.raises(ValueError, match="no-such-embedding-model"):
+        ask(
+            papers,
+            QUESTION,
+            completer,
+            Unpriced(),
+            arm="vector",
+            embedding_model="no-such-embedding-model",
+        )
+    assert completer.calls == [] and log.asks(papers) == []
+
+
+def test_the_lexical_arm_needs_no_embedding_price(papers) -> None:
+    assert run(papers, answering(good()), embedding_model="no-such-embedding-model").ask_id
+
+
+def test_a_missing_index_says_to_run_elusion_index_first(board_engine) -> None:
+    completer = answering(good())
+    with pytest.raises(ValueError, match="run elusion index first"):
+        run(board_engine, completer)
+    assert completer.calls == []
+
+
+def test_a_search_failure_after_the_embedding_was_paid_writes_an_error_row(
+    papers, monkeypatch
+) -> None:
+    def broken(*args, **kwargs):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(answer, "retrieve", broken)
+    embedder = PricedEmbedder()
+    completer = answering(good())
+    with pytest.raises(RuntimeError, match="the database went away"):
+        ask(papers, QUESTION, completer, embedder, embedding_model=embedder.model)
+    assert completer.calls == []
+    [row] = log.asks(papers)
+    assert row.outcome == "error"
+    assert row.cost_usd == pytest.approx(0.25)
+    assert row.stop_reason == "RuntimeError"
+    assert "the database went away" in row.detail["error"]
+    assert row.detail["stage"] == "retrieval"
+    assert row.detail["embedding"]["cost_usd"] == pytest.approx(0.25)
+
+
+def test_a_passages_failure_after_the_embedding_was_paid_writes_an_error_row(
+    papers, monkeypatch
+) -> None:
+    def broken(engine, ids):
+        raise RuntimeError("no passages for you")
+
+    monkeypatch.setattr(answer, "passages", broken)
+    embedder = PricedEmbedder()
+    with pytest.raises(RuntimeError):
+        ask(papers, QUESTION, answering(good()), embedder, embedding_model=embedder.model)
+    [row] = log.asks(papers)
+    assert (row.outcome, row.cost_usd) == ("error", pytest.approx(0.25))
+    assert len(row.retrieved) > 0  # the hits were found before it failed
+
+
+def test_an_api_exception_from_the_answer_call_keeps_the_embedding_cost(papers) -> None:
+    embedder = PricedEmbedder()
+    completer = answering(ConnectionError("the network dropped"))
+    with pytest.raises(ConnectionError):
+        ask(papers, QUESTION, completer, embedder, embedding_model=embedder.model)
+    [row] = log.asks(papers)
+    assert row.outcome == "error"
+    assert row.cost_usd == pytest.approx(0.25)
+    assert row.detail["stage"] == "answer"
+    assert "the network dropped" in row.detail["error"]
+    assert len(row.retrieved) > 0
+
+
+def test_a_nul_in_the_models_answer_is_removed_and_said_so(papers) -> None:
+    bad = Answer(
+        answerable=True,
+        claims=[Claim(claim="It ends\x00 at a target.", doc_id="a", quote="fixed\x00 recall")],
+    )
+    result = run(papers, answering(bad))
+    assert result.outcome == "failed"  # the quote with its NUL is not in the abstract
+    row = log.get_ask(papers, result.ask_id)
+    assert row.answer["claims"][0]["claim"] == "It ends at a target."
+    assert row.answer["claims"][0]["quote"] == "fixed recall"
+    assert row.detail["nul_removed"] is True
+    assert result.answer.claims[0].quote == "fixed\x00 recall"  # the caller gets it unchanged
+
+
+def test_no_nul_means_no_nul_removed_flag(papers) -> None:
+    row = log.get_ask(papers, run(papers, answering(good())).ask_id)
+    assert "nul_removed" not in row.detail
+
+
+def test_a_failed_insert_is_logged_with_the_figures_and_raised(papers, monkeypatch, caplog) -> None:
+    def broken(engine, **columns):
+        raise RuntimeError("insert failed")
+
+    monkeypatch.setattr(log, "add_ask", broken)
+    completer = FakeCompleter(lambda s, m, o: good(), model="claude-sonnet-5-5", usage=USAGE)
+    with (
+        caplog.at_level(logging.ERROR, logger="elusion.ask.answer"),
+        pytest.raises(RuntimeError, match="insert failed"),
+    ):
+        run(papers, completer)
+    text = caplog.text
+    assert repr(QUESTION) in text
+    assert "outcome=answered" in text
+    for figure in ("input_tokens=111", "output_tokens=222", "0.37", "claude-sonnet-5-5"):
+        assert figure in text
+    assert "cache_creation_input_tokens=333" in text
+    assert "cache_read_input_tokens=444" in text

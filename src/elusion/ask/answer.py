@@ -30,6 +30,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 
+import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.engine import Engine
 
@@ -38,7 +39,7 @@ from elusion.ask.embed import Embedder
 from elusion.ask.models import EMBEDDING_MODEL
 from elusion.ask.retrieve import ARMS, DEFAULT_ARM, Hit, K, Passage, passages, retrieve
 from elusion.board.quotes import find_quote
-from elusion.review.pricing import cost_usd
+from elusion.review.pricing import PRICES, cost_usd
 from elusion.review.prompt import load_prompt
 from elusion.review.providers import Completer, ReviewError
 
@@ -48,6 +49,7 @@ logger = logging.getLogger(__name__)
 # and its tokens count against `max_tokens` (Anthropic docs, read 2026-11-26), so a small
 # limit can be spent on thinking and cut the answer off, which is a wasted ask.
 ANSWER_MAX_TOKENS = 16000
+MAX_K = 1000
 PROMPT = "ask"
 REFUSAL = "The passages do not answer the question."
 
@@ -111,6 +113,46 @@ def check_answer(answer: Answer, texts: Mapping[str, str]) -> list[ClaimCheck]:
     return checks
 
 
+def _strip_nul(value):
+    """`value` with every NUL character removed from its strings, however deep, and whether
+    anything was removed. Postgres cannot store NUL in text or JSONB, and a model's answer is
+    not ours to refuse after it has been paid for."""
+    if isinstance(value, str):
+        return value.replace("\x00", ""), "\x00" in value
+    if isinstance(value, list):
+        pairs = [_strip_nul(v) for v in value]
+        return [v for v, _ in pairs], any(c for _, c in pairs)
+    if isinstance(value, dict):
+        pairs = {k: _strip_nul(v) for k, v in value.items()}
+        return {k: v for k, (v, _) in pairs.items()}, any(c for _, c in pairs.values())
+    return value, False
+
+
+def _validate(engine, question, answerer, embedder, arm, k, embedding_model) -> None:
+    """Everything that can be refused before a token is spent or a row is written."""
+    if arm not in ARMS:
+        raise ValueError(f"unknown arm {arm!r}; the arms are {', '.join(ARMS)}")
+    needs_vector = arm != "lexical"
+    if needs_vector and embedder is None:
+        raise ValueError(f"the {arm} arm needs an embedder to embed the question")
+    if needs_vector and embedder.model != embedding_model:
+        raise ValueError(
+            f"the embedder is {embedder.model!r} but the search is of {embedding_model!r} "
+            "vectors; a question must be embedded by the model that embedded the index"
+        )
+    if "\x00" in question:
+        raise ValueError("the question contains a NUL character, which Postgres cannot store")
+    if not 1 <= k <= MAX_K:
+        raise ValueError(f"k must be between 1 and {MAX_K}, not {k}")
+    for model in (answerer.model, *((embedding_model,) if needs_vector else ())):
+        if model not in PRICES:
+            raise ValueError(f"no price for model {model!r}; add it to review/pricing.py")
+    tables = sa.inspect(engine)
+    needed = ("abstract_index", "abstract_vectors") if needs_vector else ("abstract_index",)
+    if not all(tables.has_table(name) for name in needed):
+        raise ValueError("the index does not exist yet; run elusion index first")
+
+
 def ask(
     engine: Engine,
     question: str,
@@ -124,18 +166,20 @@ def ask(
 ) -> AskResult:
     """Answer one question from the index, log it, and return what happened.
 
-    Raises `ValueError` for an arm that does not exist, for a vector arm with no embedder,
-    and for a question with a NUL character, and `FileNotFoundError` for an unknown prompt
-    version: all before anything is spent or written.
+    Raises `ValueError` before anything is spent or written for: an arm that does not exist,
+    a vector arm with no embedder or with an embedder of another model than the index's, a
+    question with a NUL character, a `k` outside 1 to 1000, a model with no price row, and
+    an index that has not been built; and `FileNotFoundError` for an unknown prompt version.
+
+    Once the question has been embedded, money may be spent, so a failure after that point
+    (in the search, or an exception from the answer call that is not a `ReviewError`) writes
+    an `error` row that holds the embedding's cost and the exception's text, and then raises
+    the exception again. If the insert itself fails, the figures are logged at error level
+    first, so a paid call is never lost without a trace.
     """
-    if arm not in ARMS:
-        raise ValueError(f"unknown arm {arm!r}; the arms are {', '.join(ARMS)}")
-    needs_vector = arm != "lexical"
-    if needs_vector and embedder is None:
-        raise ValueError(f"the {arm} arm needs an embedder to embed the question")
-    if "\x00" in question:
-        raise ValueError("the question contains a NUL character, which Postgres cannot store")
+    _validate(engine, question, answerer, embedder, arm, k, embedding_model)
     prompt = load_prompt(PROMPT, prompt_version)
+    needs_vector = arm != "lexical"
 
     query_vector = None
     embedding_cost = 0.0
@@ -151,15 +195,11 @@ def ask(
             "cost_usd": embedded.cost_usd,
         }
 
-    hits = retrieve(engine, arm, question, query_vector, embedding_model, k)
-    found = passages(engine, [h.doc_id for h in hits])
-    shown = [found[h.doc_id] for h in hits if h.doc_id in found]
-
     row = {
         "question": question,
         "arm": arm,
         "k": k,
-        "retrieved": [asdict(h) for h in hits],
+        "retrieved": [],
         "embedding_model": embedding_model if needs_vector else None,
         "answer_model": answerer.model,
         "prompt_version": prompt.version,
@@ -167,7 +207,43 @@ def ask(
 
     def write(outcome: str, **more) -> int:
         spent = more.pop("cost_usd", 0.0) + embedding_cost
-        return log.add_ask(engine, **row, outcome=outcome, cost_usd=spent, detail=detail, **more)
+        values = dict(row, outcome=outcome, cost_usd=spent, detail=detail, **more)
+        cleaned, changed = _strip_nul(
+            {c: values[c] for c in ("answer", "checks", "detail") if c in values}
+        )
+        values.update(cleaned)
+        if changed:
+            values["detail"]["nul_removed"] = True
+        try:
+            return log.add_ask(engine, **values)
+        except Exception:
+            logger.error(
+                "the ask_log insert failed; question=%r outcome=%s input_tokens=%s "
+                "output_tokens=%s cache_creation_input_tokens=%s cache_read_input_tokens=%s "
+                "cost_usd=%s served_model=%s",
+                question,
+                outcome,
+                values.get("input_tokens", 0),
+                values.get("output_tokens", 0),
+                values.get("cache_creation_input_tokens", 0),
+                values.get("cache_read_input_tokens", 0),
+                spent,
+                values.get("served_model"),
+            )
+            raise
+
+    def fail(stage: str, exc: Exception) -> None:
+        detail.update(stage=stage, error=f"{type(exc).__name__}: {exc}")
+        write("error", stop_reason=type(exc).__name__)
+
+    try:
+        hits = retrieve(engine, arm, question, query_vector, embedding_model, k)
+        row["retrieved"] = [asdict(h) for h in hits]
+        found = passages(engine, [h.doc_id for h in hits])
+    except Exception as exc:
+        fail("retrieval", exc)
+        raise
+    shown = [found[h.doc_id] for h in hits if h.doc_id in found]
 
     if not shown:
         # A call on empty input is paid for nothing: refuse without one.
@@ -203,6 +279,10 @@ def ask(
         return AskResult(
             ask_id, "error", None, [], hits, spent + embedding_cost, stop_reason=exc.stop_reason
         )
+    except Exception as exc:
+        # An API or network failure: the answer is unknown, but the embedding was paid.
+        fail("answer", exc)
+        raise
 
     if done.model != answerer.model:
         logger.warning(
