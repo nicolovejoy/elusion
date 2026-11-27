@@ -39,6 +39,12 @@ RRF_C = 60
 FUSION_DEPTH = 50
 ARMS = ("lexical", "vector", "hybrid")
 DEFAULT_ARM = "hybrid"
+# The version of each arm's search. `ask-eval` keys a stored result by it, so a changed arm
+# is asked again and its old results stay as history. lexical r1 ranked with `ts_rank_cd`
+# and no length normalization, and the longest documents won every question (recall@5 0 of
+# 25 on 2026-11-26); r2 is the ranking below. hybrid fuses the lexical ranking, so it moves
+# with it. vector has not changed.
+RETRIEVAL_VERSIONS = {"lexical": "r2", "vector": "r1", "hybrid": "r2"}
 
 
 @dataclass(frozen=True)
@@ -62,10 +68,18 @@ class Passage:
 # nothing: `plainto_tsquery('english', ...)` has already stemmed the words, and stemming
 # them again changes some ('decision' -> 'decis' -> 'deci', 'analyses' -> 'analys' ->
 # 'anali') so they no longer match the stems stored in the index.
+#
+# The rank is `ts_rank` with normalization 1. `ts_rank` scores how often the query's words
+# occur; `ts_rank_cd` scores how close together they occur ("cover density"), which suits
+# an AND query and, on an OR query of twenty-odd words, mostly rewards a document for being
+# long. Normalization 1 divides the rank by 1 + the logarithm of the document's length, so
+# a long document needs proportionally more matches. Chosen on the 15 drafted questions that
+# were struck from the gold set (source in the top 5 for 14 of 15, against 1 of 15 before),
+# never on a gold question.
 _LEXICAL_SQL = sa.text(
     "WITH q AS (SELECT to_tsquery('simple', replace(plainto_tsquery('english', :question)::text,"
     " '&', '|')) AS query) "
-    "SELECT doc_id, ts_rank_cd(tsv, q.query) AS score FROM abstract_index, q "
+    "SELECT doc_id, ts_rank(tsv, q.query, 1) AS score FROM abstract_index, q "
     "WHERE tsv @@ q.query ORDER BY score DESC, doc_id LIMIT :k"
 )
 

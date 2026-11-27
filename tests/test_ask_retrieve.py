@@ -60,6 +60,28 @@ def test_lexical_finds_a_word(index_engine) -> None:
     assert hits[0].score > 0
 
 
+def test_lexical_does_not_let_a_long_document_win_on_length_alone(index_engine) -> None:
+    """The defect of the first ask-eval run (2026-11-26): the question's words are joined with
+    OR, and a long document holds a few of them many times over. The short abstract that holds
+    most of the question's words must rank first."""
+    filler = " ".join(f"word{i}" for i in range(400))
+    long_text = " ".join(f"The agent keeps a log. {filler}" for _ in range(8))
+    add(
+        index_engine,
+        paper("long", long_text),
+        paper("short", "A tamper-evident audit log records every decision of an agent."),
+    )
+    hits = retrieve.lexical(index_engine, "which agent keeps a tamper-evident audit log?")
+    assert ids(hits)[0] == "short"
+
+
+def test_every_arm_has_a_retrieval_version() -> None:
+    assert set(retrieve.RETRIEVAL_VERSIONS) == set(retrieve.ARMS)
+    # hybrid fuses the lexical ranking, so a change to lexical is a change to hybrid.
+    assert retrieve.RETRIEVAL_VERSIONS["hybrid"] == retrieve.RETRIEVAL_VERSIONS["lexical"]
+    assert retrieve.RETRIEVAL_VERSIONS["vector"] == "r1"
+
+
 def test_lexical_stems(index_engine) -> None:
     add(
         index_engine,

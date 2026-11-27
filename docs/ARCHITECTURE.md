@@ -372,7 +372,7 @@ question ──▶ `ask` ──▶ check before spending (arm, k, index exists, 
                 └──▶ ONE row in `ask_log`  (outcome: answered, refused, failed or error)
 
 data/gold/<criterion>.questions.csv ──▶ `ask-eval` ──▶ every question x 3 arms via `ask`
-                                              ├──▶ ask_eval_results   one row per (question, arm)
+                                              ├──▶ ask_eval_results   one row per (question, arm, retrieval version)
                                               ├──▶ ask_judgements     one row per claim
                                               ├──▶ docs/reports/ask-eval-*.md
                                               └──▶ MLflow experiment `elusion/ask`, one run per arm

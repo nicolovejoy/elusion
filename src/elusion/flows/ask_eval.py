@@ -57,7 +57,7 @@ from elusion.ask.metrics import ArmReport, ClaimResult, EvalRow, arm_report
 from elusion.ask.models import EMBEDDING_MODEL, THINKING_OUTPUT_TOKENS
 from elusion.ask.questions import Question, questions_path, read_questions
 from elusion.ask.report import Setup, render, report_path
-from elusion.ask.retrieve import ARMS, FUSION_DEPTH, RRF_C, K
+from elusion.ask.retrieve import ARMS, FUSION_DEPTH, RETRIEVAL_VERSIONS, RRF_C, K
 from elusion.ask.tracking import find_run, log_arm_run
 from elusion.collect import db
 from elusion.config import settings
@@ -435,6 +435,7 @@ def ask_eval(
         judge_prompt_version=JUDGE_PROMPT.version,
         rrf_c=RRF_C,
         fusion_depth=FUSION_DEPTH,
+        retrieval=", ".join(f"{arm} {RETRIEVAL_VERSIONS[arm]}" for arm in ARMS),
     )
     out_dir = reports_dir if reports_dir is not None else Path("docs/reports")
     out = report_path(out_dir, criterion, answerer.model, ASK_PROMPT)
@@ -462,6 +463,7 @@ def ask_eval(
                     "judge_prompt_version": JUDGE_PROMPT.version,
                     "rrf_c": str(RRF_C),
                     "fusion_depth": str(FUSION_DEPTH),
+                    "retrieval_version": RETRIEVAL_VERSIONS[arm],
                     "ts_config": "english",
                     "review_model": review_model,
                     "review_prompt_version": review_version,

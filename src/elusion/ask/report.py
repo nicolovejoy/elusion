@@ -43,6 +43,8 @@ NOTES = (
     "A search that finds no passage is refused without asking the model, because there is "
     "nothing to read. Nobody decided that refusal, so it is not counted as a correct or a "
     "wrong refusal; it is shown beside them.",
+    "A result is kept per retrieval version of its arm. Results asked with an older version of "
+    "an arm's search stay in the database and are in no figure here.",
     "An ask that was paid for but not recorded as a result (a failure in the one insert after "
     "it) is asked again on the next run, at a few cents.",
 )
@@ -66,6 +68,7 @@ class Setup:
     judge_prompt_version: str
     rrf_c: int
     fusion_depth: int
+    retrieval: str = ""  # each arm's retrieval version, e.g. "lexical r2, vector r1, hybrid r2"
 
 
 def report_path(reports_dir: Path, criterion: str, answer_model: str, prompt_version: str) -> Path:
@@ -177,8 +180,10 @@ def render(
         f"- judge model: {s.judge_model}, prompt version {s.judge_prompt_version}",
         f"- reciprocal rank fusion: constant {s.rrf_c}, each arm read {s.fusion_depth} deep "
         "before fusing",
-        "",
     ]
+    if s.retrieval:
+        lines.append(f"- retrieval versions: {s.retrieval}")
+    lines.append("")
     for r in reports:
         lines += _arm_lines(r)
     lines += _paired_lines(rows_by_arm)

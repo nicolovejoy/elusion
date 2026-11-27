@@ -66,3 +66,43 @@ def test_a_judgement_is_stored_once_per_key_even_after_the_driver_prepares_the_s
     assert found[(1, 0)] == results.Judgement(True, "r", 0.5)
     assert found[(1, 1)].supported is None
     assert results.judged(index_engine, "j", "ask/judge-v2") == set()
+
+
+def test_a_result_of_an_older_retrieval_version_is_kept_but_not_found(index_engine) -> None:
+    """A fixed search arm must be asked again: its old rows stay as history, outside the key."""
+    old = {**RESULT, "retrieval_version": "r0", "ask_id": 7}
+    assert results.add_result(index_engine, **old) is True
+    assert results.result_keys(index_engine, "m", "ask/v1") == set()
+    assert results.results_for(index_engine, "m", "ask/v1") == []
+    assert results.add_result(index_engine, **RESULT) is True  # the current version, same question
+    assert results.result_keys(index_engine, "m", "ask/v1") == {("q?", "lexical")}
+    assert [r.ask_id for r in results.results_for(index_engine, "m", "ask/v1")] == [1]
+
+
+def test_ensure_schema_gives_rows_stored_before_the_version_column_r1(index_engine) -> None:
+    """The first run's table had no retrieval_version: its rows become r1 and keep their data."""
+    import sqlalchemy as sa
+
+    with index_engine.begin() as conn:
+        conn.execute(sa.text("DROP TABLE ask_eval_results"))
+        conn.execute(
+            sa.text(
+                "CREATE TABLE ask_eval_results (question text, arm text, answer_model text, "
+                "prompt_version text, question_id text NOT NULL, kind text NOT NULL, "
+                "ask_id bigint NOT NULL, k smallint NOT NULL, source_hit boolean, "
+                "evaluated_at timestamptz NOT NULL DEFAULT now(), "
+                "PRIMARY KEY (question, arm, answer_model, prompt_version))"
+            )
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO ask_eval_results VALUES ('q?', 'vector', 'm', 'ask/v1', 'q01', "
+                "'answerable', 3, 5, true)"
+            )
+        )
+    results.ensure_schema(index_engine)
+    results.ensure_schema(index_engine)  # safe to repeat
+    assert [r.ask_id for r in results.results_for(index_engine, "m", "ask/v1")] == [3]  # vector r1
+    # the key now holds the version: the same question and arm under another version is new
+    new = {**RESULT, "arm": "vector", "retrieval_version": "r9"}
+    assert results.add_result(index_engine, **new) is True
