@@ -245,12 +245,24 @@ def ask_draft(
         typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
     ] = None,
 ) -> None:
-    """Draft one gold question from each of 40 indexed abstracts, into a file you edit by hand."""
+    """Draft one gold question from each of 40 indexed abstracts, into a file you edit by hand.
+
+    The 40 abstracts are drawn once and written to the draft file as pending rows before the
+    first model call; a re-run drafts only the rows still pending. A row you set back to
+    `pending` is drafted, and paid for, again. Deleting a row does not redraw it.
+    """
+    import csv
+
+    import anthropic
+    from sqlalchemy.exc import SQLAlchemyError
+
     from elusion.ask import questions
     from elusion.ask.index import ensure_schema
     from elusion.ask.models import DRAFT_MODEL
+    from elusion.board.batch import held_back_ids
     from elusion.collect import db
     from elusion.config import settings
+    from elusion.evaluate.gold import gold_path
     from elusion.flows.review import BudgetExceeded
     from elusion.review.providers import AnthropicProvider, ProviderConfigError
 
@@ -261,8 +273,19 @@ def ask_draft(
         drafter = AnthropicProvider(DRAFT_MODEL)
         engine = db.make_engine(settings.database_url)
         ensure_schema(engine)
-        summary = questions.draft_questions(engine, drafter, path, max_usd=max_usd)
-    except (BudgetExceeded, ProviderConfigError, ValueError) as exc:
+        held_back = held_back_ids(gold_path(criterion.stem, settings.data_dir))
+        summary = questions.draft_questions(
+            engine, drafter, path, held_back=held_back, max_usd=max_usd
+        )
+    except (
+        BudgetExceeded,
+        ProviderConfigError,
+        ValueError,
+        OSError,
+        csv.Error,
+        SQLAlchemyError,
+        anthropic.APIError,
+    ) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(summary)
@@ -276,16 +299,27 @@ def ask_questions(
     ],
 ) -> None:
     """Turn the hand-edited draft into the final questions file (25 answerable, 5 not)."""
+    import csv
+
+    from sqlalchemy.exc import SQLAlchemyError
+
     from elusion.ask import questions
+    from elusion.ask.index import ensure_schema
+    from elusion.board.batch import held_back_ids
+    from elusion.collect import db
     from elusion.config import settings
+    from elusion.evaluate.gold import gold_path
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
     draft = questions.draft_path(criterion.stem, settings.data_dir)
     final = questions.questions_path(criterion.stem, settings.data_dir)
     try:
-        summary = questions.finalize_questions(draft, final)
-    except (FileExistsError, FileNotFoundError, ValueError) as exc:
+        engine = db.make_engine(settings.database_url)
+        ensure_schema(engine)
+        held_back = held_back_ids(gold_path(criterion.stem, settings.data_dir))
+        summary = questions.finalize_questions(draft, final, engine, held_back=held_back)
+    except (OSError, ValueError, csv.Error, SQLAlchemyError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(summary)

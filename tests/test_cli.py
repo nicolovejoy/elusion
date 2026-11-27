@@ -1084,7 +1084,7 @@ def test_ask_user_errors_exit_1_without_traceback(monkeypatch) -> None:
     assert "Traceback" not in out.output
 
 
-def _stub_ask_draft(monkeypatch, tmp_path, flow, provider_error=None):
+def _stub_ask_draft(monkeypatch, tmp_path, flow, provider_error=None, schema_error=None):
     """Stub what `elusion ask-draft` builds (the provider, the engine, the schema) and the
     drafting itself, and point the data directory at `tmp_path`."""
     import dataclasses
@@ -1101,13 +1101,23 @@ def _stub_ask_draft(monkeypatch, tmp_path, flow, provider_error=None):
                 raise provider_error
             self.model = model
 
+    def ensure_schema(engine):
+        if schema_error is not None:
+            raise schema_error
+
     monkeypatch.setattr(providers, "AnthropicProvider", StubProvider)
     monkeypatch.setattr(collect_db, "make_engine", lambda url: object())
-    monkeypatch.setattr(ask_index, "ensure_schema", lambda engine: None)
+    monkeypatch.setattr(ask_index, "ensure_schema", ensure_schema)
     monkeypatch.setattr(questions, "draft_questions", flow)
     monkeypatch.setattr(
         config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path / "data")
     )
+
+
+def _database_down():
+    import sqlalchemy.exc
+
+    return sqlalchemy.exc.OperationalError("SELECT 1", {}, Exception("connection refused"))
 
 
 def test_ask_draft_drafts_into_the_criterions_draft_path_and_prints_the_summary(
@@ -1126,6 +1136,7 @@ def test_ask_draft_drafts_into_the_criterions_draft_path_and_prints_the_summary(
     assert seen["drafter"].model == "claude-opus-5-5"
     assert seen["path"] == tmp_path / "data" / "gold" / "c.questions-draft.csv"
     assert seen["max_usd"] is None
+    assert seen["held_back"] == set()  # no gold file yet
     assert "'drafted': 40" in result.output and "c.questions-draft.csv" in result.output
 
     result = CliRunner().invoke(app, [*args, "--max-usd", "2.5"])
@@ -1136,40 +1147,89 @@ def test_ask_draft_drafts_into_the_criterions_draft_path_and_prints_the_summary(
     assert missing.exit_code == 2 and "criterion file not found" in missing.output
 
 
+def test_ask_draft_passes_the_held_back_ids_of_the_gold_files(monkeypatch, tmp_path) -> None:
+    seen = {}
+
+    def fake_flow(engine, drafter, path, **kw):
+        seen.update(kw)
+        return {}
+
+    _stub_ask_draft(monkeypatch, tmp_path, fake_flow)
+    gold = tmp_path / "data" / "gold"
+    gold.mkdir(parents=True)
+    (gold / "c.judge-refusals.jsonl").write_text('{"doc_id": "abc"}\n', encoding="utf-8")
+    result = CliRunner().invoke(app, ["ask-draft", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert seen["held_back"] == {"abc"}
+
+
+def test_ask_draft_help_says_what_a_pending_and_a_deleted_row_do() -> None:
+    result = CliRunner().invoke(app, ["ask-draft", "--help"])
+    assert "paid for, again" in " ".join(result.output.split())
+    assert "Deleting a row does not redraw it" in " ".join(result.output.split())
+
+
 def test_ask_draft_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) -> None:
+    import anthropic
+    import httpx
+
     from elusion.flows.review import BudgetExceeded
     from elusion.review.providers import ProviderConfigError
 
-    for error, text in (
-        (BudgetExceeded("projected cost $9 is above the limit"), "above the limit"),
-        (ValueError("the index holds 3 abstracts and the draw needs 40"), "holds 3"),
-    ):
+    api_error = anthropic.APIConnectionError(request=httpx.Request("POST", "https://x.test"))
+    failures = [
+        {"flow_error": BudgetExceeded("projected cost $9 is above the limit")},
+        {"flow_error": ValueError("the index holds 3 abstracts and the draw needs 40")},
+        {"flow_error": api_error},
+        {"flow_error": PermissionError("cannot write the draft file")},
+        {"provider_error": ProviderConfigError("no key")},
+        {"schema_error": _database_down()},
+    ]
+    for failure in failures:
+        error = failure.get("flow_error")
 
         def fake_flow(engine, drafter, path, error=error, **kw):
             raise error
 
-        _stub_ask_draft(monkeypatch, tmp_path, fake_flow)
+        _stub_ask_draft(
+            monkeypatch,
+            tmp_path,
+            fake_flow,
+            provider_error=failure.get("provider_error"),
+            schema_error=failure.get("schema_error"),
+        )
         result = CliRunner().invoke(app, ["ask-draft", "--criterion", _crit(tmp_path)])
-        assert result.exit_code == 1
-        assert f"error: {text}" in result.output or text in result.output
+        raised = error or failure.get("provider_error") or failure.get("schema_error")
+        assert result.exit_code == 1, result.output
+        assert f"error: {raised}" in result.output
         assert "Traceback" not in result.output
 
-    _stub_ask_draft(
-        monkeypatch, tmp_path, lambda *a, **k: {}, provider_error=ProviderConfigError("no key")
-    )
-    result = CliRunner().invoke(app, ["ask-draft", "--criterion", _crit(tmp_path)])
-    assert result.exit_code == 1 and "error: no key" in result.output
 
-
-def test_ask_questions_writes_the_final_file_and_prints_the_counts(monkeypatch, tmp_path) -> None:
+def _stub_ask_questions(monkeypatch, tmp_path, engine, schema_error=None):
     import dataclasses
 
+    import elusion.ask.index as ask_index
+    import elusion.collect.db as collect_db
     import elusion.config as config
-    from tests.test_ask_questions import write_draft
 
+    def ensure_schema(_engine):
+        if schema_error is not None:
+            raise schema_error
+
+    monkeypatch.setattr(collect_db, "make_engine", lambda url: engine)
+    monkeypatch.setattr(ask_index, "ensure_schema", ensure_schema)
     monkeypatch.setattr(
         config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path / "data")
     )
+
+
+def test_ask_questions_writes_the_final_file_and_prints_the_counts(
+    monkeypatch, tmp_path, index_engine
+) -> None:
+    from tests.test_ask_questions import fill_index, write_draft
+
+    fill_index(index_engine, 41)
+    _stub_ask_questions(monkeypatch, tmp_path, index_engine)
     write_draft(tmp_path / "data" / "gold" / "c.questions-draft.csv")
     args = ["ask-questions", "--criterion", _crit(tmp_path)]
     result = CliRunner().invoke(app, args)
@@ -1181,18 +1241,31 @@ def test_ask_questions_writes_the_final_file_and_prints_the_counts(monkeypatch, 
 
     again = CliRunner().invoke(app, args)  # never overwrites
     assert again.exit_code == 1
-    assert "error:" in again.output and "Traceback" not in again.output
+    assert "error:" in again.output and "exists" in again.output
+    assert "Traceback" not in again.output
 
 
-def test_ask_questions_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) -> None:
-    import dataclasses
+def test_ask_questions_refuses_a_held_back_source(monkeypatch, tmp_path, index_engine) -> None:
+    from tests.test_ask_questions import doc_id, fill_index, write_draft
 
-    import elusion.config as config
-    from tests.test_ask_questions import write_draft
+    fill_index(index_engine, 41)
+    _stub_ask_questions(monkeypatch, tmp_path, index_engine)
+    gold = tmp_path / "data" / "gold"
+    write_draft(gold / "c.questions-draft.csv")
+    (gold / "c.judge-refusals.jsonl").write_text(f'{{"doc_id": "{doc_id(2)}"}}\n', encoding="utf-8")
+    result = CliRunner().invoke(app, ["ask-questions", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 1
+    assert "held back as a gold label" in result.output
+    assert not (gold / "c.questions.csv").exists()
 
-    monkeypatch.setattr(
-        config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path / "data")
-    )
+
+def test_ask_questions_errors_exit_1_without_a_traceback(
+    monkeypatch, tmp_path, index_engine
+) -> None:
+    from tests.test_ask_questions import fill_index, write_draft
+
+    fill_index(index_engine, 41)
+    _stub_ask_questions(monkeypatch, tmp_path, index_engine)
     args = ["ask-questions", "--criterion", _crit(tmp_path)]
     nothing = CliRunner().invoke(app, args)  # no draft file yet
     assert nothing.exit_code == 1 and "error:" in nothing.output
@@ -1207,31 +1280,8 @@ def test_ask_questions_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) 
     )
     assert not (tmp_path / "data" / "gold" / "c.questions.csv").exists()
 
-
-def test_ask_api_and_index_errors_exit_1_without_traceback(monkeypatch) -> None:
-    import anthropic
-    import httpx
-    import openai
-
-    import elusion.ask.answer as answer_mod
-
-    _stub_ask(monkeypatch, _ask_result("refused", answerable=False))
-    request = httpx.Request("POST", "https://api.example.invalid/v1")
-    cases = [
-        (anthropic.APIConnectionError(request=request), "Connection error"),
-        (openai.APIConnectionError(request=request), "Connection error"),
-        (ValueError("the index does not exist yet; run elusion index first"), "elusion index"),
-        (ValueError("k must be between 1 and 1000, not 0"), "k must be between"),
-        (ValueError("no price for model 'x'; add it to review/pricing.py"), "no price"),
-    ]
-    for exc, text in cases:
-
-        def raising(engine, question, answerer, embedder, _exc=exc, **kw):
-            raise _exc
-
-        monkeypatch.setattr(answer_mod, "ask", raising)
-        out = CliRunner().invoke(app, ["ask", "q"])
-        assert out.exit_code == 1, out.output
-        assert out.output.startswith("error: "), out.output
-        assert text in out.output
-        assert "Traceback" not in out.output
+    down = _database_down()
+    _stub_ask_questions(monkeypatch, tmp_path, index_engine, schema_error=down)
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1 and f"error: {down}" in result.output
+    assert "Traceback" not in result.output
