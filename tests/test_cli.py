@@ -1082,3 +1082,127 @@ def test_ask_user_errors_exit_1_without_traceback(monkeypatch) -> None:
     assert out.exit_code == 1
     assert "error: unknown arm" in out.output
     assert "Traceback" not in out.output
+
+
+def _stub_ask_draft(monkeypatch, tmp_path, flow, provider_error=None):
+    """Stub what `elusion ask-draft` builds (the provider, the engine, the schema) and the
+    drafting itself, and point the data directory at `tmp_path`."""
+    import dataclasses
+
+    import elusion.ask.index as ask_index
+    import elusion.ask.questions as questions
+    import elusion.collect.db as collect_db
+    import elusion.config as config
+    import elusion.review.providers as providers
+
+    class StubProvider:
+        def __init__(self, model):
+            if provider_error is not None:
+                raise provider_error
+            self.model = model
+
+    monkeypatch.setattr(providers, "AnthropicProvider", StubProvider)
+    monkeypatch.setattr(collect_db, "make_engine", lambda url: object())
+    monkeypatch.setattr(ask_index, "ensure_schema", lambda engine: None)
+    monkeypatch.setattr(questions, "draft_questions", flow)
+    monkeypatch.setattr(
+        config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path / "data")
+    )
+
+
+def test_ask_draft_drafts_into_the_criterions_draft_path_and_prints_the_summary(
+    monkeypatch, tmp_path
+) -> None:
+    seen = {}
+
+    def fake_flow(engine, drafter, path, **kw):
+        seen.update(drafter=drafter, path=path, **kw)
+        return {"drawn": 40, "already_drafted": 0, "drafted": 40, "failed": 0, "cost_usd": 0.5}
+
+    _stub_ask_draft(monkeypatch, tmp_path, fake_flow)
+    args = ["ask-draft", "--criterion", _crit(tmp_path)]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert seen["drafter"].model == "claude-opus-5-5"
+    assert seen["path"] == tmp_path / "data" / "gold" / "c.questions-draft.csv"
+    assert seen["max_usd"] is None
+    assert "'drafted': 40" in result.output and "c.questions-draft.csv" in result.output
+
+    result = CliRunner().invoke(app, [*args, "--max-usd", "2.5"])
+    assert result.exit_code == 0, result.output
+    assert seen["max_usd"] == 2.5
+
+    missing = CliRunner().invoke(app, ["ask-draft", "--criterion", "nope.md"])
+    assert missing.exit_code == 2 and "criterion file not found" in missing.output
+
+
+def test_ask_draft_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) -> None:
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import ProviderConfigError
+
+    for error, text in (
+        (BudgetExceeded("projected cost $9 is above the limit"), "above the limit"),
+        (ValueError("the index holds 3 abstracts and the draw needs 40"), "holds 3"),
+    ):
+
+        def fake_flow(engine, drafter, path, error=error, **kw):
+            raise error
+
+        _stub_ask_draft(monkeypatch, tmp_path, fake_flow)
+        result = CliRunner().invoke(app, ["ask-draft", "--criterion", _crit(tmp_path)])
+        assert result.exit_code == 1
+        assert f"error: {text}" in result.output or text in result.output
+        assert "Traceback" not in result.output
+
+    _stub_ask_draft(
+        monkeypatch, tmp_path, lambda *a, **k: {}, provider_error=ProviderConfigError("no key")
+    )
+    result = CliRunner().invoke(app, ["ask-draft", "--criterion", _crit(tmp_path)])
+    assert result.exit_code == 1 and "error: no key" in result.output
+
+
+def test_ask_questions_writes_the_final_file_and_prints_the_counts(monkeypatch, tmp_path) -> None:
+    import dataclasses
+
+    import elusion.config as config
+    from tests.test_ask_questions import write_draft
+
+    monkeypatch.setattr(
+        config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path / "data")
+    )
+    write_draft(tmp_path / "data" / "gold" / "c.questions-draft.csv")
+    args = ["ask-questions", "--criterion", _crit(tmp_path)]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    final = tmp_path / "data" / "gold" / "c.questions.csv"
+    assert final.is_file()
+    assert "'answerable': 25" in result.output and "'unanswerable': 5" in result.output
+    assert "c.questions.csv" in result.output
+
+    again = CliRunner().invoke(app, args)  # never overwrites
+    assert again.exit_code == 1
+    assert "error:" in again.output and "Traceback" not in again.output
+
+
+def test_ask_questions_errors_exit_1_without_a_traceback(monkeypatch, tmp_path) -> None:
+    import dataclasses
+
+    import elusion.config as config
+    from tests.test_ask_questions import write_draft
+
+    monkeypatch.setattr(
+        config, "settings", dataclasses.replace(config.settings, data_dir=tmp_path / "data")
+    )
+    args = ["ask-questions", "--criterion", _crit(tmp_path)]
+    nothing = CliRunner().invoke(app, args)  # no draft file yet
+    assert nothing.exit_code == 1 and "error:" in nothing.output
+    assert "Traceback" not in nothing.output
+
+    write_draft(tmp_path / "data" / "gold" / "c.questions-draft.csv", struck=14)
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1
+    assert (
+        "error: the draft keeps 26 answerable and 5 unanswerable questions; it must keep 25 and 5"
+        in result.output
+    )
+    assert not (tmp_path / "data" / "gold" / "c.questions.csv").exists()

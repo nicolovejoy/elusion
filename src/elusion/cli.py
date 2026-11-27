@@ -231,6 +231,63 @@ def ask(
         raise typer.Exit(1)
 
 
+@app.command(name="ask-draft")
+def ask_draft(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+    max_usd: Annotated[
+        float | None,
+        typer.Option(help="Refuse runs projected above this; default ELUSION_MAX_RUN_USD."),
+    ] = None,
+) -> None:
+    """Draft one gold question from each of 40 indexed abstracts, into a file you edit by hand."""
+    from elusion.ask import questions
+    from elusion.ask.index import ensure_schema
+    from elusion.ask.models import DRAFT_MODEL
+    from elusion.collect import db
+    from elusion.config import settings
+    from elusion.flows.review import BudgetExceeded
+    from elusion.review.providers import AnthropicProvider, ProviderConfigError
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    path = questions.draft_path(criterion.stem, settings.data_dir)
+    try:
+        drafter = AnthropicProvider(DRAFT_MODEL)
+        engine = db.make_engine(settings.database_url)
+        ensure_schema(engine)
+        summary = questions.draft_questions(engine, drafter, path, max_usd=max_usd)
+    except (BudgetExceeded, ProviderConfigError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(summary)
+    typer.echo(f"draft file: {path}")
+
+
+@app.command(name="ask-questions")
+def ask_questions(
+    criterion: Annotated[
+        Path, typer.Option(help="Criterion file, e.g. criteria/auditable-decisions.md.")
+    ],
+) -> None:
+    """Turn the hand-edited draft into the final questions file (25 answerable, 5 not)."""
+    from elusion.ask import questions
+    from elusion.config import settings
+
+    if not criterion.is_file():
+        raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    draft = questions.draft_path(criterion.stem, settings.data_dir)
+    final = questions.questions_path(criterion.stem, settings.data_dir)
+    try:
+        summary = questions.finalize_questions(draft, final)
+    except (FileExistsError, FileNotFoundError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(summary)
+    typer.echo(f"questions file: {final}")
+
+
 @app.command()
 def board(
     concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
