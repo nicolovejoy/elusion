@@ -22,6 +22,7 @@ arm found it.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -57,9 +58,12 @@ class Passage:
 # The question's words are joined with OR, not AND: a natural-language question has words
 # the right abstract lacks, and `plainto_tsquery` (AND) would then match nothing. It also
 # strips operators and odd punctuation, so any string is safe; `replace` turns its `&`
-# into `|` in the query's text form.
+# into `|` in the query's text form. The outer configuration is `simple`, which stems
+# nothing: `plainto_tsquery('english', ...)` has already stemmed the words, and stemming
+# them again changes some ('decision' -> 'decis' -> 'deci', 'analyses' -> 'analys' ->
+# 'anali') so they no longer match the stems stored in the index.
 _LEXICAL_SQL = sa.text(
-    "WITH q AS (SELECT to_tsquery('english', replace(plainto_tsquery('english', :question)::text,"
+    "WITH q AS (SELECT to_tsquery('simple', replace(plainto_tsquery('english', :question)::text,"
     " '&', '|')) AS query) "
     "SELECT doc_id, ts_rank_cd(tsv, q.query) AS score FROM abstract_index, q "
     "WHERE tsv @@ q.query ORDER BY score DESC, doc_id LIMIT :k"
@@ -79,6 +83,8 @@ def _hits(rows) -> list[Hit]:
 def lexical(engine: Engine, question: str, k: int = K) -> list[Hit]:
     """The `k` best full-text matches, best first. Fewer than `k` when fewer match; none when
     no word of the question matches or the question is all stop words."""
+    if "\x00" in question:
+        raise ValueError("the question contains a NUL character, which Postgres cannot store")
     with engine.connect() as conn:
         rows = conn.execute(_LEXICAL_SQL, {"question": question, "k": k}).all()
     return _hits(rows)
@@ -94,6 +100,8 @@ def vector(
         raise ValueError(
             f"query vector has {len(query_vector)} numbers; the index holds {EMBEDDING_DIM}"
         )
+    if not all(math.isfinite(x) for x in query_vector):
+        raise ValueError("the query vector holds a number that is not finite (nan or inf)")
     literal = "[" + ",".join(repr(float(x)) for x in query_vector) + "]"
     with engine.connect() as conn:
         rows = conn.execute(_VECTOR_SQL, {"q": literal, "m": embedding_model, "k": k}).all()

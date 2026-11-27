@@ -92,11 +92,53 @@ def test_lexical_all_stop_words_returns_nothing(index_engine) -> None:
 
 
 def test_lexical_odd_punctuation_does_not_error(index_engine) -> None:
-    add(index_engine, paper("a", "An audit trail for AT&T."))
-    hits = retrieve.lexical(index_engine, "What is AT&T's 'audit' (trail)?")
-    assert ids(hits) == ["a"]
-    for odd in ["!!! ???", "a | b & c", "audit:*", "'", "\\", "(", "x <-> y", "!audit"]:
-        retrieve.lexical(index_engine, odd)
+    add(index_engine, paper("a", "An audit trail for AT&T."), paper("b", "Soil chemistry."))
+    assert ids(retrieve.lexical(index_engine, "What is AT&T's 'audit' (trail)?")) == ["a"]
+    finds_a = [
+        "audit:*",
+        "!audit",
+        "x <-> y audit",
+        "a | b & c audit",
+        "(audit",
+        "audit\\",
+        "'audit'",
+    ]
+    for odd in finds_a:
+        assert ids(retrieve.lexical(index_engine, odd)) == ["a"], odd
+    for odd in ["!!! ???", "a | b & c", "'", "\\", "(", "x <-> y"]:
+        assert retrieve.lexical(index_engine, odd) == [], odd
+
+
+@pytest.mark.parametrize(
+    ("question", "text"),
+    [
+        # The old query stemmed these twice and then failed to match: 'decision' -> 'decis'
+        # -> 'deci', 'analyses' -> 'analys' -> 'anali'. (The english stemmer keeps 'analysis'
+        # -> 'analysi' apart from 'analyses' -> 'analys'; no query change can join those.)
+        ("decisions", "A paper about a decision."),
+        ("analyses", "Several analyses of logs."),
+        ("decision-making", "Notes on decision making."),
+        ("decision-making", "Notes on decision-making."),
+        ("state-of-the-art audit", "An audit of the state of the art."),
+        ("state-of-the-art audit", "An audit."),
+        ("AT&T's audit", "An audit trail."),
+        ("AT&T's audit", "AT&T publishes an audit."),
+    ],
+)
+def test_lexical_stems_once_not_twice(index_engine, question, text) -> None:
+    add(index_engine, paper("a", text), paper("b", "Soil chemistry."))
+    assert ids(retrieve.lexical(index_engine, question)) == ["a"]
+
+
+def test_lexical_url_with_an_ampersand_still_matches_on_its_other_words(index_engine) -> None:
+    add(index_engine, paper("a", "An audit trail."), paper("b", "Soil chemistry."))
+    question = "See https://example.org/page?x=1&y=2 for the audit"
+    assert ids(retrieve.lexical(index_engine, question)) == ["a"]
+
+
+def test_lexical_question_with_a_nul_character_raises_value_error(index_engine) -> None:
+    with pytest.raises(ValueError, match="NUL"):
+        retrieve.lexical(index_engine, "audit\x00trail")
 
 
 def test_lexical_order_is_by_score_then_doc_id(index_engine) -> None:
@@ -160,6 +202,15 @@ def test_vector_wrong_dimension_raises(index_engine) -> None:
         retrieve.vector(index_engine, [1.0, 0.0, 0.0], MODEL)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_vector_non_finite_number_raises_before_any_query(bad) -> None:
+    # `engine=None` proves it: a query would fail with an AttributeError, not a ValueError.
+    query = axis(1, 0)
+    query[7] = bad
+    with pytest.raises(ValueError, match="finite"):
+        retrieve.vector(None, query, MODEL)
+
+
 # rrf
 
 
@@ -207,23 +258,32 @@ def test_hybrid_returns_a_doc_only_lexical_finds_and_one_only_vector_finds(index
         MODEL,
         {"lex": axis(0, 1), "vec": axis(1, 0), "none": axis(-1, 0)},
     )
-    hits = retrieve.hybrid(index_engine, "zebra", axis(1, 0), MODEL)
-    assert {"lex", "vec"} <= set(ids(hits))
-    assert [h.rank for h in hits] == list(range(1, len(hits) + 1))
+    # depth=1 reads one hit from each arm: the vector arm alone would give only "vec" and
+    # the lexical arm alone only "lex", so both are here only if both arms ran. Each is
+    # rank 1 in its own list, so they tie at 1/61 and the id order decides.
+    hits = retrieve.hybrid(index_engine, "zebra", axis(1, 0), MODEL, depth=1)
+    assert ids(hits) == ["lex", "vec"]
+    assert [h.rank for h in hits] == [1, 2]
+    assert [h.score for h in hits] == [pytest.approx(1 / 61), pytest.approx(1 / 61)]
+    assert retrieve.vector(index_engine, axis(1, 0), MODEL, k=1)[0].doc_id == "vec"
 
 
-def test_hybrid_is_deterministic(index_engine) -> None:
-    fake = FakeEmbedder(model=MODEL)
-    add(
-        index_engine,
-        *[paper(f"d{i}", f"Audit of decision number {i} in a system.") for i in range(12)],
-    )
-    embed_all(index_engine)
-    q = "audit of decisions"
-    first = retrieve.hybrid(index_engine, q, fake.vector(q), MODEL)
-    second = retrieve.hybrid(index_engine, q, fake.vector(q), MODEL)
+def test_hybrid_is_deterministic_and_ties_go_by_doc_id(index_engine) -> None:
+    # Twelve distinct documents with identical text and identical vectors: every score in
+    # both arms is exactly equal, so only the id order can decide.
+    add(index_engine, *[paper(f"d{i:02}", "Audit of decisions in a system.") for i in range(12)])
+    index.add_vectors(index_engine, MODEL, {f"d{i:02}": axis(1, 0) for i in range(12)})
+    lex = retrieve.lexical(index_engine, "audit of decisions", 12)
+    assert len({h.score for h in lex}) == 1
+    assert ids(lex) == [f"d{i:02}" for i in range(12)]
+    first = retrieve.hybrid(index_engine, "audit of decisions", axis(1, 0), MODEL)
+    second = retrieve.hybrid(index_engine, "audit of decisions", axis(1, 0), MODEL)
     assert first == second
-    assert len(first) == retrieve.K
+    assert ids(first) == ["d00", "d01", "d02", "d03", "d04"]
+
+
+def test_hybrid_on_an_empty_index_returns_nothing(index_engine) -> None:
+    assert retrieve.hybrid(index_engine, "audit", axis(1, 0), MODEL) == []
 
 
 # retrieve

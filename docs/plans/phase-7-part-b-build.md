@@ -386,7 +386,10 @@ None of these makes a model call: the caller embeds the question and passes the 
 - `lexical`: one query. Builder's choice: join the question's words with OR, not AND,
   because a natural-language question has words the right abstract lacks, and
   `plainto_tsquery` would then match nothing. Exact SQL:
-  `WITH q AS (SELECT to_tsquery('english', replace(plainto_tsquery('english', :question)::text, '&', '|')) AS query) SELECT doc_id, ts_rank_cd(tsv, q.query) AS score FROM abstract_index, q WHERE tsv @@ q.query ORDER BY score DESC, doc_id LIMIT :k`.
+  `WITH q AS (SELECT to_tsquery('simple', replace(plainto_tsquery('english', :question)::text, '&', '|')) AS query) SELECT doc_id, ts_rank_cd(tsv, q.query) AS score FROM abstract_index, q WHERE tsv @@ q.query ORDER BY score DESC, doc_id LIMIT :k`.
+  The outer configuration is `simple` because `plainto_tsquery('english', ...)` has already
+  stemmed the words, and `english` would stem them a second time ('decision' to 'decis' to
+  'deci'), which never matches the stored stem.
   It returns fewer than `k` hits when fewer match, and `[]` when no word matches or the
   question is all stop words.
 - `vector`: `WHERE embedding_model = :m ORDER BY embedding <=> CAST(:q AS vector) , doc_id
