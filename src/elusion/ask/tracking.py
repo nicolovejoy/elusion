@@ -43,6 +43,8 @@ def arm_metrics(report: ArmReport) -> dict[str, float]:
     m["refusals_correct"] = float(report.refusals_correct)
     m["refusals_n"] = float(report.n_unanswerable)
     m["refusals_wrong"] = float(report.refusals_wrong)
+    m["refusals_no_passage_unanswerable"] = float(report.no_passage_unanswerable)
+    m["refusals_no_passage_answerable"] = float(report.no_passage_answerable)
     m["errors"] = float(report.errors)
     m["judge_unusable"] = float(report.judge_unusable)
     m["questions_not_judged"] = float(report.questions_not_judged)

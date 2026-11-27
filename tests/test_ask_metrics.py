@@ -129,3 +129,40 @@ def test_no_claims_gives_none_not_a_division_by_zero() -> None:
 def test_a_report_with_no_answerable_question_is_refused() -> None:
     with pytest.raises(ValueError, match="answerable"):
         report([row("u1", kind="unanswerable", outcome="refused")])
+
+
+def refused_without_a_passage(question_id, kind):
+    return EvalRow(
+        question_id,
+        kind,
+        True if kind == "answerable" else None,
+        "refused",
+        (),
+        no_passages=True,
+    )
+
+
+def test_a_refusal_nobody_decided_is_not_a_correct_refusal() -> None:
+    """No passage was retrieved, so no model was asked: it is counted beside the model's
+    refusals, never in them."""
+    r = report(
+        [
+            row("q1"),
+            refused_without_a_passage("u1", "unanswerable"),
+            row("u2", kind="unanswerable", outcome="refused"),
+            row("u3", kind="unanswerable", outcome="answered", claims=[OK]),
+        ]
+    )
+    assert (r.refusals_correct, r.no_passage_unanswerable, r.n_unanswerable) == (1, 1, 3)
+
+
+def test_a_no_passage_refusal_of_an_answerable_question_is_not_a_wrong_refusal() -> None:
+    r = report(
+        [
+            refused_without_a_passage("q1", "answerable"),
+            row("q2", outcome="refused"),
+            row("q3", claims=[OK]),
+        ]
+    )
+    assert (r.refusals_wrong, r.no_passage_answerable) == (1, 1)
+    assert (r.refusals_correct, r.no_passage_unanswerable) == (0, 0)

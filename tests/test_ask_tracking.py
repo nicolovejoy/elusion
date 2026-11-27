@@ -73,3 +73,17 @@ def test_the_questions_file_is_never_an_artifact(tmp_path) -> None:
     names = {a.path for a in client.list_artifacts(run_id)}
     assert questions.name not in names and not any(n.endswith(".csv") for n in names)
     assert "secret question" not in str(client.get_run(run_id).data.params)
+
+
+def test_refusals_nobody_decided_are_logged_beside_the_model_refusals() -> None:
+    rows = [
+        EvalRow("q01", "answerable", True, "refused", (), no_passages=True),
+        EvalRow("q02", "answerable", True, "refused", ()),
+        EvalRow("u1", "unanswerable", None, "refused", (), no_passages=True),
+        EvalRow("u2", "unanswerable", None, "refused", ()),
+        EvalRow("u3", "unanswerable", None, "refused", ()),
+    ]
+    m = arm_metrics(arm_report("lexical", 5, rows, 0.0))
+    assert (m["refusals_correct"], m["refusals_n"], m["refusals_wrong"]) == (2, 3, 1)
+    assert m["refusals_no_passage_unanswerable"] == 1
+    assert m["refusals_no_passage_answerable"] == 1

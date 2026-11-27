@@ -19,6 +19,11 @@ of one answer as independent, which they are not. *Groundedness by question* ask
 claim of an answer be supported, and is the figure to trust. A question with an unsupported
 claim is not grounded whatever the rest were; a question whose other claims are all supported
 but one is not judged cannot be decided, and is left out of that denominator too.
+
+*Refusals.* An ask that retrieved no passage is stored as refused without any model call
+(only the lexical arm can do this, when no word of the question is in the index). Nobody
+decided that refusal, so it is not a correct (or wrong) refusal: the model's refusals are
+counted on their own, and the no-passage ones are counted beside them.
 """
 
 from __future__ import annotations
@@ -42,6 +47,9 @@ class EvalRow:
     source_hit: bool | None  # None for an unanswerable question
     outcome: str  # answered, refused, failed, error
     claims: tuple[ClaimResult, ...]  # empty when there are no claims
+    # True for a `refused` row where nothing was retrieved, so no model was asked: nobody
+    # decided that refusal.
+    no_passages: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,8 +65,11 @@ class ArmReport:
     answered_questions: int  # rows with at least one claim
     fully_grounded: int
     groundedness_questions: Estimate | None  # over the answered rows that can be decided
-    refusals_correct: int  # unanswerable rows that were refused, of n_unanswerable
-    refusals_wrong: int  # answerable rows that were refused
+    refusals_correct: int  # unanswerable rows the model refused, of n_unanswerable
+    refusals_wrong: int  # answerable rows the model refused
+    # Refused with no passage retrieved, so no model was asked; in neither count above.
+    no_passage_unanswerable: int
+    no_passage_answerable: int
     errors: int
     judge_unusable: int  # checked claims with no usable judgement
     questions_not_judged: int  # answered rows left out of the by-question denominator
@@ -71,6 +82,14 @@ def _supported(claim: ClaimResult) -> bool:
 
 def _not_judged(claim: ClaimResult) -> bool:
     return claim.checked and claim.supported is None
+
+
+def _no_passages(row: EvalRow) -> bool:
+    return row.outcome == "refused" and row.no_passages
+
+
+def _model_refused(row: EvalRow) -> bool:
+    return row.outcome == "refused" and not row.no_passages
 
 
 def arm_report(arm: str, k: int, rows: Sequence[EvalRow], cost_usd: float) -> ArmReport:
@@ -110,8 +129,10 @@ def arm_report(arm: str, k: int, rows: Sequence[EvalRow], cost_usd: float) -> Ar
         groundedness_questions=(
             proportion(fully, len(answered) - undecided) if len(answered) > undecided else None
         ),
-        refusals_correct=sum(1 for r in unanswerable if r.outcome == "refused"),
-        refusals_wrong=sum(1 for r in answerable if r.outcome == "refused"),
+        refusals_correct=sum(1 for r in unanswerable if _model_refused(r)),
+        refusals_wrong=sum(1 for r in answerable if _model_refused(r)),
+        no_passage_unanswerable=sum(1 for r in unanswerable if _no_passages(r)),
+        no_passage_answerable=sum(1 for r in answerable if _no_passages(r)),
         errors=sum(1 for r in rows if r.outcome == "error"),
         judge_unusable=unusable,
         questions_not_judged=undecided,

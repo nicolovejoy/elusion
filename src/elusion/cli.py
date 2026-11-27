@@ -345,6 +345,7 @@ def ask_eval(
     run finds every result and judgement stored and pays nothing.
     """
     import csv
+    import os
 
     import anthropic
     import openai
@@ -359,6 +360,13 @@ def ask_eval(
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
     try:
+        # The Anthropic client only notices a missing key at its first request, which would
+        # be after the embedding of the first question was paid for: check both up front.
+        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+            if not os.environ.get(key):
+                raise ProviderConfigError(
+                    f"{key} is not set; run with op run --env-file=.env.tpl --"
+                )
         result = flow.ask_eval(
             criterion.stem,
             AnthropicProvider(ANSWER_MODEL),

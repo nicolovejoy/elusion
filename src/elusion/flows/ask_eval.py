@@ -23,6 +23,15 @@ refuses to start when it is above the limit (the review flow's `BudgetExceeded`)
 
 A judge call that ends in a refusal or a cut-off is stored with `supported` null and reported
 as "not judged": it is never counted as supported or unsupported.
+
+Two guards on money. The projection before the first call refuses a run that is expected to
+cost more than the limit. And while the run goes on it adds up what it has actually been billed
+(answers, judge calls, embeddings) and stops before the next call once that sum plus the next
+call's projected cost would pass the limit, raising `BudgetExceeded`; everything paid so far is
+already stored, and a re-run with a higher limit continues from there.
+
+Known gap. An ask that was paid for but not recorded as a result (a failure in the one insert
+after it) is asked again on the next run, at a few cents.
 """
 
 from __future__ import annotations
@@ -129,6 +138,19 @@ def _mean_chars(engine: Engine) -> float:
     return float(mean or 0)
 
 
+def ask_cost(answerer: Completer, embedder: Embedder, arm: str, mean_chars: float) -> float:
+    """The projected cost of one ask: the five passages, the question and a long answer, and
+    the question's embedding for an arm that searches by meaning."""
+    passages = K * (int(mean_chars) // 3 + PASSAGE_FRAME_TOKENS) + ANSWER_FRAME_TOKENS
+    embedding = cost_usd(embedder.model, QUESTION_EMBED_TOKENS, 0) if arm != "lexical" else 0.0
+    return cost_usd(answerer.model, passages, ANSWER_OUTPUT_TOKENS) + embedding
+
+
+def claim_cost(judge: Completer) -> float:
+    """The projected cost of one judge call."""
+    return cost_usd(judge.model, JUDGE_INPUT_TOKENS, JUDGE_OUTPUT_TOKENS)
+
+
 def project(
     answerer: Completer,
     judge: Completer,
@@ -141,11 +163,8 @@ def project(
     """The cost of what is still to do: each ask still to make (the five passages, the
     question, a long answer), its judge calls (three claims assumed for an answerable
     question) and the claims already stored but not yet judged."""
-    passages = K * (int(mean_chars) // 3 + PASSAGE_FRAME_TOKENS) + ANSWER_FRAME_TOKENS
-    per_ask = cost_usd(answerer.model, passages, ANSWER_OUTPUT_TOKENS)
-    per_embedding = cost_usd(embedder.model, QUESTION_EMBED_TOKENS, 0)
-    per_claim = cost_usd(judge.model, JUDGE_INPUT_TOKENS, JUDGE_OUTPUT_TOKENS)
-    projected = sum(per_ask + (per_embedding if arm != "lexical" else 0.0) for _, arm in todo)
+    per_claim = claim_cost(judge)
+    projected = sum(ask_cost(answerer, embedder, arm, mean_chars) for _, arm in todo)
     assumed = sum(CLAIMS_PER_ANSWER for q, _ in todo if q.kind == "answerable")
     return projected + per_claim * (assumed + owed)
 
@@ -208,7 +227,16 @@ def _rows(
             claims.append(
                 ClaimResult(checked, judgement.supported if checked and judgement else None)
             )
-        rows.append(EvalRow(q.question_id, q.kind, hit, row.outcome, tuple(claims)))
+        rows.append(
+            EvalRow(
+                q.question_id,
+                q.kind,
+                hit,
+                row.outcome,
+                tuple(claims),
+                no_passages=bool(row.detail.get("no_passages")),
+            )
+        )
     return rows, cost
 
 
@@ -258,13 +286,14 @@ def ask_eval(
     judged_keys = results.judged(engine, judge.model, JUDGE_PROMPT.version)
     owed = _owed(engine, stored, judged_keys)
 
+    mean_chars = _mean_chars(engine)
     projected = project(
         answerer,
         judge,
         embedder,
         todo=todo,
         owed=len(owed),
-        mean_chars=_mean_chars(engine),
+        mean_chars=mean_chars,
     )
     if projected > max_usd:
         raise BudgetExceeded(
@@ -273,7 +302,18 @@ def ask_eval(
         )
 
     spent = 0.0
+
+    def check_spend(next_call: float) -> None:
+        """Stop before a call that would take this run's actual bill past the limit."""
+        if spent + next_call > max_usd:
+            raise BudgetExceeded(
+                f"billed ${spent:.6f} so far in this run and the next call is projected at "
+                f"${next_call:.6f}, above the limit of ${max_usd:.6f}; stopping. Everything "
+                "paid for is stored: run again with a higher --max-usd to continue"
+            )
+
     for q, arm in todo:
+        check_spend(ask_cost(answerer, embedder, arm, mean_chars))
         # Only the question's own text goes in. `q.source_doc_id` is read once more, below,
         # to compare with what came back, and goes nowhere else.
         asked = ask(engine, q.question, answerer, embedder, arm=arm)
@@ -302,6 +342,7 @@ def ask_eval(
     ]
     n_judged = 0
     for item in _owed(engine, stored, judged_keys):
+        check_spend(claim_cost(judge))
         try:
             verdict = judge.complete(
                 JUDGE_PROMPT.text,

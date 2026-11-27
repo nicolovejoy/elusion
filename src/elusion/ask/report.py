@@ -28,6 +28,15 @@ CAVEATS = (
 )
 
 
+NOTES = (
+    "A search that finds no passage is refused without asking the model, because there is "
+    "nothing to read. Nobody decided that refusal, so it is not counted as a correct or a "
+    "wrong refusal; it is shown beside them.",
+    "An ask that was paid for but not recorded as a result (a failure in the one insert after "
+    "it) is asked again on the next run, at a few cents.",
+)
+
+
 @dataclass(frozen=True)
 class Setup:
     """What was run, as the header prints it."""
@@ -86,9 +95,12 @@ def _arm_lines(r: ArmReport) -> list[str]:
         ),
         f"- claims in all answers: {r.claims_total}; answered questions with a claim: "
         f"{r.answered_questions}",
-        f"- correct refusals: {r.refusals_correct} of {r.n_unanswerable}",
-        f"- wrong refusals (an answerable question refused): {r.refusals_wrong} of "
-        f"{r.n_answerable}",
+        f"- correct refusals (the model refused an unanswerable question): "
+        f"{r.refusals_correct} of {r.n_unanswerable}; no passage retrieved, so no model was "
+        f"asked: {r.no_passage_unanswerable}",
+        f"- wrong refusals (the model refused an answerable question): {r.refusals_wrong} of "
+        f"{r.n_answerable}; no passage retrieved, so no model was asked: "
+        f"{r.no_passage_answerable}",
         f"- errors (no usable answer from the model): {r.errors}",
         f"- not judged (the judge gave no usable answer): {r.judge_unusable} claims, "
         f"{r.questions_not_judged} questions; they are in no groundedness figure",
@@ -109,10 +121,12 @@ def _question_lines(rows_by_arm: Mapping[str, Sequence[EvalRow]]) -> list[str]:
             r = by_arm[arm].get(qid)
             if r is None:
                 parts.append(f"{arm} not run")
-            elif r.source_hit is None:
-                parts.append(f"{arm} {r.outcome}")
             else:
-                parts.append(f"{arm} {'hit' if r.source_hit else 'miss'}, {r.outcome}")
+                outcome = "refused, no passage" if r.no_passages else r.outcome
+                if r.source_hit is None:
+                    parts.append(f"{arm} {outcome}")
+                else:
+                    parts.append(f"{arm} {'hit' if r.source_hit else 'miss'}, {outcome}")
         lines.append(f"- {qid}: " + "; ".join(parts))
     lines.append("")
     return lines
@@ -140,6 +154,8 @@ def render(
     for r in reports:
         lines += _arm_lines(r)
     lines += _question_lines(rows_by_arm)
-    lines += ["## Read this with", ""]
+    lines += ["## Notes", ""]
+    lines += [f"- {n}" for n in NOTES]
+    lines += ["", "## Read this with", ""]
     lines += [f"- {c}" for c in CAVEATS]
     return "\n".join(lines) + "\n"

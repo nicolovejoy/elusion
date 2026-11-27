@@ -263,21 +263,34 @@ def test_an_edited_question_is_a_new_question(world, tmp_path) -> None:
 
 
 def test_no_source_doc_id_appears_in_any_message_to_any_model(world, tmp_path, monkeypatch) -> None:
+    import elusion.ask.answer as answer_mod
     import elusion.flows.ask_eval as mod
 
-    seen_args = []
-    real_ask = mod.ask
+    seen_args, retrieve_args = [], []
+    real_ask, real_retrieve = mod.ask, answer_mod.retrieve
 
     def spy(*args, **kwargs):
-        seen_args.append(repr((args[1], kwargs)))
+        seen_args.append(repr((args[1:], kwargs)))
         return real_ask(*args, **kwargs)
 
+    def retrieve_spy(*args, **kwargs):
+        retrieve_args.append(repr((args[1:], kwargs)))
+        return real_retrieve(*args, **kwargs)
+
     monkeypatch.setattr(mod, "ask", spy)
+    monkeypatch.setattr(answer_mod, "retrieve", retrieve_spy)
     a, j, e = answerer(), judge(), FakeEmbedder(model=EMBEDDING_MODEL)
     run(world, tmp_path, a, j, e)
-    assert a.calls and j.calls and e.calls and len(seen_args) == 9
+    assert a.calls and j.calls and e.calls and len(seen_args) == len(retrieve_args) == 9
+    # The judge is sent the claim and the quote and nothing else: every message is exactly the
+    # template filled with the fake answerer's claim and a quote cut from an indexed abstract.
+    allowed = {
+        judge_message("It says so.", " ".join(text.split()[:6])) for _, text in DOCS.values()
+    }
+    assert {message for _, message in j.calls} <= allowed
     for source in SOURCES:
         assert not any(source in text for text in seen_args)  # never passed to ask
+        assert not any(source in text for text in retrieve_args)  # nor to retrieve
         assert not any(source in text for texts in e.calls for text in texts)
         assert not any(source in system or source in message for system, message in j.calls)
         for system, message in a.calls:
@@ -287,6 +300,17 @@ def test_no_source_doc_id_appears_in_any_message_to_any_model(world, tmp_path, m
             # A retrieved abstract is shown under its own id, like any retrieved abstract; the
             # id appears nowhere else in what the answerer was sent.
             assert source not in passages.replace(f"[{source}] ", "")
+
+
+def test_a_judge_message_that_carried_an_id_would_fail_the_leak_check(world, tmp_path) -> None:
+    """The check above is not vacuous: a judge message with a document id fails it."""
+    j = judge()
+    run(world, tmp_path, answerer(), j)
+    allowed = {
+        judge_message("It says so.", " ".join(text.split()[:6])) for _, text in DOCS.values()
+    }
+    leaked = j.calls[0][1] + f"\nDOC: {SRC1}"
+    assert leaked not in allowed and SRC1 in leaked
 
 
 def test_source_hit_comes_from_the_retrieved_ids(world, tmp_path) -> None:
@@ -469,3 +493,75 @@ def test_an_mlflow_failure_names_the_report_and_keeps_the_paid_work(
     with pytest.raises(RuntimeError, match=r"report written to .*MLflow logging failed"):
         run(world, tmp_path, log_mlflow=True)
     assert count(world, results.ask_eval_results) == 9
+
+
+def test_the_report_and_figures_split_refusals_nobody_decided(world, tmp_path) -> None:
+    """The lexical arm finds no passage for the zebra question, so no model is asked and the
+    ask is refused; the other arms retrieve passages and the model refuses."""
+    a = answerer()
+    result = run(world, tmp_path, a)
+    lexical, vector, hybrid = (result.reports[arm] for arm in ARMS)
+    assert (lexical.refusals_correct, lexical.no_passage_unanswerable) == (0, 1)
+    assert (vector.refusals_correct, vector.no_passage_unanswerable) == (1, 0)
+    assert (hybrid.refusals_correct, hybrid.no_passage_unanswerable) == (1, 0)
+    assert lexical.refusals_wrong == lexical.no_passage_answerable == 0
+    text = result.report_path.read_text()
+    assert (
+        "correct refusals (the model refused an unanswerable question): 0 of 1; no passage" in text
+    )
+    assert "u1: lexical refused, no passage; vector refused; hybrid refused" in text
+    assert "Nobody decided that refusal" in text
+    assert "asked again on the next run, at a few cents" in text
+
+
+def test_a_run_stops_before_the_call_that_would_pass_the_limit_on_what_was_billed(
+    world, tmp_path
+) -> None:
+    a = answerer(usage={"cost_usd": 5.0})
+    j, e = judge(), FakeEmbedder(model=EMBEDDING_MODEL)
+    with pytest.raises(BudgetExceeded, match=r"billed \$5\.000000.*limit of \$1\.000000"):
+        run(world, tmp_path, a, j, e, max_usd=1.0)
+    assert len(a.calls) == 1 and j.calls == []  # the second ask was never made
+    assert count(world, results.ask_eval_results) == 1 and count(world, log.ask_log) == 1
+
+    # Everything paid for is stored: a higher limit continues, and pays for the rest only.
+    a2 = answerer()
+    second = run(world, tmp_path, a2, j, e, max_usd=10.0)
+    assert second.asked == 8 and count(world, results.ask_eval_results) == 9
+    assert count(world, log.ask_log) == 9
+
+
+def test_the_judge_phase_is_stopped_by_the_bill_too(world, tmp_path) -> None:
+    j = judge(usage={"cost_usd": 5.0})
+    with pytest.raises(BudgetExceeded, match=r"billed \$5\.000000"):
+        run(world, tmp_path, answerer(), j, max_usd=2.0)
+    assert len(j.calls) == 1 and count(world, results.ask_judgements) == 1
+    assert count(world, results.ask_eval_results) == 9  # every ask was already stored
+    j2 = judge()
+    second = run(world, tmp_path, answerer(), j2, max_usd=2.0)
+    assert second.asked == 0 and len(j2.calls) == second.judged > 0
+
+
+def test_an_answerer_failure_partway_keeps_every_earlier_result(world, tmp_path) -> None:
+    calls = []
+
+    def drops_on_the_third(system, message, out):
+        calls.append(message)
+        if len(calls) == 3:
+            raise RuntimeError("connection dropped")
+        return good_answer(system, message, out)
+
+    j = judge()
+    with pytest.raises(RuntimeError, match="connection dropped"):
+        run(world, tmp_path, answerer(drops_on_the_third), j)
+    kept = stored_results(world)
+    assert len(kept) == 2  # the two asks before the failure
+    assert j.calls == []  # the flow stopped before judging
+    before = {(r.question, r.arm): r.ask_id for r in kept.values()}
+
+    a2 = answerer()
+    second = run(world, tmp_path, a2, j)
+    assert second.asked == 7  # the failed ask and every one after it, and no earlier one
+    after = stored_results(world)
+    assert len(after) == 9 and all(after[key].ask_id == i for key, i in before.items())
+    assert len(a2.calls) == 6  # the lexical zebra ask retrieves nothing and calls no model

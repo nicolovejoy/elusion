@@ -1294,6 +1294,8 @@ def _stub_ask_eval(monkeypatch, result=None, error=None, embedder_error=None, se
     import elusion.review.providers as providers
 
     seen = {} if seen is None else seen
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
 
     class StubProvider:
         def __init__(self, model):
@@ -1379,3 +1381,20 @@ def test_ask_eval_errors_exit_1(monkeypatch, tmp_path) -> None:
     result = CliRunner().invoke(app, args)
     assert result.exit_code == 1 and "OPENAI_API_KEY is not set" in result.output
     assert "Traceback" not in result.output
+
+
+def test_ask_eval_without_an_api_key_exits_1_before_anything_is_built(
+    monkeypatch, tmp_path
+) -> None:
+    seen = _stub_ask_eval(monkeypatch)
+    args = ["ask-eval", "--criterion", _crit(tmp_path)]
+    for missing in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        _stub_ask_eval(monkeypatch, seen=seen)
+        monkeypatch.delenv(missing)
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 1, result.output
+        assert f"error: {missing} is not set; run with op run --env-file=.env.tpl --" in (
+            result.output
+        )
+        assert "Traceback" not in result.output
+    assert "criterion" not in seen and "models" not in seen  # no provider, no flow
