@@ -17,3 +17,7 @@ EMBEDDING_DIM = 1536  # confirmed: the model's default length
 ANSWER_MODEL = "claude-sonnet-5-5"  # confirmed
 JUDGE_MODEL = "claude-opus-5-5"  # confirmed
 DRAFT_MODEL = "claude-opus-5-5"  # confirmed
+# What the spend guards of `ask-draft` and `ask-eval` assume one call outputs when its answer
+# is short (a question, a verdict). Thinking cannot be turned off on the answer, judge and draft
+# models and is billed as output, so the figure is far above the answer itself on purpose.
+THINKING_OUTPUT_TOKENS = 1000

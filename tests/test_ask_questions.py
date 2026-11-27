@@ -8,6 +8,7 @@ No test calls a model: the drafter is a `FakeCompleter`.
 import ast
 import csv
 import random
+import re
 from pathlib import Path
 
 import pytest
@@ -378,7 +379,7 @@ def test_the_spend_guard_counts_only_what_is_still_to_draft(index_engine, tmp_pa
     with pytest.raises(RuntimeError):
         draft(index_engine, FakeCompleter(crash_on_fourth, model="claude-opus-5-5"), path, n=6)
     # every abstract is about the same length, so each call projects to about this much
-    one = cost_usd("claude-opus-5-5", len(text(0)) // 3 + 400, 150)
+    one = cost_usd("claude-opus-5-5", len(text(0)) // 3 + 400, questions._ANSWER_TOKENS)
     again = drafter("claude-opus-5-5")
     # a limit above the three calls left and below all six: a guard that counted the
     # drafted rows too would refuse
@@ -729,3 +730,55 @@ def test_read_questions_round_trips(tmp_path, indexed) -> None:
     )
     assert [q.kind for q in found] == ["answerable"] * 25 + ["unanswerable"] * 5
     assert found[-1].source_doc_id == "" and found[-1].origin == "owner"
+
+
+def test_the_draft_projection_assumes_the_same_output_as_ask_eval(index_engine, tmp_path) -> None:
+    """Thinking is billed as output on every model here, so `ask-draft` assumes the same
+    generous output as `ask-eval`, not the few dozen tokens of the question itself."""
+    from elusion.ask.models import THINKING_OUTPUT_TOKENS
+    from elusion.flows.ask_eval import JUDGE_OUTPUT_TOKENS
+    from elusion.review.pricing import cost_usd
+
+    assert questions._ANSWER_TOKENS == THINKING_OUTPUT_TOKENS == JUDGE_OUTPUT_TOKENS == 1000
+    fill_index(index_engine, 12)
+    fake = drafter("claude-opus-5-5")
+    path = tmp_path / "draft.csv"
+    with pytest.raises(BudgetExceeded) as caught:
+        draft(index_engine, fake, path, n=2, max_usd=0.0)
+    projected = float(re.search(r"projected cost \$([0-9.]+)", str(caught.value)).group(1))
+    sources = draw_sources(index_engine, n=2)
+    texts = [index_text(index_engine, s) for s in sources]
+    expected = sum(
+        cost_usd("claude-opus-5-5", len(t) // 3 + questions._FRAME_TOKENS, 1000) for t in texts
+    )
+    assert projected == pytest.approx(expected, abs=1e-6)
+    assert projected > sum(
+        cost_usd("claude-opus-5-5", len(t) // 3 + questions._FRAME_TOKENS, 150) for t in texts
+    )
+
+
+def index_text(engine, doc_id: str) -> str:
+    return questions._texts(engine, [doc_id])[doc_id]
+
+
+def test_a_pending_row_whose_source_left_the_index_says_to_strike_it_not_to_redraft(
+    tmp_path, indexed
+) -> None:
+    import sqlalchemy as sa
+
+    draft_csv, final = tmp_path / "draft.csv", tmp_path / "final.csv"
+    write_draft(draft_csv)
+    rows = read_rows(draft_csv)
+    gone = rows[2]["source_doc_id"]
+    rows[2].update(keep="pending", question="", drafted_question="")
+    write_csv(draft_csv, DRAFT_COLUMNS, rows)
+    with pytest.raises(ValueError, match=r"q03 is still pending: run ask-draft again"):
+        finalize(draft_csv, final, indexed)  # the source is still indexed: redrafting can help
+    with indexed.begin() as conn:
+        conn.execute(sa.delete(index.abstract_index).where(index.abstract_index.c.doc_id == gone))
+    with pytest.raises(
+        ValueError, match=r"q03 is still pending: its source .* no longer in the"
+    ) as e:
+        finalize(draft_csv, final, indexed)
+    assert "set its keep to no" in str(e.value) and "run ask-draft again" not in str(e.value)
+    assert not final.exists()

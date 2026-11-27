@@ -392,3 +392,30 @@ def test_fake_completer_satisfies_protocol():
     boom = FakeCompleter(lambda system, message, out: ReviewError("refusal", "m", 1, 2))
     with pytest.raises(ReviewError):
         boom.complete("s", "m", Pair)
+
+
+def test_a_provider_built_without_options_keeps_the_bulk_timeout_and_retries(monkeypatch):
+    from elusion.review.providers import MAX_RETRIES, REQUEST_TIMEOUT_S
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    provider = AnthropicProvider("claude-haiku-5-5")
+    assert (provider.client.timeout, provider.client.max_retries) == (
+        REQUEST_TIMEOUT_S,
+        MAX_RETRIES,
+    )
+    assert (REQUEST_TIMEOUT_S, MAX_RETRIES) == (60.0, 5)
+
+
+def test_the_long_call_options_reach_the_client(monkeypatch):
+    from elusion.review.providers import LONG_CALL_MAX_RETRIES, LONG_CALL_TIMEOUT_S
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    provider = AnthropicProvider(
+        "claude-sonnet-5-5", timeout=LONG_CALL_TIMEOUT_S, max_retries=LONG_CALL_MAX_RETRIES
+    )
+    assert (provider.client.timeout, provider.client.max_retries) == (600.0, 2)
+
+
+def test_a_review_error_prices_the_failed_call_by_the_pinned_model():
+    error = ReviewError("max_tokens", "served-id", 1_000_000, 1_000_000, 1_000_000, 1_000_000)
+    assert error.cost_usd("claude-haiku-5-5") == pytest.approx(0.735)

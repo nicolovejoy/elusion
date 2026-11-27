@@ -54,6 +54,7 @@ from sqlalchemy.engine import Engine
 
 from elusion.ask.index import abstract_index
 from elusion.ask.models import DRAFT_MODEL as DRAFT_MODEL  # the evaluation names it from here
+from elusion.ask.models import THINKING_OUTPUT_TOKENS
 from elusion.config import settings
 from elusion.flows.review import BudgetExceeded
 from elusion.review.pricing import cost_usd
@@ -74,7 +75,7 @@ PROMPT_VERSION = "draft-v1"
 DRAFT_MAX_TOKENS = 16000
 # For the spend guard: the framing around an abstract and the answer, in tokens.
 _FRAME_TOKENS = 400
-_ANSWER_TOKENS = 150
+_ANSWER_TOKENS = THINKING_OUTPUT_TOKENS  # as `ask-eval` assumes: thinking is billed as output
 
 PENDING = "pending"  # the `keep` of a drawn row whose call has not returned yet
 
@@ -316,13 +317,7 @@ def draft_questions(
             )
         except ReviewError as exc:
             # No usable answer, but the call was billed: it holds its key as a struck row.
-            summary["cost_usd"] += cost_usd(
-                drafter.model,
-                exc.input_tokens,
-                exc.output_tokens,
-                exc.cache_creation_input_tokens,
-                exc.cache_read_input_tokens,
-            )
+            summary["cost_usd"] += exc.cost_usd(drafter.model)
             summary["failed"] += 1
             row.update(
                 drafted_at=_now(),
@@ -354,6 +349,18 @@ def draft_questions(
             )
         _write_draft(path, rows)
     return summary
+
+
+def _pending_advice(engine: Engine, row: dict[str, str]) -> str:
+    """What to do about a pending row. A row whose source has left the index can never be
+    drafted (`draft_questions` skips it), so running `ask-draft` again cannot help."""
+    source = row["source_doc_id"].strip()
+    if source and source not in _indexed(engine, [source]):
+        return (
+            f"its source {source} is no longer in the index, so ask-draft cannot draft it: "
+            "set its keep to no"
+        )
+    return "run ask-draft again to draft it"
 
 
 def finalize_questions(
@@ -391,7 +398,7 @@ def finalize_questions(
         keep = row["keep"].strip().lower()
         if keep == PENDING:
             raise ValueError(
-                f"line {line}: {question_id} is still pending: run ask-draft again to draft it"
+                f"line {line}: {question_id} is still pending: {_pending_advice(engine, row)}"
             )
         if keep not in ("yes", "no"):
             raise ValueError(f"line {line}: keep must be yes or no, not {row['keep']!r}")

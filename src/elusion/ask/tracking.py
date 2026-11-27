@@ -6,7 +6,10 @@ worth remembering; a *metric* is a number the run produced; an *artifact* is a f
 to the run. Each proportion is logged as `<name>_point`, `_low`, `_high`, `_k` and `_n`, so
 the leaderboard shows the interval and the sample behind a figure, not only the figure.
 
-Every invocation logs new runs: the paid work is never repeated, but the runs are cheap.
+A run is logged once: `find_run` looks for a finished run of the same arm with the same params
+and the same figures, so a re-run that only finishes a later arm (the logging of an earlier arm
+had already succeeded) does not add a second run for the arms done. A changed figure or param
+makes a new run.
 Never logged: the questions file, the `ask_log`, any gold file or label. The caller picks
 the artifacts and this module attaches exactly what it is given.
 
@@ -42,6 +45,15 @@ def arm_metrics(report: ArmReport) -> dict[str, float]:
             m.update(_estimate(name, estimate))
     m["refusals_correct"] = float(report.refusals_correct)
     m["refusals_n"] = float(report.n_unanswerable)
+    if report.refusals_correct_estimate is not None:
+        e = report.refusals_correct_estimate
+        m.update(
+            {
+                "refusals_correct_point": e.point,
+                "refusals_correct_low": e.low,
+                "refusals_correct_high": e.high,
+            }
+        )
     m["refusals_wrong"] = float(report.refusals_wrong)
     m["refusals_no_passage_unanswerable"] = float(report.no_passage_unanswerable)
     m["refusals_no_passage_answerable"] = float(report.no_passage_answerable)
@@ -50,6 +62,38 @@ def arm_metrics(report: ArmReport) -> dict[str, float]:
     m["questions_not_judged"] = float(report.questions_not_judged)
     m["cost_usd"] = report.cost_usd
     return m
+
+
+def find_run(
+    report: ArmReport, params: dict[str, str], tracking_uri: str, *, max_runs: int = 1000
+) -> str | None:
+    """The id of a finished run in the experiment with exactly these params and these figures,
+    or None. A run that was not finished (a crash mid-logging) never counts."""
+    import math
+
+    import mlflow
+
+    client = mlflow.MlflowClient(tracking_uri=tracking_uri)
+    experiment = client.get_experiment_by_name(EXPERIMENT)
+    if experiment is None:
+        return None
+    runs = client.search_runs(
+        [experiment.experiment_id],
+        filter_string="attributes.status = 'FINISHED'",
+        max_results=max_runs,
+        order_by=["attributes.start_time DESC"],
+    )
+    figures = arm_metrics(report)
+    for run in runs:
+        if run.data.params != params:
+            continue
+        logged = run.data.metrics
+        if figures.keys() <= logged.keys() and all(
+            math.isclose(logged[name], value, rel_tol=1e-9, abs_tol=1e-12)
+            for name, value in figures.items()
+        ):
+            return run.info.run_id
+    return None
 
 
 def log_arm_run(

@@ -39,7 +39,7 @@ from elusion.ask.embed import Embedder
 from elusion.ask.models import EMBEDDING_MODEL
 from elusion.ask.retrieve import ARMS, DEFAULT_ARM, Hit, K, Passage, passages, retrieve
 from elusion.board.quotes import find_quote
-from elusion.review.pricing import PRICES, cost_usd
+from elusion.review.pricing import PRICES
 from elusion.review.prompt import load_prompt
 from elusion.review.providers import Completer, ReviewError
 
@@ -51,6 +51,9 @@ logger = logging.getLogger(__name__)
 ANSWER_MAX_TOKENS = 16000
 MAX_K = 1000
 PROMPT = "ask"
+# The answer prompt `ask` uses unless told otherwise, and so the one `ask-eval` keys its results
+# by: the flow takes it from here and passes it on, so there is one place to change.
+PROMPT_VERSION = "v1"
 REFUSAL = "The passages do not answer the question."
 
 
@@ -162,7 +165,7 @@ def ask(
     arm: str = DEFAULT_ARM,
     k: int = K,
     embedding_model: str = EMBEDDING_MODEL,
-    prompt_version: str = "v1",
+    prompt_version: str = PROMPT_VERSION,
 ) -> AskResult:
     """Answer one question from the index, log it, and return what happened.
 
@@ -259,13 +262,7 @@ def ask(
             max_tokens=ANSWER_MAX_TOKENS,
         )
     except ReviewError as exc:
-        spent = cost_usd(
-            answerer.model,
-            exc.input_tokens,
-            exc.output_tokens,
-            exc.cache_creation_input_tokens,
-            exc.cache_read_input_tokens,
-        )
+        spent = exc.cost_usd(answerer.model)
         ask_id = write(
             "error",
             served_model=exc.model,

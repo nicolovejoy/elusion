@@ -48,15 +48,17 @@ from sqlalchemy.engine import Engine
 
 from elusion.ask import index, results
 from elusion.ask import log as ask_log
+from elusion.ask.answer import PROMPT as ASK_PROMPT_NAME
+from elusion.ask.answer import PROMPT_VERSION as ASK_PROMPT_VERSION
 from elusion.ask.answer import ask
 from elusion.ask.embed import Embedder
 from elusion.ask.index import abstract_index
 from elusion.ask.metrics import ArmReport, ClaimResult, EvalRow, arm_report
-from elusion.ask.models import EMBEDDING_MODEL
+from elusion.ask.models import EMBEDDING_MODEL, THINKING_OUTPUT_TOKENS
 from elusion.ask.questions import Question, questions_path, read_questions
 from elusion.ask.report import Setup, render, report_path
 from elusion.ask.retrieve import ARMS, FUSION_DEPTH, RRF_C, K
-from elusion.ask.tracking import log_arm_run
+from elusion.ask.tracking import find_run, log_arm_run
 from elusion.collect import db
 from elusion.config import settings
 from elusion.flows.evaluate import report_date
@@ -65,7 +67,7 @@ from elusion.review.pricing import PRICES, cost_usd
 from elusion.review.prompt import PROMPTS_DIR, load_prompt
 from elusion.review.providers import Completer, ReviewError
 
-ASK_PROMPT = load_prompt("ask", "v1").version  # "ask/v1"
+ASK_PROMPT = load_prompt(ASK_PROMPT_NAME, ASK_PROMPT_VERSION).version  # "ask/v1"
 JUDGE_PROMPT = load_prompt("ask", "judge-v1")
 # 16,000, not a small limit: on claude-opus-5-5 and claude-sonnet-5-5 thinking cannot be turned
 # off and its tokens count against `max_tokens` (Anthropic docs, read 2026-11-26).
@@ -76,7 +78,7 @@ JUDGE_MAX_TOKENS = 16000
 # purpose, and a real run costs less. The answer is a few hundred tokens and the verdict a few
 # dozen; the rest is thinking.
 ANSWER_OUTPUT_TOKENS = 3000
-JUDGE_OUTPUT_TOKENS = 1000
+JUDGE_OUTPUT_TOKENS = THINKING_OUTPUT_TOKENS
 JUDGE_INPUT_TOKENS = 300  # the prompt, one claim and one quote
 CLAIMS_PER_ANSWER = 3  # assumed for each answerable question still to be asked
 ANSWER_FRAME_TOKENS = 700  # the prompt and the question around the passages
@@ -274,6 +276,24 @@ def ask_eval(
     if not indexed or index.count_vectors(engine, embedder.model) != indexed:
         raise ValueError("the index is empty or not fully embedded; run elusion index first")
     pair = index.indexed_pair(engine)
+    # A source that has left the index (a re-index dropped a newly held-back id) would be an
+    # unavoidable miss in all three arms, and nothing in the report would say why. The ids are
+    # compared here, in Python, and go nowhere else.
+    in_index = index.indexed_ids(engine)
+    absent = sorted(
+        q.question_id
+        for q in questions
+        if q.kind == "answerable" and q.source_doc_id not in in_index
+    )
+    if absent:
+        raise ValueError(
+            f"the source abstract of {', '.join(absent)} is not in the index (a re-index may "
+            "have dropped it as newly held back for the gold set), so no arm could find it; "
+            "nothing was asked and nothing was spent. Replace these questions: in "
+            f"data/gold/{criterion}.questions-draft.csv set keep to no on their rows and keep "
+            f"25 answerable ones, move data/gold/{criterion}.questions.csv aside (ask-questions "
+            "never overwrites a file), run `elusion ask-questions` again, then run ask-eval"
+        )
 
     wanted = {(q.question, arm) for q in questions for arm in ARMS}
     done = results.result_keys(engine, answerer.model, ASK_PROMPT)
@@ -316,7 +336,9 @@ def ask_eval(
         check_spend(ask_cost(answerer, embedder, arm, mean_chars))
         # Only the question's own text goes in. `q.source_doc_id` is read once more, below,
         # to compare with what came back, and goes nowhere else.
-        asked = ask(engine, q.question, answerer, embedder, arm=arm)
+        asked = ask(
+            engine, q.question, answerer, embedder, arm=arm, prompt_version=ASK_PROMPT_VERSION
+        )
         spent += asked.cost_usd
         results.add_result(
             engine,
@@ -352,13 +374,7 @@ def ask_eval(
             )
         except ReviewError as exc:
             # Billed and unusable: the key is held with `supported` null, and never retried.
-            cost = cost_usd(
-                judge.model,
-                exc.input_tokens,
-                exc.output_tokens,
-                exc.cache_creation_input_tokens,
-                exc.cache_read_input_tokens,
-            )
+            cost = exc.cost_usd(judge.model)
             fields = dict(
                 supported=None,
                 rationale=f"[no judgement: stop_reason={exc.stop_reason}]",
@@ -429,7 +445,11 @@ def ask_eval(
     run_ids: dict[str, str] = {}
     if log_mlflow:
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        artifacts = [out, PROMPTS_DIR / "ask" / "v1.md", PROMPTS_DIR / "ask" / "judge-v1.md"]
+        artifacts = [
+            out,
+            PROMPTS_DIR / ASK_PROMPT_NAME / f"{ASK_PROMPT_VERSION}.md",
+            PROMPTS_DIR / "ask" / "judge-v1.md",
+        ]
         try:
             for arm in ARMS:
                 params = {
@@ -452,11 +472,15 @@ def ask_eval(
                     "n_unanswerable": str(reports[arm].n_unanswerable),
                     "report_path": str(out),
                 }
-                run_ids[arm] = log_arm_run(
-                    reports[arm], params, artifacts, settings.mlflow_tracking_uri
+                uri = settings.mlflow_tracking_uri
+                # An arm already logged with these params and figures (a re-run after a failure
+                # on a later arm) keeps its run: no second copy on the leaderboard.
+                run_ids[arm] = find_run(reports[arm], params, uri) or log_arm_run(
+                    reports[arm], params, artifacts, uri
                 )
         except Exception as exc:
-            # Everything paid for is stored: a re-run costs nothing and logs the runs again.
+            # Everything paid for is stored: a re-run costs nothing and logs only the arms that
+            # have no finished run with the same params and figures.
             raise RuntimeError(
                 f"report written to {out}, but MLflow logging failed: {exc}"
             ) from exc

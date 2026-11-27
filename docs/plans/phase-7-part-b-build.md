@@ -927,7 +927,11 @@ RRF constants, then per arm: recall@5 as `k of n`, the proportion and its Cloppe
 95% interval, groundedness by claim and by question the same way, correct refusals as
 `x of 5`, wrong refusals, errors, unusable judgements and cost. Then a per-question list
 by `question_id` only: for each arm, hit or miss and the outcome. It carries no question
-text, no source id and no abstract text. It ends with these five lines, verbatim:
+text, no source id and no abstract text. It prints, for each pair of arms, the questions one
+hit and the other missed (both ways), and the correct refusals with their interval. It ends
+with these lines, the five below verbatim and, in the review fixes of 2026-11-26, three more
+(the vocabulary bias has no known direction; the intervals of 25 questions are wide; the arms
+share their questions, so compare them pair by pair):
 
 - `recall@5 is a lower bound: another abstract may also answer the question.`
 - `The questions were drafted from abstracts, so they share vocabulary with their source even after rewording; this flatters lexical search.`
@@ -948,7 +952,9 @@ list[Path], tracking_uri: str) -> str`. `import mlflow` inside the function. Exp
 not import its private name), plus `refusals_correct`, `refusals_n`, `refusals_wrong`,
 `errors`, `judge_unusable`, `cost_usd`. Artifacts: the report, `ask/v1.md`,
 `ask/judge-v1.md`. Never logged: the questions file, `ask_log`, any gold file or label.
-Like `evaluate`, every invocation logs new runs; the paid work is never repeated.
+The paid work is never repeated, and (final review fix, 2026-11-26) neither is a run: an arm
+that already has a finished run with the same params and figures keeps it, so a re-run after
+a failure on a later arm adds runs only for the arms that have none.
 
 **CLI**: `elusion ask-eval --criterion criteria/auditable-decisions.md [--max-usd N]
 [--no-mlflow]`. There is no `--k` and no `--arm`: k is `K` and all three arms always run.
@@ -1014,9 +1020,16 @@ runs of "Needs the owner" are done; the numbers it states are copied from the
 - `docs/DECISIONS.md`, one dated line each: the value of k and why (written in Task B);
   the prices and ids confirmed, with the page and date; the correction that the index
   holds about 10,150 abstracts, not a few hundred; the exclusion of held-back ids; the
-  winning arm and the rule that chose it (best recall@5 point estimate; a tie goes to
-  `lexical`, the arm with no embedding call; builder's choice); the result of the owner's
-  confirmations.
+  arm that `ask` defaults to and the rule that chose it (below); the result of the owner's
+  confirmations. The rule, from the paired counts of the report (the questions where one
+  arm hit the source and the other missed it), not from the recall point estimates: a
+  point estimate can differ by one question out of 25. `hybrid` is the default until the
+  numbers say otherwise. For each of `lexical` and `vector`, b is the questions it hit
+  that `hybrid` missed and c the questions `hybrid` hit that it missed. An arm replaces
+  `hybrid` only when b minus c is at least 3. If both qualify, the larger b minus c wins,
+  and a tie between them goes to `lexical`, the arm with no embedding call. If neither
+  qualifies, including when they tie with `hybrid`, `hybrid` stays. The owner can overrule
+  the rule.
 - `docs/ARCHITECTURE.md`: a new section "Phase 7 part B: the index, ask and ask-eval
   (built)" after the phase 6 one, saying in plain words how data flows from `scores` and
   Parquet into `abstract_index` and `abstract_vectors`, through `retrieve` and `ask` into
@@ -1038,8 +1051,10 @@ runs of "Needs the owner" are done; the numbers it states are copied from the
 ## Needs the owner
 
 Costs are rough, for about 10,150 abstracts of about 400 tokens each, and become firm
-once the prices under "To confirm" are read. The project stands near $23 of its $40; part
-B should add about $1 to $3 and every paid flow is guarded at `ELUSION_MAX_RUN_USD`.
+once the prices under "To confirm" are read. The project stands near $23 of its $40. The
+index and the drafts cost cents. `ask-eval` is the large one: its own projection is about
+$8 (a ceiling, see step 9) against the $10 default limit, and the real figure is unknown
+until it runs. Every paid flow is guarded at `ELUSION_MAX_RUN_USD`.
 
 Every command that calls a paid model needs Touch ID (`op run`), so the owner must be at
 the Mac. Do steps 4 to 6 in one sitting.
@@ -1062,9 +1077,15 @@ op run --env-file=.env.tpl -- uv run elusion index --criterion criteria/auditabl
 
 ================
 
-   Pass: it prints `embedded` close to `screened_in` minus `held_back_removed` and a cost
-   under $0.20, and running it again prints `embedded: 0` and spends nothing. Fail: any
-   traceback, or a second run that spends money.
+   Pass: on a first run `held_back_removed` is 0 (it counts rows deleted from an index
+   that was already built, so it is 0 here and not a sign of a problem). `rows_added` and
+   `embedded` are both `screened_in` minus `held_back` minus `no_text`: about 10,577 minus
+   the gold-set ids, so roughly 10,150, and `no_text` is 0 or close to it. The cost is
+   under $0.20. Running it again prints `rows_added: 0`, `embedded: 0` and `already_embedded`
+   equal to the first run's `embedded`, and spends nothing. Fail: any traceback, an
+   `embedded` that is not `screened_in` minus `held_back` minus `no_text`, or a second run
+   that spends money. If it stops with an OpenAI rate-limit error (429), nothing paid for is
+   lost: run the same command again and it continues from the last stored batch.
 5. Smoke-test `ask` with one question on each arm, about $0.01 to $0.05 together. The
    first command is the hybrid arm; run it again with `--arm lexical` and then `--arm
    vector`.
@@ -1110,8 +1131,15 @@ uv run elusion ask-questions --criterion criteria/auditable-decisions.md
 
    Pass: it prints 25 answerable and 5 unanswerable and a path. Fail: an `error:` line
    naming the count or the row.
-9. Run the evaluation (Task D2): 90 Sonnet asks and about 200 Opus judgements, about
-   $0.5 to $2.5 depending on Sonnet's price.
+9. Run the evaluation (Task D2): 90 Sonnet asks and about 200 Opus judgements. Its own
+   projection with the real mean abstract length (about 2,050 characters) is about $8.3
+   ($3.50 for the asks, $4.80 for the judgements): a ceiling, because it assumes 3,000
+   output tokens per ask and 1,000 per judge call for thinking. The real figure is unknown
+   until it runs and is likely lower. The limit is enforced twice: the run refuses to start
+   when the projection is above `ELUSION_MAX_RUN_USD` (default 10, so a limit under about
+   $8.3 refuses at once), and while it runs it stops before any call that would take the
+   real bill past the limit; what was paid is stored and a re-run with a higher `--max-usd`
+   continues.
 
 ================
 Command to paste:
@@ -1124,7 +1152,8 @@ op run --env-file=.env.tpl -- uv run elusion ask-eval --criterion criteria/audit
    Pass: it prints a report path and three `mlflow run` lines, and running it again
    prints the same figures and spends nothing. The runs are at http://localhost:5001 (the
    experiment is `elusion/ask`). Fail: a traceback, or a second run that spends money.
-10. Pick the winning arm from the report, or tell the builder to apply the rule in Task
-    E; either way `DEFAULT_ARM` changes in one line.
+10. Pick the arm from the report, or tell the builder to apply the rule in Task E (it
+    uses the paired counts printed under "Arms compared question by question"); either
+    way `DEFAULT_ARM` changes in one line.
 11. Write `What we learned` in `docs/notes/phase-7.md` in your own words.
 12. Review and merge the part B pull request. Merging is the owner's step.

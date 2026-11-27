@@ -137,6 +137,7 @@ def build_index(
     todo = index.unembedded(engine, embedder.model)
     summary = {
         "screened_in": len(wanted),
+        "held_back": len(wanted & held),
         "held_back_removed": removed,
         "no_text": no_text,
         "rows_added": added,

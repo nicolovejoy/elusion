@@ -20,6 +20,10 @@ claim of an answer be supported, and is the figure to trust. A question with an 
 claim is not grounded whatever the rest were; a question whose other claims are all supported
 but one is not judged cannot be decided, and is left out of that denominator too.
 
+*Arms compared.* The three arms answer the same questions, so their recall intervals are
+correlated and overlap says little. Two arms are compared on the questions where one found the
+source and the other did not (`paired_counts`).
+
 *Refusals.* An ask that retrieved no passage is stored as refused without any model call
 (only the lexical arm can do this, when no word of the question is in the index). Nobody
 decided that refusal, so it is not a correct (or wrong) refusal: the model's refusals are
@@ -28,7 +32,7 @@ counted on their own, and the no-passage ones are counted beside them.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from elusion.evaluate.metrics import Estimate, proportion
@@ -74,6 +78,8 @@ class ArmReport:
     judge_unusable: int  # checked claims with no usable judgement
     questions_not_judged: int  # answered rows left out of the by-question denominator
     cost_usd: float
+    # `refusals_correct` over `n_unanswerable`, with its interval; None without an unanswerable row
+    refusals_correct_estimate: Estimate | None = None
 
 
 def _supported(claim: ClaimResult) -> bool:
@@ -137,4 +143,48 @@ def arm_report(arm: str, k: int, rows: Sequence[EvalRow], cost_usd: float) -> Ar
         judge_unusable=unusable,
         questions_not_judged=undecided,
         cost_usd=cost_usd,
+        refusals_correct_estimate=(
+            proportion(sum(1 for r in unanswerable if _model_refused(r)), len(unanswerable))
+            if unanswerable
+            else None
+        ),
     )
+
+
+@dataclass(frozen=True)
+class PairedCounts:
+    """Two arms on the answerable questions both were asked."""
+
+    first: str
+    second: str
+    n: int  # answerable questions both arms were asked
+    both_hit: int
+    first_only: int  # the first arm hit the source and the second missed it
+    second_only: int
+    both_missed: int
+
+
+def paired_counts(rows_by_arm: Mapping[str, Sequence[EvalRow]]) -> list[PairedCounts]:
+    """One `PairedCounts` for each pair of arms, in the order the arms are given."""
+    hits = {
+        arm: {r.question_id: bool(r.source_hit) for r in rows if r.kind == "answerable"}
+        for arm, rows in rows_by_arm.items()
+    }
+    arms = list(hits)
+    out = []
+    for i, first in enumerate(arms):
+        for second in arms[i + 1 :]:
+            shared = hits[first].keys() & hits[second].keys()
+            a = {q: (hits[first][q], hits[second][q]) for q in shared}
+            out.append(
+                PairedCounts(
+                    first,
+                    second,
+                    len(a),
+                    sum(1 for x, y in a.values() if x and y),
+                    sum(1 for x, y in a.values() if x and not y),
+                    sum(1 for x, y in a.values() if y and not x),
+                    sum(1 for x, y in a.values() if not x and not y),
+                )
+            )
+    return out

@@ -447,8 +447,21 @@ recall@5 (over the answerable questions), groundedness (supported claims over ju
 claims, and the share of questions with every claim supported) and how many unanswerable
 questions were refused, each with a Clopper-Pearson 95% interval and the sample behind it. A
 claim the judge could not decide is left out of both denominators and counted separately.
-With about 25 answerable questions the intervals are wide; the report says so. The report
-lists works by id and title only, never abstract text.
+The refusal figure is the correct refusals over the unanswerable questions, with its
+interval; a search that found no passage is refused without a model call and counted beside
+them, in neither the correct nor the wrong count.
+
+With 25 answerable questions the intervals are wide, and the report says so. It also says the
+direction of the vocabulary bias (questions drafted from the abstracts, told to avoid their
+distinctive words) is not known, and that the three arms answer the same questions, so
+their intervals are correlated. Two arms are therefore compared on the questions where one
+found the source and the other did not, and the report prints that count for each pair of
+arms, both ways. The report lists question ids only, never question text, source ids, titles
+or abstract text.
+
+Calls of `ask`, `ask-draft` and `ask-eval` can run long (up to 16,000 output tokens,
+thinking included), so their Anthropic client waits 600 seconds and retries twice; the bulk
+review, judge, grade and first-read calls keep 60 seconds and five retries.
 
 ## Where each phase reads and writes
 

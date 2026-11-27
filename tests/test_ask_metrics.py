@@ -166,3 +166,34 @@ def test_a_no_passage_refusal_of_an_answerable_question_is_not_a_wrong_refusal()
     )
     assert (r.refusals_wrong, r.no_passage_answerable) == (1, 1)
     assert (r.refusals_correct, r.no_passage_unanswerable) == (0, 0)
+
+
+def test_correct_refusals_carry_an_interval_and_their_sample_size() -> None:
+    r = report(
+        [
+            row("q1"),
+            row("u1", kind="unanswerable", outcome="refused"),
+            row("u2", kind="unanswerable", outcome="refused"),
+            row("u3", kind="unanswerable", outcome="answered", claims=[OK]),
+        ]
+    )
+    assert r.refusals_correct == 2
+    assert r.refusals_correct_estimate == proportion(2, 3)
+    assert report([row("q1")]).refusals_correct_estimate is None  # no unanswerable question
+
+
+def test_paired_counts_say_where_one_arm_hit_and_the_other_missed() -> None:
+    from elusion.ask.metrics import PairedCounts, paired_counts
+
+    rows = {
+        "lexical": [row("q1", hit=True), row("q2", hit=True), row("q3", hit=False), row("q4")],
+        "vector": [row("q1", hit=True), row("q2", hit=False), row("q3", hit=True), row("q4")],
+        "hybrid": [row("q1", hit=True), row("q2", hit=True)],  # q3 and q4 not run
+    }
+    counts = paired_counts(rows)
+    assert counts == [
+        PairedCounts("lexical", "vector", 4, 2, 1, 1, 0),
+        PairedCounts("lexical", "hybrid", 2, 2, 0, 0, 0),
+        PairedCounts("vector", "hybrid", 2, 1, 0, 1, 0),
+    ]
+    assert paired_counts({}) == []

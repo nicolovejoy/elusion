@@ -432,6 +432,14 @@ def test_the_report_has_no_question_text_no_source_id_and_the_five_lines(world, 
         "- recall@5 is a lower bound: another abstract may also answer the question.\n"
         "- The questions were drafted from abstracts, so they share vocabulary with their source"
         " even after rewording; this flatters lexical search.\n"
+        "- The draft prompt asked for other words than the abstract's, which works against lexical"
+        " search, while the topic words the question and its source still share work for it; the"
+        " net direction of the vocabulary bias is not known.\n"
+        "- With only 25 answerable questions the intervals are wide: a gap of a few questions"
+        " between two arms may be chance. The three arms answer the same questions, so their"
+        " intervals are correlated and overlap or no overlap is not the test; compare two arms"
+        " on the questions where one hit the source and the other missed it, counted under Arms"
+        " compared question by question.\n"
         "- Groundedness by claim treats the claims of one answer as independent, which they are"
         " not; the by-question figure is the one to trust.\n"
         "- The answer model and the judge are different models, so no model grades itself.\n"
@@ -475,10 +483,43 @@ def test_one_mlflow_run_per_arm(world, tmp_path, monkeypatch) -> None:
         assert run_.data.metrics["recall_at_k_n"] == 2
     experiment = client.get_experiment_by_name("elusion/ask")
     assert len(client.search_runs([experiment.experiment_id])) == 3
-    # A second invocation pays nothing and logs three more runs.
+    # A second invocation pays nothing and finds all three runs already logged.
     again = run(world, tmp_path, log_mlflow=True)
-    assert again.asked == 0 and set(again.run_ids.values()).isdisjoint(result.run_ids.values())
-    assert len(client.search_runs([experiment.experiment_id])) == 6
+    assert again.asked == 0 and again.run_ids == result.run_ids
+    assert len(client.search_runs([experiment.experiment_id])) == 3
+
+
+def test_a_rerun_after_a_failed_arm_logs_only_the_arms_without_a_run(
+    world, tmp_path, monkeypatch
+) -> None:
+    import mlflow
+
+    import elusion.flows.ask_eval as mod
+    from elusion.config import Settings
+
+    uri = f"file://{tmp_path}/mlruns"
+    monkeypatch.setattr(mod, "settings", Settings(mlflow_tracking_uri=uri))
+    real = mod.log_arm_run
+    calls = []
+
+    def second_arm_fails(report, params, artifacts, tracking_uri):
+        calls.append(params["arm"])
+        if len(calls) == 2:
+            raise OSError("no server")
+        return real(report, params, artifacts, tracking_uri)
+
+    monkeypatch.setattr(mod, "log_arm_run", second_arm_fails)
+    with pytest.raises(RuntimeError, match="MLflow logging failed"):
+        run(world, tmp_path, log_mlflow=True)
+    assert calls == [ARMS[0], ARMS[1]]
+    monkeypatch.setattr(mod, "log_arm_run", real)
+    again = run(world, tmp_path, log_mlflow=True)
+    assert again.asked == 0 and set(again.run_ids) == set(ARMS)
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    experiment = client.get_experiment_by_name("elusion/ask")
+    runs = client.search_runs([experiment.experiment_id])
+    assert len(runs) == 3  # the first arm was not logged a second time
+    assert sorted(r.data.params["arm"] for r in runs) == sorted(ARMS)
 
 
 def test_an_mlflow_failure_names_the_report_and_keeps_the_paid_work(
@@ -507,8 +548,10 @@ def test_the_report_and_figures_split_refusals_nobody_decided(world, tmp_path) -
     assert lexical.refusals_wrong == lexical.no_passage_answerable == 0
     text = result.report_path.read_text()
     assert (
-        "correct refusals (the model refused an unanswerable question): 0 of 1; no passage" in text
+        "correct refusals (the model refused an unanswerable question): 0 of 1, 0.000 "
+        "(95% interval 0.000 to 0.975); no passage retrieved, so no model was asked: 1" in text
     )
+    assert "interval 0.025 to 1.000); no passage retrieved, so no model was asked: 0" in text
     assert "u1: lexical refused, no passage; vector refused; hybrid refused" in text
     assert "Nobody decided that refusal" in text
     assert "asked again on the next run, at a few cents" in text
@@ -565,3 +608,42 @@ def test_an_answerer_failure_partway_keeps_every_earlier_result(world, tmp_path)
     after = stored_results(world)
     assert len(after) == 9 and all(after[key].ask_id == i for key, i in before.items())
     assert len(a2.calls) == 6  # the lexical zebra ask retrieves nothing and calls no model
+
+
+def test_the_report_counts_the_questions_one_arm_hit_and_another_missed(world, tmp_path) -> None:
+    result = run(world, tmp_path)
+    text = result.report_path.read_text()
+    assert "## Arms compared question by question" in text
+    pairs = [line for line in text.splitlines() if " answerable questions asked of both: " in line]
+    assert len(pairs) == 3  # three arms, three pairs
+    assert pairs[0] == (
+        "- lexical and vector, 2 answerable questions asked of both: lexical hit and vector "
+        "missed 0; vector hit and lexical missed 0; both hit 2; both missed 0"
+    )
+    assert text.index("Arms compared question by question") < text.index("## Per question")
+
+
+def test_a_question_whose_source_left_the_index_is_refused_before_any_spend(
+    world, tmp_path
+) -> None:
+    with world.begin() as conn:
+        conn.execute(sa.delete(index.abstract_index).where(index.abstract_index.c.doc_id == SRC2))
+    a, j, e = answerer(), judge(), FakeEmbedder(model=EMBEDDING_MODEL)
+    with pytest.raises(ValueError, match=r"source abstract of q02 is not in the index") as caught:
+        run(world, tmp_path, a, j, e)
+    message = str(caught.value)
+    assert "nothing was asked" in message and "ask-questions" in message
+    assert "q01" not in message and "u1" not in message
+    assert SRC2 not in message and Q2 not in message  # ids and questions go nowhere
+    assert a.calls == [] and j.calls == [] and e.calls == []
+    assert count(world, results.ask_eval_results) == 0
+
+
+def test_the_answer_prompt_version_is_one_value_for_ask_and_the_flow() -> None:
+    import inspect
+
+    from elusion.ask.answer import PROMPT, PROMPT_VERSION
+    from elusion.ask.answer import ask as ask_one
+
+    assert inspect.signature(ask_one).parameters["prompt_version"].default == PROMPT_VERSION
+    assert ASK_PROMPT == f"{PROMPT}/{PROMPT_VERSION}"

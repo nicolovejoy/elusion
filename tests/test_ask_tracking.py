@@ -87,3 +87,19 @@ def test_refusals_nobody_decided_are_logged_beside_the_model_refusals() -> None:
     assert (m["refusals_correct"], m["refusals_n"], m["refusals_wrong"]) == (2, 3, 1)
     assert m["refusals_no_passage_unanswerable"] == 1
     assert m["refusals_no_passage_answerable"] == 1
+
+
+def test_find_run_returns_a_finished_run_with_the_same_params_and_figures(tmp_path) -> None:
+    from elusion.ask.tracking import find_run
+
+    uri = f"file://{tmp_path}/mlruns"
+    report_file = tmp_path / "report.md"
+    report_file.write_text("report")
+    report = make_report()
+    assert find_run(report, PARAMS, uri) is None  # no experiment yet
+    run_id = log_arm_run(report, PARAMS, [report_file], uri)
+    assert find_run(report, PARAMS, uri) == run_id
+    assert find_run(report, {**PARAMS, "arm": "lexical"}, uri) is None  # another arm
+    assert find_run(report, {**PARAMS, "questions_sha256": "ab"}, uri) is None  # other params
+    other = arm_report("hybrid", 5, [EvalRow("q01", "answerable", False, "answered", (OK,))], 0.25)
+    assert find_run(other, PARAMS, uri) is None  # other figures: a new run is warranted

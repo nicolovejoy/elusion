@@ -108,6 +108,20 @@ def concept(
     typer.echo(f"{name} version {version}")
 
 
+def _require_keys(*names: str) -> None:
+    """Raise `ProviderConfigError` for the first of `names` that is not in the environment.
+
+    The Anthropic client only notices a missing key at its first request, which for `ask` is
+    after the question's embedding was paid for: the commands that call a model check first."""
+    import os
+
+    from elusion.review.providers import ProviderConfigError
+
+    for name in names:
+        if not os.environ.get(name):
+            raise ProviderConfigError(f"{name} is not set; run with op run --env-file=.env.tpl --")
+
+
 @app.command(name="first-read")
 def first_read(
     concept: Annotated[str, typer.Option(help="The concept's slug, e.g. stopping.")],
@@ -144,6 +158,9 @@ def index(
     ] = None,
 ) -> None:
     """Index the screened-in abstracts for `ask`: full text plus one embedding each, once."""
+    import openai
+    from sqlalchemy.exc import SQLAlchemyError
+
     from elusion.ask.embed import OpenAIEmbedder
     from elusion.ask.index import IndexPairMismatch
     from elusion.corpora import UnknownCriterion
@@ -168,8 +185,19 @@ def index(
         ProviderConfigError,
         UnknownCriterion,
         ValueError,
+        OSError,
+        SQLAlchemyError,
     ) as exc:
         typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    except openai.APIError as exc:
+        # A rate limit (429) after the SDK's own retries, or a network failure. Every batch that
+        # came back was stored before the next was sent, so nothing paid for is lost.
+        typer.echo(f"error: {exc}", err=True)
+        typer.echo(
+            "the batches already embedded are stored: run the same command again to continue",
+            err=True,
+        )
         raise typer.Exit(1) from exc
     typer.echo(summary)
 
@@ -177,25 +205,48 @@ def index(
 @app.command()
 def ask(
     question: Annotated[str, typer.Argument(help="The question, in your own words.")],
-    arm: Annotated[str, typer.Option(help="lexical, vector or hybrid.")] = "hybrid",
-    k: Annotated[int, typer.Option(help="How many abstracts to read.")] = 5,
-    model: Annotated[str, typer.Option(help="Pinned answer model id.")] = "claude-sonnet-5-5",
+    arm: Annotated[
+        str | None,
+        typer.Option(help="lexical, vector or hybrid; default DEFAULT_ARM in ask/retrieve.py."),
+    ] = None,
+    k: Annotated[
+        int | None, typer.Option(help="How many abstracts to read; default K in ask/retrieve.py.")
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option(help="Pinned answer model id; default ANSWER_MODEL in ask/models.py."),
+    ] = None,
 ) -> None:
     """Answer one question from the index: retrieve once, ask a model once, check every quote."""
     import anthropic
     import openai
+    from sqlalchemy.exc import SQLAlchemyError
 
     from elusion.ask import log as ask_log
     from elusion.ask.answer import REFUSAL
     from elusion.ask.answer import ask as ask_question
-    from elusion.ask.retrieve import ARMS
+    from elusion.ask.models import ANSWER_MODEL
+    from elusion.ask.retrieve import ARMS, DEFAULT_ARM, K
     from elusion.collect import db
     from elusion.config import settings
-    from elusion.review.providers import AnthropicProvider, ProviderConfigError
+    from elusion.review.providers import (
+        LONG_CALL_MAX_RETRIES,
+        LONG_CALL_TIMEOUT_S,
+        AnthropicProvider,
+        ProviderConfigError,
+    )
 
+    # The defaults are read from their modules when the command runs, not copied here, so
+    # changing the one constant `DEFAULT_ARM` changes what `elusion ask` does. They are looked up
+    # inside the command because importing them at the top would load the Anthropic SDK for
+    # every `elusion --help`.
+    arm = DEFAULT_ARM if arm is None else arm
+    k = K if k is None else k
+    model = ANSWER_MODEL if model is None else model
     try:
         if arm not in ARMS:
             raise ValueError(f"unknown arm {arm!r}; the arms are {', '.join(ARMS)}")
+        _require_keys("ANTHROPIC_API_KEY", *(() if arm == "lexical" else ("OPENAI_API_KEY",)))
         embedder = None
         if arm != "lexical":
             from elusion.ask.embed import OpenAIEmbedder
@@ -203,8 +254,17 @@ def ask(
             embedder = OpenAIEmbedder()
         engine = db.make_engine(settings.database_url)
         ask_log.ensure_schema(engine)
-        result = ask_question(engine, question, AnthropicProvider(model), embedder, arm=arm, k=k)
-    except (ProviderConfigError, ValueError, anthropic.APIError, openai.APIError) as exc:
+        answerer = AnthropicProvider(
+            model, timeout=LONG_CALL_TIMEOUT_S, max_retries=LONG_CALL_MAX_RETRIES
+        )
+        result = ask_question(engine, question, answerer, embedder, arm=arm, k=k)
+    except (
+        ProviderConfigError,
+        ValueError,
+        SQLAlchemyError,
+        anthropic.APIError,
+        openai.APIError,
+    ) as exc:
         # An API error after the question was embedded still left an `error` row in ask_log.
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -264,13 +324,21 @@ def ask_draft(
     from elusion.config import settings
     from elusion.evaluate.gold import gold_path
     from elusion.flows.review import BudgetExceeded
-    from elusion.review.providers import AnthropicProvider, ProviderConfigError
+    from elusion.review.providers import (
+        LONG_CALL_MAX_RETRIES,
+        LONG_CALL_TIMEOUT_S,
+        AnthropicProvider,
+        ProviderConfigError,
+    )
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
     path = questions.draft_path(criterion.stem, settings.data_dir)
     try:
-        drafter = AnthropicProvider(DRAFT_MODEL)
+        _require_keys("ANTHROPIC_API_KEY")
+        drafter = AnthropicProvider(
+            DRAFT_MODEL, timeout=LONG_CALL_TIMEOUT_S, max_retries=LONG_CALL_MAX_RETRIES
+        )
         engine = db.make_engine(settings.database_url)
         ensure_schema(engine)
         held_back = held_back_ids(gold_path(criterion.stem, settings.data_dir))
@@ -345,7 +413,6 @@ def ask_eval(
     run finds every result and judgement stored and pays nothing.
     """
     import csv
-    import os
 
     import anthropic
     import openai
@@ -355,22 +422,22 @@ def ask_eval(
     from elusion.ask.embed import OpenAIEmbedder
     from elusion.ask.models import ANSWER_MODEL, JUDGE_MODEL
     from elusion.flows.review import BudgetExceeded
-    from elusion.review.providers import AnthropicProvider, ProviderConfigError
+    from elusion.review.providers import (
+        LONG_CALL_MAX_RETRIES,
+        LONG_CALL_TIMEOUT_S,
+        AnthropicProvider,
+        ProviderConfigError,
+    )
 
     if not criterion.is_file():
         raise typer.BadParameter(f"criterion file not found: {criterion}", param_hint="--criterion")
+    options = {"timeout": LONG_CALL_TIMEOUT_S, "max_retries": LONG_CALL_MAX_RETRIES}
     try:
-        # The Anthropic client only notices a missing key at its first request, which would
-        # be after the embedding of the first question was paid for: check both up front.
-        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
-            if not os.environ.get(key):
-                raise ProviderConfigError(
-                    f"{key} is not set; run with op run --env-file=.env.tpl --"
-                )
+        _require_keys("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
         result = flow.ask_eval(
             criterion.stem,
-            AnthropicProvider(ANSWER_MODEL),
-            AnthropicProvider(JUDGE_MODEL),
+            AnthropicProvider(ANSWER_MODEL, **options),
+            AnthropicProvider(JUDGE_MODEL, **options),
             OpenAIEmbedder(),
             max_usd=max_usd,
             log_mlflow=not no_mlflow,

@@ -47,6 +47,11 @@ class IndexPairMismatch(ValueError):
     """The index was built from another (review model, prompt version, threshold)."""
 
 
+def vector_literal(values: Sequence[float]) -> str:
+    """pgvector's text form of a vector, `[0.1,0.2]`; the one place it is written."""
+    return "[" + ",".join(repr(float(x)) for x in values) + "]"
+
+
 class Vector(sa.types.UserDefinedType):
     """pgvector's `vector(dim)`, sent and read as text: a list of floats <-> `[0.1,0.2]`."""
 
@@ -62,7 +67,7 @@ class Vector(sa.types.UserDefinedType):
         def process(value):
             if value is None:
                 return None
-            return "[" + ",".join(repr(float(x)) for x in value) + "]"
+            return vector_literal(value)
 
         return process
 

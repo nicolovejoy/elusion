@@ -2,9 +2,11 @@
 
 Plain lists, no tables. It states what was run (the index, the models, the prompt versions,
 the fusion constants), then for each arm its figures with Clopper-Pearson 95% intervals and
-the counts behind them, then one line per question by `question_id` and nothing else: the
-question texts, the source ids and the abstracts stay in the owner's files and the database,
-never in the report, which is committed. It ends with the five caveats the figures need.
+the counts behind them (recall, both groundedness figures and the correct refusals), then for
+each pair of arms how many questions one hit and the other missed, then one line per question
+by `question_id` and nothing else: the question texts, the source ids and the abstracts stay
+in the owner's files and the database, never in the report, which is committed. It ends with
+the caveats the figures need.
 """
 
 from __future__ import annotations
@@ -14,13 +16,22 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from elusion.ask.metrics import ArmReport, EvalRow
+from elusion.ask.metrics import ArmReport, EvalRow, paired_counts
+from elusion.ask.questions import ANSWERABLE_N
 from elusion.evaluate.metrics import Estimate
 
 CAVEATS = (
     "recall@5 is a lower bound: another abstract may also answer the question.",
     "The questions were drafted from abstracts, so they share vocabulary with their source "
     "even after rewording; this flatters lexical search.",
+    "The draft prompt asked for other words than the abstract's, which works against lexical "
+    "search, while the topic words the question and its source still share work for it; the "
+    "net direction of the vocabulary bias is not known.",
+    f"With only {ANSWERABLE_N} answerable questions the intervals are wide: a gap of a few "
+    "questions between two arms may be chance. The three arms answer the same questions, so "
+    "their intervals are correlated and overlap or no overlap is not the test; compare two "
+    "arms on the questions where one hit the source and the other missed it, counted under "
+    "Arms compared question by question.",
     "Groundedness by claim treats the claims of one answer as independent, which they are "
     "not; the by-question figure is the one to trust.",
     "The answer model and the judge are different models, so no model grades itself.",
@@ -95,9 +106,13 @@ def _arm_lines(r: ArmReport) -> list[str]:
         ),
         f"- claims in all answers: {r.claims_total}; answered questions with a claim: "
         f"{r.answered_questions}",
-        f"- correct refusals (the model refused an unanswerable question): "
-        f"{r.refusals_correct} of {r.n_unanswerable}; no passage retrieved, so no model was "
-        f"asked: {r.no_passage_unanswerable}",
+        _ratio(
+            "correct refusals (the model refused an unanswerable question)",
+            r.refusals_correct,
+            r.n_unanswerable,
+            r.refusals_correct_estimate,
+        )
+        + f"; no passage retrieved, so no model was asked: {r.no_passage_unanswerable}",
         f"- wrong refusals (the model refused an answerable question): {r.refusals_wrong} of "
         f"{r.n_answerable}; no passage retrieved, so no model was asked: "
         f"{r.no_passage_answerable}",
@@ -107,6 +122,19 @@ def _arm_lines(r: ArmReport) -> list[str]:
         f"- cost: ${r.cost_usd:.4f}",
         "",
     ]
+    return lines
+
+
+def _paired_lines(rows_by_arm: Mapping[str, Sequence[EvalRow]]) -> list[str]:
+    lines = ["## Arms compared question by question", ""]
+    for p in paired_counts(rows_by_arm):
+        lines.append(
+            f"- {p.first} and {p.second}, {p.n} answerable questions asked of both: "
+            f"{p.first} hit and {p.second} missed {p.first_only}; "
+            f"{p.second} hit and {p.first} missed {p.second_only}; "
+            f"both hit {p.both_hit}; both missed {p.both_missed}"
+        )
+    lines.append("")
     return lines
 
 
@@ -153,6 +181,7 @@ def render(
     ]
     for r in reports:
         lines += _arm_lines(r)
+    lines += _paired_lines(rows_by_arm)
     lines += _question_lines(rows_by_arm)
     lines += ["## Notes", ""]
     lines += [f"- {n}" for n in NOTES]

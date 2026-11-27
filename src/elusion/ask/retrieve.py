@@ -29,7 +29,7 @@ from dataclasses import dataclass
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 
-from elusion.ask.index import abstract_index
+from elusion.ask.index import abstract_index, vector_literal
 from elusion.ask.models import EMBEDDING_DIM
 
 K = 5
@@ -102,7 +102,7 @@ def vector(
         )
     if not all(math.isfinite(x) for x in query_vector):
         raise ValueError("the query vector holds a number that is not finite (nan or inf)")
-    literal = "[" + ",".join(repr(float(x)) for x in query_vector) + "]"
+    literal = vector_literal(query_vector)
     with engine.connect() as conn:
         rows = conn.execute(_VECTOR_SQL, {"q": literal, "m": embedding_model, "k": k}).all()
     return _hits(rows)

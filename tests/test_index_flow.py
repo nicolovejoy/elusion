@@ -91,6 +91,7 @@ def test_only_scores_at_or_above_the_threshold_are_indexed(index_engine, tmp_pat
     assert indexed(index_engine) == ["a", "b"]
     assert summary == {
         "screened_in": 2,
+        "held_back": 0,
         "held_back_removed": 0,
         "no_text": 0,
         "rows_added": 2,
@@ -372,3 +373,16 @@ def test_the_served_model_is_stored_and_a_drift_does_not_stop_the_run(
             ).all()
         )
     assert pairs == {("fake-embedder", "fake-embedder-2026-11-01")}
+
+
+def test_the_summary_counts_the_screened_in_ids_held_back_on_a_first_run(
+    index_engine, tmp_path
+) -> None:
+    seed(index_engine, tmp_path, {"a": 4, "b": 3, "c": 4})
+    gold(tmp_path, ("c", 1))
+    summary = run(index_engine, tmp_path)
+    # On a first run nothing was in the index to delete, so `held_back_removed` is 0 while
+    # `held_back` says how many screened-in ids were left out; the pass check is
+    # embedded == screened_in - held_back - no_text.
+    assert summary["held_back"] == 1 and summary["held_back_removed"] == 0
+    assert summary["embedded"] == summary["screened_in"] - summary["held_back"] - summary["no_text"]

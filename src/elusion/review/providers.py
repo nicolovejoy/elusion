@@ -67,6 +67,14 @@ GENERATION_SETTINGS: dict[str, dict] = {
 }
 REQUEST_TIMEOUT_S = 60.0
 MAX_RETRIES = 5  # the SDK retries 429/5xx with exponential backoff
+# For the long structured calls of `ask`, `ask-draft` and `ask-eval` (up to 16,000 output
+# tokens, thinking included): a 60 second timeout would cut a slow answer off, and the SDK
+# would send the same request again, each attempt possibly billed. 600 seconds is what the SDK
+# itself allows a non-streaming 16,000-token request. Two retries, not five, for the same
+# reason: a retry of a call that did finish on the server is paid for twice. The bulk review,
+# judge, grade and first-read paths keep the two constants above.
+LONG_CALL_TIMEOUT_S = 600.0
+LONG_CALL_MAX_RETRIES = 2
 
 
 class Verdict(BaseModel):
@@ -161,6 +169,16 @@ class ReviewError(Exception):
         self.output_tokens = output_tokens
         self.cache_creation_input_tokens = cache_creation_input_tokens
         self.cache_read_input_tokens = cache_read_input_tokens
+
+    def cost_usd(self, model: str) -> float:
+        """What the failed call was billed, priced by the pinned `model` id."""
+        return cost_usd(
+            model,
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_creation_input_tokens,
+            self.cache_read_input_tokens,
+        )
 
 
 @dataclass
@@ -268,11 +286,16 @@ class Completer(Protocol):
 class AnthropicProvider:
     name = "anthropic"
 
-    def __init__(self, model: str, client: anthropic.Anthropic | None = None) -> None:
+    def __init__(
+        self,
+        model: str,
+        client: anthropic.Anthropic | None = None,
+        *,
+        timeout: float = REQUEST_TIMEOUT_S,
+        max_retries: int = MAX_RETRIES,
+    ) -> None:
         self.model = model
-        self.client = client or anthropic.Anthropic(
-            max_retries=MAX_RETRIES, timeout=REQUEST_TIMEOUT_S
-        )
+        self.client = client or anthropic.Anthropic(max_retries=max_retries, timeout=timeout)
 
     def review(self, system: str, paragraph: str) -> Review:
         verdict, model, usage = self._call(system, paragraph, Verdict, VERDICT_SCHEMA)
