@@ -63,8 +63,14 @@ How far to trust this:
 - recall@5 is a lower bound: another abstract may also answer the question.
 - Groundedness is low because the judge compares a claim with its one quote and rejects
   anything the quote alone does not say. Nobody has checked the judge against a person.
-- A failed quote check is the check working: the model returned a quote that is not word
-  for word in the abstract, often with a stray tag at its end, and the answer is not shown.
+- A failed quote check is the check working, but it has not yet caught an invented quote.
+  All 12 failures copied the abstract correctly and then added characters: a stray ending
+  (`</br>`, `</s>`, `}`, a closing quote mark, once a piece of the answer's own JSON) in 11,
+  a zero-width space in place of a space in 1. None of those characters were in the
+  passages shown. The answer is not shown, and the ask counts as unsupported, so 8 of
+  `hybrid`'s 21 groundedness questions were lost this way. `hybrid` failed 1 of 30 in the
+  first run with the same model and prompt, and `lexical` failed 2 in the same minutes as
+  `hybrid`'s 8; nothing measured ties the gap to how `hybrid` retrieves.
 
 The words, across three fields:
 
