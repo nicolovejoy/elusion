@@ -80,6 +80,19 @@ paragraph is a near-copy of that one". It is optional. Phase 7 is a second corpu
 research on AI agents making decisions that must be auditable, screened with the same
 review, judge and evaluate flows.
 
+**Phase 7, part B (code written, not yet run).** Part B lets a person ask a question of the
+abstracts that passed the screen. `elusion index` stores each screened-in abstract with an
+embedding (a list of numbers a model makes for a text, so that similar meanings sit close
+together), in Postgres with the pgvector extension. `elusion ask` searches once, by words,
+by meaning, or by both, shows the best five abstracts to a model, and gets back an answer made
+of claims, each with the id of an abstract and a quote. Python then checks that every quote
+is really in that abstract; a claim that fails the check fails the whole answer. Every ask
+is logged. `elusion ask-eval` then asks 30 gold questions (25 with a known source abstract,
+5 with none) of all three ways of searching, has a second model judge each claim, and
+reports recall@5 and groundedness with Clopper-Pearson intervals, one MLflow run per arm.
+The paid runs have not been made yet, so there are no results to report. How it fits
+together: `docs/ARCHITECTURE.md`.
+
 ## Status
 
 Phases 0 to 4 are done, and phase 6 has run: on AKS on 2026-11-16, destroyed the same

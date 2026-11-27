@@ -54,7 +54,8 @@ src/elusion/collect/    EDGAR-CORPUS download, paragraph split, Parquet, Postgre
                         phase 7: OpenAlex client, search terms, abstracts Parquet, custody table
 src/elusion/review/     provider interface, pinned models, versioned prompts, scorer, job table
 src/elusion/evaluate/   labeling CLI, metrics (Clopper-Pearson), report generator
-src/elusion/flows/      Prefect flows: collect, harvest, review, evaluate, dedupe, first_read
+src/elusion/flows/      Prefect flows: collect, harvest, review, evaluate, dedupe, first_read, build_index (`index`), ask_eval
+src/elusion/ask/        phase 7 part B: pgvector index, the three retrieval arms (lexical, vector, hybrid), `ask`, `ask_log`, gold questions, `ask-eval`
 src/elusion/board/      phase 7 concept board: the append-only concept_log, the batch word search, the audit logic, the Flask page
 src/elusion/spark/      optional MinHash near-duplicate job
 infra/terraform/  infra/helm/elusion/  infra/pulumi/
@@ -79,6 +80,11 @@ uv run elusion evaluate --criterion criteria/auditable-decisions.md --prompt-ver
 uv run elusion concept --name stopping --wording "..." --term "stopping rule" --term "stopping criteri" --term "stopping method" --criterion criteria/auditable-decisions.md   # concept board: a new wording is a new version; nothing in concept_log is ever changed
 op run --env-file=.env.tpl -- uv run elusion first-read --concept stopping   # one claude-haiku-5-5 read per matching abstract; papers already read are skipped
 uv run elusion board --concept stopping   # the blind audit, then the concept card, at http://localhost:8010; --release-gold shows the papers in the gold draw
+op run --env-file=.env.tpl -- uv run elusion index --criterion criteria/auditable-decisions.md --prompt-version v1 --review-model gpt-6-luna   # phase 7 part B: full text and one embedding per screened-in abstract (score 3 or more, gold ids held back); spend-guarded, embedded ids are skipped
+op run --env-file=.env.tpl -- uv run elusion ask "what stopping rules do agents use?" --arm hybrid --k 5   # one search, one answer call, every quote checked by Python, one ask_log row; arm is lexical, vector or hybrid
+op run --env-file=.env.tpl -- uv run elusion ask-draft --criterion criteria/auditable-decisions.md   # drafts one question from each of 40 indexed abstracts into data/gold/<criterion>.questions-draft.csv; the draw is made once; you edit the file by hand
+uv run elusion ask-questions --criterion criteria/auditable-decisions.md   # no model call: turns your edited draft into data/gold/<criterion>.questions.csv (25 answerable, 5 not); refuses a held-back or missing source id
+op run --env-file=.env.tpl -- uv run elusion ask-eval --criterion criteria/auditable-decisions.md [--max-usd 10] [--no-mlflow]   # every gold question through all three arms at k = 5, each claim judged; one MLflow run per arm; a second run pays nothing
 uv run elusion review --criterion criteria/cloud-concentration.md --sample 20000
 uv run elusion review --criterion criteria/cloud-concentration.md --prompt-version v2 --sample 20000 --provider openai --model gpt-6-luna
 uv run elusion judge --criterion criteria/cloud-concentration.md --prompt-version v2 --year 2018 --year 2019 [--review-model gpt-6-luna]
